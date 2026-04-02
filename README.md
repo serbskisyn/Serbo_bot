@@ -134,4 +134,4 @@ The `injection_guard.py` module scans every incoming message for known prompt in
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+Private project – not licensed for public use.

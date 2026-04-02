@@ -1,4 +1,4 @@
-# ðŸ¤– Telegram AI Bot
+# Telegram AI Bot
 
 A modular Telegram bot powered by LLMs via [OpenRouter](https://openrouter.ai). Supports multi-agent routing, voice transcription, football data, chart generation, and prompt injection protection.
 
@@ -16,14 +16,14 @@ You -> Telegram (text or voice) -> Injection Guard -> Router -> Agent -> Respons
 
 | Status | Feature |
 | :--- | :--- |
-| âœ… | Telegram bot interface |
-| âœ… | Multi-agent routing (general, football, chart) |
-| âœ… | Voice messages â€“ transcribed via Whisper |
-| âœ… | Conversation memory â€“ per-user session history |
-| âœ… | Football Agent â€“ stats, results, standings |
-| âœ… | Chart Agent â€“ generates charts on request |
-| âœ… | Prompt injection guard â€“ pattern-based detection |
-| âœ… | OpenRouter integration â€“ any LLM (GPT-4o, Claude, Mistral, â€¦) |
+| ✅ | Telegram bot interface |
+| ✅ | Multi-agent routing (general, football, chart) |
+| ✅ | Voice messages - transcribed via Whisper |
+| ✅ | Conversation memory - per-user session history |
+| ✅ | Football Agent - stats, results, standings |
+| ✅ | Chart Agent - generates charts on request |
+| ✅ | Prompt injection guard - pattern-based detection |
+| ✅ | OpenRouter integration - any LLM (GPT-4o, Claude, Mistral, ...) |
 
 ---
 
@@ -31,31 +31,31 @@ You -> Telegram (text or voice) -> Injection Guard -> Router -> Agent -> Respons
 
 ```
 app/
-â”œâ”€â”€ agents/
-â”‚   â”œâ”€â”€ chart_agent.py       # Chart generation agent
-â”‚   â”œâ”€â”€ football_agent.py    # Football data agent
-â”‚   â””â”€â”€ general_agent.py     # General-purpose LLM agent
-â”œâ”€â”€ bot/
-â”‚   â”œâ”€â”€ conversation.py      # Conversation state management
-â”‚   â”œâ”€â”€ handlers.py          # Telegram update handlers
-â”‚   â”œâ”€â”€ memory.py            # Per-user message memory
-â”‚   â””â”€â”€ router.py            # Agent routing logic
-â”œâ”€â”€ security/
-â”‚   â””â”€â”€ injection_guard.py   # Prompt injection detection
-â”œâ”€â”€ services/
-â”‚   â”œâ”€â”€ openrouter_client.py # OpenRouter API client
-â”‚   â””â”€â”€ speech_to_text.py    # Voice message transcription
-â”œâ”€â”€ utils/
-â”‚   â””â”€â”€ logging_setup.py     # Logging configuration
-â”œâ”€â”€ config.py                # Environment config loader
-â””â”€â”€ main.py                  # Entry point
+├── agents/
+│   ├── chart_agent.py       # Chart generation agent
+│   ├── football_agent.py    # Football data agent
+│   └── general_agent.py     # General-purpose LLM agent
+├── bot/
+│   ├── conversation.py      # Conversation state management
+│   ├── handlers.py          # Telegram update handlers
+│   ├── memory.py            # Per-user message memory
+│   └── router.py            # Agent routing logic
+├── security/
+│   └── injection_guard.py   # Prompt injection detection
+├── services/
+│   ├── openrouter_client.py # OpenRouter API client
+│   └── speech_to_text.py    # Voice message transcription
+├── utils/
+│   └── logging_setup.py     # Logging configuration
+├── config.py                # Environment config loader
+└── main.py                  # Entry point
 ```
 
 ### Stack
 
-- **OpenRouter** â€“ LLM backbone (model configurable via `.env`)
-- **python-telegram-bot** â€“ Telegram interface
-- **Whisper** â€“ voice transcription
+- **OpenRouter** - LLM backbone (model configurable via `.env`)
+- **python-telegram-bot** - Telegram interface
+- **Whisper** - voice transcription
 - Python 3.10+
 
 ---
@@ -106,7 +106,7 @@ python -m app.main
 | "Explain quantum computing" | `general_agent` |
 | "Who scored last night for Bayern?" | `football_agent` |
 | "Show me a bar chart of my data" | `chart_agent` |
-| ðŸŽ¤ Voice note | Whisper â†’ any agent |
+| Voice note | Whisper -> any agent |
 
 ---
 
@@ -134,4 +134,4 @@ The `injection_guard.py` module scans every incoming message for known prompt in
 
 ## License
 
-MIT License â€“ see [LICENSE](LICENSE) for details.
+MIT License - see [LICENSE](LICENSE) for details.

@@ -2,8 +2,11 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 from app.services.openrouter_client import ask_llm
+from app.services.speech_to_text import transcribe_voice
+from app.security.injection_guard import is_injection
 
 logger = logging.getLogger(__name__)
+
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -12,9 +15,16 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Ich bin dein KI-Assistent. Schreib mir einfach eine Nachricht."
     )
 
+
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
-    logger.info(f"Textnachricht von User {update.effective_user.id}")
+    user_id = update.effective_user.id
+    logger.info(f"Textnachricht von User {user_id}")
+
+    if is_injection(user_text):
+        logger.warning(f"Injection blocked (text) | user={user_id} | text={user_text[:60]}")
+        await update.message.reply_text("⚠️ Deine Nachricht wurde aus Sicherheitsgründen blockiert.")
+        return
 
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id,
@@ -24,12 +34,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response = await ask_llm(user_text)
     await update.message.reply_text(response)
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    logger.error(f"Fehler: {context.error}", exc_info=context.error)
-from app.services.speech_to_text import transcribe_voice
 
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"Sprachnachricht von User {update.effective_user.id}")
+    user_id = update.effective_user.id
+    logger.info(f"Sprachnachricht von User {user_id}")
 
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id,
@@ -47,6 +55,11 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    if is_injection(transcript):
+        logger.warning(f"Injection blocked (voice) | user={user_id} | transcript={transcript[:60]}")
+        await update.message.reply_text("⚠️ Deine Nachricht wurde aus Sicherheitsgründen blockiert.")
+        return
+
     await update.message.reply_text(
         f"🎙️ Ich habe verstanden: _{transcript}_",
         parse_mode="Markdown"
@@ -54,3 +67,7 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     response = await ask_llm(transcript)
     await update.message.reply_text(response)
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logger.error(f"Fehler: {context.error}", exc_info=context.error)

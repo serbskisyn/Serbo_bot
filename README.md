@@ -1,88 +1,97 @@
-# 🤖 Telegram AI Bot
+# ðŸ¤– Telegram AI Bot
 
-A modular, production-ready Telegram bot powered by LLMs via [OpenRouter](https://openrouter.ai). The bot supports multi-agent routing, voice message transcription, memory-aware conversations, football data, chart generation, and prompt injection protection.
+A modular Telegram bot powered by LLMs via [OpenRouter](https://openrouter.ai). Supports multi-agent routing, voice transcription, football data, chart generation, and prompt injection protection.
+
+---
+
+## Overview
+
+```
+You -> Telegram (text or voice) -> Injection Guard -> Router -> Agent -> Response
+```
 
 ---
 
 ## Features
 
-- 🧠 **Multi-Agent Architecture** — Automatically routes messages to the right agent (general, football, chart)
-- 🎙️ **Speech-to-Text** — Transcribes voice messages via Whisper API
-- 💬 **Conversation Memory** — Maintains per-user message history within a session
-- ⚽ **Football Agent** — Answers football-related queries (stats, results, standings)
-- 📊 **Chart Agent** — Generates charts and visualizations on request
-- 🔒 **Injection Guard** — Detects and blocks prompt injection attempts
-- 🔧 **OpenRouter Integration** — Supports any LLM available on OpenRouter (GPT-4o, Claude, Mistral, etc.)
+| Status | Feature |
+| :--- | :--- |
+| âœ… | Telegram bot interface |
+| âœ… | Multi-agent routing (general, football, chart) |
+| âœ… | Voice messages â€“ transcribed via Whisper |
+| âœ… | Conversation memory â€“ per-user session history |
+| âœ… | Football Agent â€“ stats, results, standings |
+| âœ… | Chart Agent â€“ generates charts on request |
+| âœ… | Prompt injection guard â€“ pattern-based detection |
+| âœ… | OpenRouter integration â€“ any LLM (GPT-4o, Claude, Mistral, â€¦) |
 
 ---
 
-## Project Structure
+## Architecture
 
 ```
 app/
-├── agents/
-│   ├── chart_agent.py       # Chart generation agent
-│   ├── football_agent.py    # Football data agent
-│   └── general_agent.py     # General-purpose LLM agent
-├── bot/
-│   ├── conversation.py      # Conversation state management
-│   ├── handlers.py          # Telegram update handlers
-│   ├── memory.py            # Per-user message memory
-│   └── router.py            # Agent routing logic
-├── security/
-│   └── injection_guard.py   # Prompt injection detection
-├── services/
-│   ├── openrouter_client.py # OpenRouter API client
-│   └── speech_to_text.py    # Voice message transcription
-├── utils/
-│   └── logging_setup.py     # Logging configuration
-├── config.py                # Environment config loader
-└── main.py                  # Entry point
+â”œâ”€â”€ agents/
+â”‚   â”œâ”€â”€ chart_agent.py       # Chart generation agent
+â”‚   â”œâ”€â”€ football_agent.py    # Football data agent
+â”‚   â””â”€â”€ general_agent.py     # General-purpose LLM agent
+â”œâ”€â”€ bot/
+â”‚   â”œâ”€â”€ conversation.py      # Conversation state management
+â”‚   â”œâ”€â”€ handlers.py          # Telegram update handlers
+â”‚   â”œâ”€â”€ memory.py            # Per-user message memory
+â”‚   â””â”€â”€ router.py            # Agent routing logic
+â”œâ”€â”€ security/
+â”‚   â””â”€â”€ injection_guard.py   # Prompt injection detection
+â”œâ”€â”€ services/
+â”‚   â”œâ”€â”€ openrouter_client.py # OpenRouter API client
+â”‚   â””â”€â”€ speech_to_text.py    # Voice message transcription
+â”œâ”€â”€ utils/
+â”‚   â””â”€â”€ logging_setup.py     # Logging configuration
+â”œâ”€â”€ config.py                # Environment config loader
+â””â”€â”€ main.py                  # Entry point
 ```
 
----
+### Stack
 
-## Requirements
-
+- **OpenRouter** â€“ LLM backbone (model configurable via `.env`)
+- **python-telegram-bot** â€“ Telegram interface
+- **Whisper** â€“ voice transcription
 - Python 3.10+
-- A Telegram Bot Token (via [@BotFather](https://t.me/BotFather))
-- An [OpenRouter](https://openrouter.ai) API key
 
 ---
 
 ## Setup
 
-### 1. Clone the repository
+### Prerequisites
+
+- Python 3.10+
+- Telegram bot token (via [@BotFather](https://t.me/BotFather))
+- [OpenRouter](https://openrouter.ai) API key
+- ffmpeg (for voice transcription)
+
+### Installation
 
 ```bash
-git clone https://github.com/your-username/your-repo-name.git
-cd your-repo-name
-```
-
-### 2. Create a virtual environment
-
-```bash
+git clone https://github.com/your-username/your-repo.git
+cd your-repo
 python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-```
-
-### 3. Install dependencies
-
-```bash
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4. Configure environment variables
+### Configuration
 
-Create a `.env` file in the project root:
-
-```env
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-OPENROUTER_API_KEY=your_openrouter_api_key
-OPENROUTER_MODEL=openai/gpt-4o
+```bash
+cp .env.example .env  # fill in API keys
 ```
 
-### 5. Run the bot
+| Variable | Description |
+| :--- | :--- |
+| `TELEGRAM_BOT_TOKEN` | Bot token from BotFather |
+| `OPENROUTER_API_KEY` | API key from openrouter.ai |
+| `OPENROUTER_MODEL` | Model ID, e.g. `openai/gpt-4o` |
+
+### Run
 
 ```bash
 python -m app.main
@@ -90,52 +99,39 @@ python -m app.main
 
 ---
 
-## Configuration
+## Usage
 
-| Variable | Description | Required |
-|---|---|---|
-| `TELEGRAM_BOT_TOKEN` | Your Telegram bot token from BotFather | ✅ |
-| `OPENROUTER_API_KEY` | API key from openrouter.ai | ✅ |
-| `OPENROUTER_MODEL` | Model identifier (e.g. `openai/gpt-4o`) | ✅ |
-
----
-
-## How It Works
-
-1. A user sends a message (text or voice) to the bot on Telegram.
-2. **Voice messages** are transcribed to text via the speech-to-text service.
-3. The **router** analyzes the message and selects the appropriate agent.
-4. The selected **agent** processes the message using the configured LLM via OpenRouter.
-5. The **injection guard** runs on every incoming message to detect malicious prompts.
-6. The response is sent back to the user with conversation **memory** maintained per session.
+| Message | Routed to |
+| :--- | :--- |
+| "Explain quantum computing" | `general_agent` |
+| "Who scored last night for Bayern?" | `football_agent` |
+| "Show me a bar chart of my data" | `chart_agent` |
+| ðŸŽ¤ Voice note | Whisper â†’ any agent |
 
 ---
 
 ## Security
 
-The `injection_guard.py` module scans incoming messages for common prompt injection patterns and refuses to process flagged input. This helps prevent users from manipulating the bot's system prompt or bypassing its intended behavior.
+The `injection_guard.py` module scans every incoming message for known prompt injection patterns before routing. Flagged messages are blocked and never reach the LLM.
 
 ---
 
-## Development
-
-### Logging
-
-Logging is configured in `app/utils/logging_setup.py`. Adjust the log level via the `LOG_LEVEL` environment variable (default: `INFO`).
-
-### Adding a New Agent
+## Adding a New Agent
 
 1. Create `app/agents/your_agent.py` with a handler function.
-2. Register the agent in `app/bot/router.py` with appropriate routing logic.
+2. Register the agent in `app/bot/router.py` with routing logic.
+
+---
+
+## Roadmap
+
+- [ ] Web search integration
+- [ ] User whitelist / authentication
+- [ ] Deploy to server (Railway / Fly.io)
+- [ ] Persistent memory across restarts
 
 ---
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
-
----
-
-## Contributing
-
-Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
+MIT License â€“ see [LICENSE](LICENSE) for details.

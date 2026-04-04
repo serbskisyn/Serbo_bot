@@ -3,15 +3,28 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from app.services.openrouter_client import ask_llm, extract_facts
 from app.services.speech_to_text import transcribe_voice
-from app.security.injection_guard import is_injection
+from app.security.injection_guard import is_injection_async
 from app.bot.conversation import get_history, add_message, clear_history
 from app.bot.memory import add_direct, add_indirect, get_memory_prompt, clear_memory, format_memory_overview
+from app.bot.router import route, AgentType
+from app.agents import football_agent, chart_agent
 
 logger = logging.getLogger(__name__)
 
 
 async def _process_message(user_id: int, text: str, update: Update, context) -> None:
     """Gemeinsame Logik für Text- und Sprachnachrichten."""
+    agent = route(text)
+
+    if agent == AgentType.FOOTBALL:
+        await football_agent.handle(user_id, text, update)
+        return
+
+    if agent == AgentType.CHART:
+        await chart_agent.handle(user_id, text, update)
+        return
+
+    # Fallback: General Agent
     memory_context = get_memory_prompt(user_id)
     system_prompt = (
         f"Du bist ein hilfreicher Assistent. Antworte auf Deutsch. "
@@ -20,20 +33,15 @@ async def _process_message(user_id: int, text: str, update: Update, context) -> 
         f"Bullet Points oder direkte Antworten bevorzugen."
         f"{memory_context}"
     )
-
     history = get_history(user_id)
     response = await ask_llm(text, history=history, system_prompt=system_prompt)
-
     add_message(user_id, "user", text)
     add_message(user_id, "assistant", response)
-
-    # Fakten im Hintergrund extrahieren
     facts = await extract_facts(text, response)
     for key, value in facts.get("direct", {}).items():
         add_direct(user_id, key, value)
     for fact in facts.get("indirect", []):
         add_indirect(user_id, fact)
-
     await update.message.reply_text(response)
 
 
@@ -69,7 +77,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info(f"Textnachricht von User {user_id}")
 
-    if is_injection(user_text):
+    if await is_injection_async(user_text, user_id=user_id):
         logger.warning(f"Injection blocked (text) | user={user_id} | text={user_text[:60]}")
         await update.message.reply_text("⚠️ Deine Nachricht wurde aus Sicherheitsgründen blockiert.")
         return
@@ -92,7 +100,7 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Ich konnte die Sprachnachricht leider nicht verstehen.")
         return
 
-    if is_injection(transcript):
+    if await is_injection_async(transcript, user_id=user_id):
         logger.warning(f"Injection blocked (voice) | user={user_id} | transcript={transcript[:60]}")
         await update.message.reply_text("⚠️ Deine Nachricht wurde aus Sicherheitsgründen blockiert.")
         return

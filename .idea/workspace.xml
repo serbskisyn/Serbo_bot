@@ -2,7 +2,16 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="49b67eab-f0a8-4a95-8150-0a5ca00e0c7e" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/pytest.ini " afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/tests/conftest.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/tests/test_injection_guard.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/tests/test_router.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/agents/chart_agent.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/agents/chart_agent.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/agents/football_agent.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/agents/football_agent.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/bot/handlers.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/bot/handlers.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/bot/router.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/bot/router.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/claude.md" beforeDir="false" afterPath="$PROJECT_DIR$/claude.md" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -71,7 +80,7 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1775127504216</updated>
-      <workItem from="1775127505256" duration="9615000" />
+      <workItem from="1775127505256" duration="13596000" />
     </task>
     <servers />
   </component>
@@ -83,7 +92,6 @@
       <breakpoints>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/app/bot/handlers.py</url>
-          <line>42</line>
           <option name="timeStamp" value="2" />
         </line-breakpoint>
       </breakpoints>

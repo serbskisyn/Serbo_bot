@@ -4,7 +4,7 @@ from app import config
 
 # ── Stage 1: Hard-block patterns ──────────────────────────────────────────────
 INJECTION_PATTERNS = [
-    r"ignore (all |previous |above )?instructions",
+    r"ignore\b.{0,30}instructions",
     r"you are now",
     r"forget (your |all )?(previous |prior )?instructions",
     r"(reveal|show|print|repeat).{0,20}(prompt|instructions|system)",

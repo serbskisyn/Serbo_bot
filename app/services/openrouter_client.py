@@ -7,6 +7,7 @@ from app.config import OPENROUTER_API_KEY, OPENROUTER_MODEL
 logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+EXTRACTOR_MODEL = "anthropic/claude-haiku-4"
 
 EXTRACTOR_PROMPT = """Du analysierst eine Konversation und extrahierst Fakten über den User.
 Antworte NUR mit validem JSON in diesem Format:
@@ -59,13 +60,12 @@ async def ask_llm(
 
 
 async def extract_facts(user_text: str, assistant_response: str) -> dict:
-    """Extrahiert Fakten aus dem Austausch via Haiku."""
     messages = [
         {"role": "system", "content": EXTRACTOR_PROMPT},
         {"role": "user", "content": f"User: {user_text}\nAssistent: {assistant_response}"}
     ]
     payload = {
-        "model": "anthropic/claude-haiku-4-5",
+        "model": EXTRACTOR_MODEL,
         "messages": messages,
         "temperature": 0.0,
         "max_tokens": 256,

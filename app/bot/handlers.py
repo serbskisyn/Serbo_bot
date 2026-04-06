@@ -77,7 +77,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info(f"Textnachricht von User {user_id}")
 
-    if await is_injection_async(user_text, user_id=user_id):
+    if await is_injection_async(user_text):
         logger.warning(f"Injection blocked (text) | user={user_id} | text={user_text[:60]}")
         await update.message.reply_text("⚠️ Deine Nachricht wurde aus Sicherheitsgründen blockiert.")
         return
@@ -100,7 +100,7 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Ich konnte die Sprachnachricht leider nicht verstehen.")
         return
 
-    if await is_injection_async(transcript, user_id=user_id):
+    if await is_injection_async(transcript):
         logger.warning(f"Injection blocked (voice) | user={user_id} | transcript={transcript[:60]}")
         await update.message.reply_text("⚠️ Deine Nachricht wurde aus Sicherheitsgründen blockiert.")
         return

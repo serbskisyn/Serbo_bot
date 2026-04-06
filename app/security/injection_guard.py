@@ -99,3 +99,7 @@ def wrap_document(content: str) -> str:
     """Wrap external/fetched content to isolate it from the prompt context."""
     clean = re.sub(r'<!--.*?-->', '', content, flags=re.DOTALL)
     return f"<document>\n{clean.strip()}\n</document>"
+
+
+async def is_injection_async(text: str) -> bool:
+    return is_injection(text)

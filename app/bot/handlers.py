@@ -1,3 +1,4 @@
+import io
 import logging
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -15,7 +16,16 @@ logger = logging.getLogger(__name__)
 
 async def _process_message(user_id: int, text: str, update: Update, context) -> None:
     history = get_history(user_id)
-    response = await agent_run(user_id, text, history)
+    result = await agent_run(user_id, text, history)
+
+    if isinstance(result, dict) and result.get("response") == "__CHART__":
+        png_bytes = result.get("chart_bytes")
+        add_message(user_id, "user", text)
+        add_message(user_id, "assistant", "[Chart generiert]")
+        await update.message.reply_photo(photo=io.BytesIO(png_bytes))
+        return
+
+    response = result if isinstance(result, str) else result.get("response", "")
     add_message(user_id, "user", text)
     add_message(user_id, "assistant", response)
     facts = await extract_facts(text, response)

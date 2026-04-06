@@ -23,7 +23,7 @@ async def get_runner():
     return _compiled
 
 
-async def run(user_id: int, text: str, history: list) -> str:
+async def run(user_id: int, text: str, history: list) -> dict | str:
     runner = await get_runner()
     config = {"configurable": {"thread_id": str(user_id)}}
     state = {
@@ -34,4 +34,7 @@ async def run(user_id: int, text: str, history: list) -> str:
         "response": "",
     }
     result = await runner.ainvoke(state, config=config)
+
+    if result.get("response") == "__CHART__":
+        return result
     return result["response"]

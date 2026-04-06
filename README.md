@@ -6,9 +6,9 @@ A modular Telegram bot powered by LLMs via [OpenRouter](https://openrouter.ai). 
 
 ## Overview
 
-\```
-You -> Telegram (text or voice) -> Rate Limiter -> Injection Guard -> LangGraph Supervisor -> Agent -> Response
-\```
+```
+You -> Telegram (text or voice) -> Whitelist -> Rate Limiter -> Injection Guard -> LangGraph Supervisor -> Agent -> Response
+```
 
 ---
 
@@ -26,6 +26,7 @@ You -> Telegram (text or voice) -> Rate Limiter -> Injection Guard -> LangGraph 
 | ✅ | Web Agent – live web search via Tavily |
 | ✅ | Two-stage prompt injection guard (pattern-based + LLM-Guard) |
 | ✅ | Rate limiting – sliding window per user (configurable) |
+| ✅ | User whitelist – only allowed Telegram users can access the bot |
 | ✅ | Per-user fact memory (confirmed + pending, JSON-persisted) |
 | ✅ | OpenRouter integration – any LLM (GPT-4o, Claude, Mistral, ...) |
 | ✅ | GitHub Actions CI – runs pytest on every push |
@@ -49,6 +50,7 @@ app/
 ├── bot/
 │   ├── handlers.py          # Telegram update handlers
 │   ├── router.py            # Keyword-based routing logic
+│   ├── whitelist.py         # User whitelist check
 │   ├── conversation.py      # Conversation history (SQLite)
 │   └── memory.py            # Per-user fact memory (JSON-persisted)
 ├── security/
@@ -66,7 +68,6 @@ app/
 ├── config.py                # Environment config loader
 └── main.py                  # Entry point
 ```
-
 
 ### Stack
 
@@ -92,20 +93,20 @@ app/
 
 ### Installation
 
-\```bash
+```bash
 git clone https://github.com/serbskisyn/Serbo_bot.git
 cd Serbo_bot
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 brew install ffmpeg
-\```
+```
 
 ### Configuration
 
-\```bash
+```bash
 cp .env.example .env  # fill in API keys
-\```
+```
 
 | Variable | Description |
 | :--- | :--- |
@@ -113,15 +114,16 @@ cp .env.example .env  # fill in API keys
 | `OPENROUTER_API_KEY` | API key from openrouter.ai |
 | `OPENROUTER_MODEL` | Model ID, e.g. `openai/gpt-4o` |
 | `TAVILY_API_KEY` | API key from tavily.com |
-| `RATE_LIMIT_MAX_REQUESTS` | Max messages per window (default: 10) |
-| `RATE_LIMIT_WINDOW_SECONDS` | Window size in seconds (default: 60) |
+| `ALLOWED_USER_IDS` | Comma-separated Telegram user IDs, e.g. `123456789,987654321` |
+| `RATE_LIMIT_MAX_REQUESTS` | Max messages per window (default: `10`) |
+| `RATE_LIMIT_WINDOW_SECONDS` | Window size in seconds (default: `60`) |
 
 ### Run
 
-\```bash
+```bash
 python -m app.main
 pytest tests/ -v
-\```
+```
 
 ---
 
@@ -143,10 +145,11 @@ pytest tests/ -v
 
 ## Security
 
-Every incoming message passes through rate limiting and a two-stage injection guard before reaching any agent:
+Every incoming message passes through three layers before reaching any agent:
 
+- **Whitelist** – only allowed Telegram user IDs can interact with the bot
 - **Rate Limiter** – sliding window per user, configurable via `.env`
-- **Stage 1** – Pattern-based hard block + soft score (free, instant)
+- **Stage 1** – pattern-based hard block + soft score (free, instant)
 - **Stage 2** – LLM-Guard via OpenRouter (only when score > 0)
 
 ---
@@ -166,9 +169,9 @@ Every incoming message passes through rate limiting and a two-stage injection gu
 - [x] Persistent conversation memory (SQLite)
 - [x] Rate limiting – sliding window per user
 - [x] Web search integration (Tavily)
+- [x] User whitelist / authentication
 - [x] GitHub Actions CI
 - [ ] Football News Summary with fact check and quality score
-- [ ] User whitelist / authentication
 - [ ] Morning Briefing – daily summary via Telegram
 - [ ] Dienstplan Agent (3-shift scheduling with rule validation)
 - [ ] Control Agent (validates Dienstplan against rules + holidays)

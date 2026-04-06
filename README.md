@@ -1,13 +1,13 @@
 # Telegram AI Bot
 
-A modular Telegram bot powered by LLMs via [OpenRouter](https://openrouter.ai). Supports multi-agent routing via LangGraph, voice transcription, football data, chart generation, and prompt injection protection.
+A modular Telegram bot powered by LLMs via [OpenRouter](https://openrouter.ai). Supports multi-agent routing via LangGraph, voice transcription, football data, chart generation, web search, and prompt injection protection.
 
 ---
 
 ## Overview
 
 \```
-You -> Telegram (text or voice) -> Injection Guard -> LangGraph Supervisor -> Agent -> Response
+You -> Telegram (text or voice) -> Rate Limiter -> Injection Guard -> LangGraph Supervisor -> Agent -> Response
 \```
 
 ---
@@ -19,11 +19,13 @@ You -> Telegram (text or voice) -> Injection Guard -> LangGraph Supervisor -> Ag
 | ✅ | Telegram bot interface |
 | ✅ | LangGraph multi-agent state machine |
 | ✅ | Persistent conversation memory (SQLite via AsyncSqliteSaver) |
-| ✅ | Multi-agent routing (general, football, chart) |
+| ✅ | Multi-agent routing (general, football, chart, web) |
 | ✅ | Voice messages – transcribed via Whisper |
 | ✅ | Football Agent – stats, results, standings |
 | ✅ | Chart Agent – generates charts on request |
+| ✅ | Web Agent – live web search via Tavily |
 | ✅ | Two-stage prompt injection guard (pattern-based + LLM-Guard) |
+| ✅ | Rate limiting – sliding window per user (configurable) |
 | ✅ | Per-user fact memory (confirmed + pending, JSON-persisted) |
 | ✅ | OpenRouter integration – any LLM (GPT-4o, Claude, Mistral, ...) |
 | ✅ | GitHub Actions CI – runs pytest on every push |
@@ -39,22 +41,23 @@ app/
 │   │   ├── supervisor.py    # Routing node (entry point)
 │   │   ├── general.py       # General-purpose LLM agent
 │   │   ├── football.py      # Football data agent
-│   │   └── chart.py         # Chart generation agent
-│   ├── chart_agent.py       # Chart agent logic
-│   ├── football_agent.py    # Football agent logic
+│   │   ├── chart.py         # Chart generation agent
+│   │   └── web.py           # Web search agent (Tavily)
 │   ├── graph.py             # LangGraph StateGraph definition
 │   ├── runner.py            # AsyncSqliteSaver + ainvoke runner
 │   └── state.py             # BotState TypedDict
 ├── bot/
-│   ├── conversation.py      # Conversation history (JSON-persisted)
 │   ├── handlers.py          # Telegram update handlers
-│   ├── memory.py            # Per-user fact memory (JSON-persisted)
-│   └── router.py            # Keyword-based routing logic
+│   ├── router.py            # Keyword-based routing logic
+│   ├── conversation.py      # Conversation history (SQLite)
+│   └── memory.py            # Per-user fact memory (JSON-persisted)
 ├── security/
-│   └── injection_guard.py   # Two-stage prompt injection detection
+│   ├── injection_guard.py   # Two-stage prompt injection detection
+│   └── rate_limiter.py      # Sliding window rate limiter per user
 ├── services/
 │   ├── openrouter_client.py # OpenRouter API client
-│   └── speech_to_text.py    # Voice message transcription
+│   ├── speech_to_text.py    # Voice message transcription
+│   └── web_search.py        # Tavily search client
 ├── utils/
 │   └── logging_setup.py     # Logging configuration
 ├── data/
@@ -71,6 +74,7 @@ app/
 - **OpenRouter** – LLM backbone (model configurable via `.env`)
 - **python-telegram-bot** – Telegram interface
 - **Whisper** – local voice transcription
+- **Tavily** – web search for live information
 - **aiosqlite** – async SQLite for persistent conversation memory
 - Python 3.11+
 
@@ -83,6 +87,7 @@ app/
 - Python 3.11+
 - Telegram bot token (via [@BotFather](https://t.me/BotFather))
 - [OpenRouter](https://openrouter.ai) API key
+- [Tavily](https://tavily.com) API key (free tier: 1.000 searches/month)
 - ffmpeg (for voice transcription)
 
 ### Installation
@@ -107,6 +112,9 @@ cp .env.example .env  # fill in API keys
 | `TELEGRAM_BOT_TOKEN` | Bot token from BotFather |
 | `OPENROUTER_API_KEY` | API key from openrouter.ai |
 | `OPENROUTER_MODEL` | Model ID, e.g. `openai/gpt-4o` |
+| `TAVILY_API_KEY` | API key from tavily.com |
+| `RATE_LIMIT_MAX_REQUESTS` | Max messages per window (default: 10) |
+| `RATE_LIMIT_WINDOW_SECONDS` | Window size in seconds (default: 60) |
 
 ### Run
 
@@ -124,6 +132,7 @@ pytest tests/ -v
 | "Erkläre mir Quantencomputing" | `general_node` |
 | "Wer hat gestern für Bayern getroffen?" | `football_node` |
 | "Zeig mir ein Balkendiagramm" | `chart_node` |
+| "Was sind heute die aktuellen Nachrichten?" | `web_node` |
 | 🎤 Voice note | Whisper -> any agent |
 
 **Commands:**
@@ -134,8 +143,9 @@ pytest tests/ -v
 
 ## Security
 
-Every incoming message passes through a two-stage injection guard before reaching any agent:
+Every incoming message passes through rate limiting and a two-stage injection guard before reaching any agent:
 
+- **Rate Limiter** – sliding window per user, configurable via `.env`
 - **Stage 1** – Pattern-based hard block + soft score (free, instant)
 - **Stage 2** – LLM-Guard via OpenRouter (only when score > 0)
 
@@ -154,9 +164,12 @@ Every incoming message passes through a two-stage injection guard before reachin
 
 - [x] LangGraph multi-agent architecture
 - [x] Persistent conversation memory (SQLite)
-- [x] GitHub Actions CI- [ ] Football News Summary with fact check and quality score
-- [ ] Web search integration
+- [x] Rate limiting – sliding window per user
+- [x] Web search integration (Tavily)
+- [x] GitHub Actions CI
+- [ ] Football News Summary with fact check and quality score
 - [ ] User whitelist / authentication
+- [ ] Morning Briefing – daily summary via Telegram
 - [ ] Dienstplan Agent (3-shift scheduling with rule validation)
 - [ ] Control Agent (validates Dienstplan against rules + holidays)
 - [ ] Google Sheets integration (staff data, vacation, sick leave)

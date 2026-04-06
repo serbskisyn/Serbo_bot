@@ -154,7 +154,7 @@ Every incoming message passes through a two-stage injection guard before reachin
 
 - [x] LangGraph multi-agent architecture
 - [x] Persistent conversation memory (SQLite)
-- [x] GitHub Actions CI
+- [x] GitHub Actions CI- [ ] Football News Summary with fact check and quality score
 - [ ] Web search integration
 - [ ] User whitelist / authentication
 - [ ] Dienstplan Agent (3-shift scheduling with rule validation)

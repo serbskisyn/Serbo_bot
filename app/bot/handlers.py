@@ -1,40 +1,19 @@
 import logging
 from telegram import Update
 from telegram.ext import ContextTypes
-from app.services.openrouter_client import ask_llm, extract_facts
+from app.services.openrouter_client import extract_facts
 from app.services.speech_to_text import transcribe_voice
 from app.security.injection_guard import is_injection_async
 from app.bot.conversation import get_history, add_message, clear_history
 from app.bot.memory import add_direct, add_indirect, get_memory_prompt, clear_memory, format_memory_overview
-from app.bot.router import route, AgentType
-from app.agents import football_agent, chart_agent
+from app.agents.runner import run as agent_run
 
 logger = logging.getLogger(__name__)
 
 
 async def _process_message(user_id: int, text: str, update: Update, context) -> None:
-    """Gemeinsame Logik für Text- und Sprachnachrichten."""
-    agent = route(text)
-
-    if agent == AgentType.FOOTBALL:
-        await football_agent.handle(user_id, text, update)
-        return
-
-    if agent == AgentType.CHART:
-        await chart_agent.handle(user_id, text, update)
-        return
-
-    # Fallback: General Agent
-    memory_context = get_memory_prompt(user_id)
-    system_prompt = (
-        f"Du bist ein hilfreicher Assistent. Antworte auf Deutsch. "
-        f"Antworte immer so kurz und präzise wie möglich. "
-        f"Keine langen Erklärungen, keine Prosa, keine Einleitungssätze. "
-        f"Bullet Points oder direkte Antworten bevorzugen."
-        f"{memory_context}"
-    )
     history = get_history(user_id)
-    response = await ask_llm(text, history=history, system_prompt=system_prompt)
+    response = await agent_run(user_id, text, history)
     add_message(user_id, "user", text)
     add_message(user_id, "assistant", response)
     facts = await extract_facts(text, response)
@@ -64,7 +43,7 @@ async def reset_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def memory_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     overview = format_memory_overview(update.effective_user.id)
-    await update.message.reply_text(overview, parse_mode="Markdown")
+    await update.message.reply_text(overview)
 
 
 async def forget_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

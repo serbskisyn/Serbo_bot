@@ -4,6 +4,7 @@ from telegram.ext import ContextTypes
 from app.services.openrouter_client import extract_facts
 from app.services.speech_to_text import transcribe_voice
 from app.security.injection_guard import is_injection_async
+from app.security.rate_limiter import is_rate_limited
 from app.bot.conversation import get_history, add_message, clear_history
 from app.bot.memory import add_direct, add_indirect, get_memory_prompt, clear_memory, format_memory_overview
 from app.agents.runner import run as agent_run
@@ -56,6 +57,16 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info(f"Textnachricht von User {user_id}")
 
+    # ── Rate Limiting ──────────────────────────────────────
+    limited, retry_after = is_rate_limited(user_id)
+    if limited:
+        logger.warning(f"Rate limit exceeded | user={user_id}")
+        await update.message.reply_text(
+            f"⏳ Zu viele Nachrichten. Bitte {retry_after}s warten."
+        )
+        return
+    # ───────────────────────────────────────────────────────
+
     if await is_injection_async(user_text):
         logger.warning(f"Injection blocked (text) | user={user_id} | text={user_text[:60]}")
         await update.message.reply_text("⚠️ Deine Nachricht wurde aus Sicherheitsgründen blockiert.")
@@ -68,6 +79,16 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info(f"Sprachnachricht von User {user_id}")
+
+    # ── Rate Limiting ──────────────────────────────────────
+    limited, retry_after = is_rate_limited(user_id)
+    if limited:
+        logger.warning(f"Rate limit exceeded | user={user_id}")
+        await update.message.reply_text(
+            f"⏳ Zu viele Nachrichten. Bitte {retry_after}s warten."
+        )
+        return
+    # ───────────────────────────────────────────────────────
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 

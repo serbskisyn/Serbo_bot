@@ -8,6 +8,7 @@ class AgentType(Enum):
     GENERAL = "general"
     FOOTBALL = "football"
     CHART = "chart"
+    WEB = "web"
 
 
 FOOTBALL_KEYWORDS = [
@@ -27,6 +28,13 @@ CHART_KEYWORDS = [
     "bar chart", "line chart", "pie chart", "histogram",
 ]
 
+WEB_KEYWORDS = [
+    "aktuell", "heute", "news", "nachrichten", "wetter", "suche",
+    "was ist", "wer ist", "wo ist", "wann ist", "wie viel kostet",
+    "preis von", "neueste", "gerade", "live", "breaking", "trending",
+    "search", "google", "internet", "online", "website",
+]
+
 
 def route(text: str) -> AgentType:
     """Bestimmt den passenden Agenten anhand von Keywords im Text."""
@@ -41,6 +49,11 @@ def route(text: str) -> AgentType:
         if keyword in lower:
             logger.info(f"Router -> FOOTBALL (keyword: '{keyword}')")
             return AgentType.FOOTBALL
+
+    for keyword in WEB_KEYWORDS:
+        if keyword in lower:
+            logger.info(f"Router -> WEB (keyword: '{keyword}')")
+            return AgentType.WEB
 
     logger.info("Router -> GENERAL (no keyword match)")
     return AgentType.GENERAL

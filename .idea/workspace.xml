@@ -2,18 +2,14 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="49b67eab-f0a8-4a95-8150-0a5ca00e0c7e" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/app/agents/graph.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/app/agents/nodes/chart.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/app/agents/nodes/football.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/app/agents/nodes/general.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/app/agents/nodes/supervisor.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/app/agents/runner.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/app/agents/state.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/agents/nodes/web.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/security/rate_limiter.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/app/services/web_search.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/agents/chart_agent.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/agents/chart_agent.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/agents/football_agent.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/agents/football_agent.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/agents/graph.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/agents/graph.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/app/bot/handlers.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/bot/handlers.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/bot/router.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/bot/router.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/app/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/config.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -82,21 +78,11 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1775127504216</updated>
-      <workItem from="1775127505256" duration="18506000" />
+      <workItem from="1775127505256" duration="21863000" />
     </task>
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
     <option name="version" value="3" />
-  </component>
-  <component name="XDebuggerManager">
-    <breakpoint-manager>
-      <breakpoints>
-        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/app/bot/handlers.py</url>
-          <option name="timeStamp" value="2" />
-        </line-breakpoint>
-      </breakpoints>
-    </breakpoint-manager>
   </component>
 </project>

@@ -7,7 +7,7 @@ from app.config import OPENROUTER_API_KEY, OPENROUTER_MODEL
 logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-EXTRACTOR_MODEL = "anthropic/claude-haiku-4"
+EXTRACTOR_MODEL = "openai/gpt-4o-mini"
 
 EXTRACTOR_PROMPT = """Du analysierst eine Konversation und extrahierst Fakten über den User.
 Antworte NUR mit validem JSON in diesem Format:

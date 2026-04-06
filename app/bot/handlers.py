@@ -5,9 +5,9 @@ from app.services.openrouter_client import extract_facts
 from app.services.speech_to_text import transcribe_voice
 from app.security.injection_guard import is_injection_async
 from app.security.rate_limiter import is_rate_limited
-from app.bot.whitelist import is_allowed
 from app.bot.conversation import get_history, add_message, clear_history
 from app.bot.memory import add_direct, add_indirect, get_memory_prompt, clear_memory, format_memory_overview
+from app.bot.whitelist import is_allowed
 from app.agents.runner import run as agent_run
 
 logger = logging.getLogger(__name__)
@@ -29,8 +29,7 @@ async def _process_message(user_id: int, text: str, update: Update, context) -> 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not is_allowed(user.id):
-        logger.warning(f"Unauthorized /start | user={user.id}")
-        await update.message.reply_text("🚫 Kein Zugriff.")
+        await update.message.reply_text("⛔ Kein Zugriff.")
         return
     clear_history(user.id)
     await update.message.reply_text(
@@ -43,50 +42,47 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def reset_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_allowed(update.effective_user.id):
-        await update.message.reply_text("🚫 Kein Zugriff.")
+    user_id = update.effective_user.id
+    if not is_allowed(user_id):
+        await update.message.reply_text("⛔ Kein Zugriff.")
         return
-    clear_history(update.effective_user.id)
+    clear_history(user_id)
     await update.message.reply_text("🗑️ Gesprächsverlauf gelöscht.")
 
 
 async def memory_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_allowed(update.effective_user.id):
-        await update.message.reply_text("🚫 Kein Zugriff.")
+    user_id = update.effective_user.id
+    if not is_allowed(user_id):
+        await update.message.reply_text("⛔ Kein Zugriff.")
         return
-    overview = format_memory_overview(update.effective_user.id)
+    overview = format_memory_overview(user_id)
     await update.message.reply_text(overview)
 
 
 async def forget_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_allowed(update.effective_user.id):
-        await update.message.reply_text("🚫 Kein Zugriff.")
+    user_id = update.effective_user.id
+    if not is_allowed(user_id):
+        await update.message.reply_text("⛔ Kein Zugriff.")
         return
-    clear_memory(update.effective_user.id)
+    clear_memory(user_id)
     await update.message.reply_text("🧹 Gedächtnis gelöscht.")
 
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text
     user_id = update.effective_user.id
+    user_text = update.message.text
     logger.info(f"Textnachricht von User {user_id}")
 
-    # ── Whitelist ──────────────────────────────────────────
     if not is_allowed(user_id):
-        logger.warning(f"Unauthorized access | user={user_id}")
-        await update.message.reply_text("🚫 Kein Zugriff.")
+        logger.warning(f"Unauthorized user | user={user_id}")
+        await update.message.reply_text("⛔ Kein Zugriff.")
         return
-    # ───────────────────────────────────────────────────────
 
-    # ── Rate Limiting ──────────────────────────────────────
     limited, retry_after = is_rate_limited(user_id)
     if limited:
         logger.warning(f"Rate limit exceeded | user={user_id}")
-        await update.message.reply_text(
-            f"⏳ Zu viele Nachrichten. Bitte {retry_after}s warten."
-        )
+        await update.message.reply_text(f"⏳ Zu viele Nachrichten. Bitte {retry_after}s warten.")
         return
-    # ───────────────────────────────────────────────────────
 
     if await is_injection_async(user_text):
         logger.warning(f"Injection blocked (text) | user={user_id} | text={user_text[:60]}")
@@ -101,22 +97,16 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info(f"Sprachnachricht von User {user_id}")
 
-    # ── Whitelist ──────────────────────────────────────────
     if not is_allowed(user_id):
-        logger.warning(f"Unauthorized access | user={user_id}")
-        await update.message.reply_text("🚫 Kein Zugriff.")
+        logger.warning(f"Unauthorized user | user={user_id}")
+        await update.message.reply_text("⛔ Kein Zugriff.")
         return
-    # ───────────────────────────────────────────────────────
 
-    # ── Rate Limiting ──────────────────────────────────────
     limited, retry_after = is_rate_limited(user_id)
     if limited:
         logger.warning(f"Rate limit exceeded | user={user_id}")
-        await update.message.reply_text(
-            f"⏳ Zu viele Nachrichten. Bitte {retry_after}s warten."
-        )
+        await update.message.reply_text(f"⏳ Zu viele Nachrichten. Bitte {retry_after}s warten.")
         return
-    # ───────────────────────────────────────────────────────
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 

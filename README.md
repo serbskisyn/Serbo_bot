@@ -32,7 +32,7 @@ You -> Telegram (text or voice) -> Injection Guard -> LangGraph Supervisor -> Ag
 
 ## Architecture
 
-\```
+```
 app/
 ├── agents/
 │   ├── nodes/
@@ -62,7 +62,8 @@ app/
 │   └── conversation.db      # LangGraph SQLite checkpoint (auto-generated)
 ├── config.py                # Environment config loader
 └── main.py                  # Entry point
-\```
+```
+
 
 ### Stack
 

@@ -9,6 +9,7 @@ OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
 BOT_NAME = os.getenv("BOT_NAME", "MeinAgent")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+GNEWS_API_KEY = os.getenv("GNEWS_API_KEY", "")
 
 ALLOWED_USER_IDS: set[int] = set(
     int(x) for x in os.getenv("ALLOWED_USER_IDS", "").split(",") if x.strip()

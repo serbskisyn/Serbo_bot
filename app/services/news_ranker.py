@@ -24,7 +24,7 @@ def _normalize(text: str) -> set[str]:
     stopwords = {
         "der", "die", "das", "und", "in", "im", "am", "bei", "für", "von",
         "mit", "nach", "an", "zu", "auf", "ist", "ein", "eine", "des",
-        "fc", "sc", "sv", "vfb", "the", "a", "of", "in", "at", "for",
+        "fc", "sc", "sv", "vfb", "the", "a", "of", "at", "for",
         "to", "is", "and", "with", "after", "as", "by",
     }
     tokens = re.findall(r"[a-zäöüß]{3,}", text.lower())
@@ -42,12 +42,6 @@ def _best_snippet(snippets: list[str]) -> str:
     if not clean:
         return ""
     return max(clean, key=lambda s: len(s.split()))
-
-
-def _format_date(item: NewsItem) -> str:
-    if item.published is None:
-        return ""
-    return item.published.strftime("%d.%m.%Y %H:%M")
 
 
 def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
@@ -82,6 +76,7 @@ def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
     for cluster in clusters:
         cluster_items = [unique[i] for i in cluster]
         best_title    = max(cluster_items, key=lambda x: len(x.title)).title
+
         source_map: dict[str, str] = {}
         for item in cluster_items:
             if item.source not in source_map:
@@ -109,7 +104,12 @@ async def enrich_ranked_news(ranked: list[RankedNews], club: str) -> list[Ranked
     from app.services.news_enricher import enrich_news_item
 
     async def _enrich_one(item: RankedNews) -> RankedNews | None:
-        enriched = await enrich_news_item(item.urls[0], item.title, club)
+        enriched = await enrich_news_item(
+            url=item.urls[0],
+            title=item.title,
+            snippet=item.snippet,
+            club=club,
+        )
         if enriched is None:
             return None
         item.title   = enriched["headline"]

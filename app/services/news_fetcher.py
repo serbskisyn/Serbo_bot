@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from xml.etree import ElementTree as ET
 from dataclasses import dataclass
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse, parse_qs, unquote
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,27 @@ def _google_news_url_en(query: str) -> str:
     return f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=en&gl=US&ceid=US:en"
 
 
+def _unmask_google_url(url: str) -> str:
+    """
+    Google News RSS liefert kryptische Redirect-URLs wie:
+      https://news.google.com/rss/articles/CBMi...
+    Oder manchmal: https://news.google.com/articles/CAIi...
+    Wir versuchen die echte URL aus dem <source> Tag zu nehmen
+    (wird im Caller gesetzt). Fallback: URL so lassen wie sie ist,
+    aber zumindest lesbarer kürzen.
+    """
+    if "news.google.com" not in url:
+        return url
+    # Versuche ?url= Parameter zu extrahieren (älteres Format)
+    parsed = urlparse(url)
+    qs = parse_qs(parsed.query)
+    if "url" in qs:
+        return unquote(qs["url"][0])
+    # Neues Format: kein lesbarer Parameter – URL bleibt, aber wir kürzen
+    # den unlesbaren Token-Teil für die Anzeige (die echte URL bleibt im Link)
+    return url
+
+
 def _parse_date(date_str: str | None) -> datetime | None:
     if not date_str:
         return None
@@ -97,20 +118,35 @@ def _parse_feed(xml_text: str, source_name: str) -> list[NewsItem]:
             channel = root
         for item in channel.findall("item"):
             title   = (item.findtext("title") or "").strip()
-            url     = (item.findtext("link")  or "").strip()
-            snippet = (item.findtext("description") or "").strip()[:300]
+            raw_url = (item.findtext("link")  or "").strip()
+            snippet = (item.findtext("description") or "").strip()[:500]
             pub     = _parse_date(item.findtext("pubDate"))
 
-            if not title or not url:
+            if not title or not raw_url:
                 continue
             if not _is_recent(pub):
                 continue
             if _is_blacklisted(title):
                 continue
 
+            # Google News Quell-URL bevorzugen wenn vorhanden
+            source_url = ""
+            source_el = item.find("source")
+            if source_el is not None:
+                source_url = source_el.get("url", "")
+
+            # Echte URL bestimmen:
+            # 1) source url (direkt zur Quelle)
+            # 2) Unmask-Versuch
+            # 3) raw_url als Fallback
+            if source_url and "google.com" not in source_url:
+                final_url = source_url
+            else:
+                final_url = _unmask_google_url(raw_url) or raw_url
+
             items.append(NewsItem(
                 title=title,
-                url=url,
+                url=final_url,
                 source=source_name,
                 published=pub,
                 snippet=snippet,

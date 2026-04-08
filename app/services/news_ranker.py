@@ -49,6 +49,21 @@ def _format_date(item: "NewsItem") -> str:
     return item.published.strftime("%d.%m.%Y %H:%M")
 
 
+def _display_url(url: str) -> str:
+    """
+    Gibt einen lesbaren Anzeigenamen für eine URL zurück.
+    Beispiel: https://www.bild.de/sport/... → bild.de
+    """
+    try:
+        from urllib.parse import urlparse
+        host = urlparse(url).netloc
+        # www. entfernen
+        host = re.sub(r"^www\.", "", host)
+        return host
+    except Exception:
+        return url
+
+
 # ── Kern-Logik ────────────────────────────────────────────────────────────────
 
 def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
@@ -71,7 +86,7 @@ def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
     token_sets = [_normalize(item.title) for item in unique]
 
     # Cluster bilden
-    clusters: list[list[int]] = []   # jedes Cluster = Liste von Indizes
+    clusters: list[list[int]] = []
     assigned = [False] * len(unique)
 
     for i in range(len(unique)):
@@ -93,10 +108,8 @@ def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
     for cluster in clusters:
         cluster_items = [unique[i] for i in cluster]
 
-        # Repräsentativen Titel wählen: längsten nehmen
         best_title = max(cluster_items, key=lambda x: len(x.title)).title
 
-        # Quellen + URLs deduplizieren (eine URL pro Quelle)
         source_map: dict[str, str] = {}
         for item in cluster_items:
             if item.source not in source_map:
@@ -105,10 +118,8 @@ def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
         sources = list(source_map.keys())
         urls    = list(source_map.values())
 
-        # Bestes Snippet
         snippet = _best_snippet([item.snippet for item in cluster_items if item.snippet])
 
-        # Neuestes Datum
         dated = [item for item in cluster_items if item.published]
         pub_str = _format_date(max(dated, key=lambda x: x.published)) if dated else ""
 
@@ -121,9 +132,7 @@ def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
             published=pub_str,
         ))
 
-    # Sortierung: erst nach Score (Quellen), dann nach Datum (neueste zuerst)
     ranked.sort(key=lambda x: (x.score, x.published), reverse=True)
-
     return ranked[:top_n]
 
 
@@ -142,24 +151,22 @@ def format_news_output(club_name: str, ranked: list[RankedNews]) -> str:
         medal = MEDALS[i] if i < 3 else f"{i + 1}."
         source_count = f"[{news.score} {'Quelle' if news.score == 1 else 'Quellen'}]"
 
-        # Titel + Quellenanzahl
         lines.append(f"\n{medal} {source_count} *{news.title}*")
 
-        # Snippet (gekürzt auf 200 Zeichen)
+        # Snippet – HTML-Tags entfernen, max 500 Zeichen
         if news.snippet:
-            snippet = re.sub(r"<[^>]+>", "", news.snippet)[:200].strip()
-            if len(news.snippet) > 200:
+            snippet = re.sub(r"<[^>]+>", "", news.snippet)[:500].strip()
+            if len(re.sub(r"<[^>]+>", "", news.snippet)) > 500:
                 snippet += "…"
             lines.append(f"_{snippet}_")
 
-        # Datum
         if news.published:
             lines.append(f"🕐 {news.published}")
 
-        # Quellen als nummeriertes Verzeichnis
+        # Quellen mit lesbaren Domain-Namen statt kryptischer URLs
         source_refs = " · ".join(
-            f"[{j + 1}] [{src}]({url})"
-            for j, (src, url) in enumerate(zip(news.sources, news.urls))
+            f"[{_display_url(url)}]({url})"
+            for url in news.urls
         )
         lines.append(source_refs)
 

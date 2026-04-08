@@ -1,4 +1,4 @@
-cat > app/services/news_fetcher.py << 'EOF'
+
 import re
 import httpx
 import logging
@@ -23,7 +23,6 @@ RSS_FEEDS = [
     ("sportbild.de", "http://sportbild.bild.de/rss/vw-fussball/vw-fussball-45036878,sort=1,view=rss2.sport.xml"),
     ("bild.de",      "http://www.bild.de/rss-feeds/rss-16725492,feed=sport.bild.html"),
     ("skysports.com","https://www.skysports.com/rss/12040"),
-    ("eyefootball",  "https://www.eyefootball.com/football-news.rss"),
 ]
 
 
@@ -67,7 +66,10 @@ def _parse_date(date_str: str | None) -> datetime | None:
         "%Y-%m-%dT%H:%M:%SZ",
     ):
         try:
-            return datetime.strptime(date_str.strip(), fmt)
+            dt = datetime.strptime(date_str.strip(), fmt)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
         except ValueError:
             continue
     return None
@@ -243,4 +245,3 @@ async def fetch_club_news(club_name: str) -> list[NewsItem]:
 
     logger.info(f"fetch_club_news({club_name}): {len(unique)} Artikel (von {len(all_items)} gesamt)")
     return unique
-EOF

@@ -140,6 +140,7 @@ async def _fetch_gnews(client: httpx.AsyncClient, club_name: str) -> list[NewsIt
             for art in data.get("articles", []):
                 title   = art.get("title", "").strip()
                 art_url = art.get("url", "").strip()
+                logger.info(f"GNews URL: {art_url}")
                 snippet = art.get("description", "").strip()
                 source  = art.get("source", {}).get("name", "GNews")
                 pub     = _parse_date(art.get("publishedAt", ""))
@@ -183,11 +184,36 @@ def _parse_feed(xml_text: str, source_name: str) -> list[NewsItem]:
             if _is_excluded(title + " " + snippet):
                 continue
 
-            source_el = item.find("source")
-            if source_el is not None and source_el.get("url"):
-                real_url = source_el.get("url", "")
-            else:
-                real_url = url
+            def _parse_feed(xml_text: str, source_name: str) -> list[NewsItem]:
+                items = []
+                try:
+                    root = ET.fromstring(xml_text)
+                    channel = root.find("channel") or root
+                    for item in channel.findall("item"):
+                        title = (item.findtext("title") or "").strip()
+                        url = (item.findtext("link") or "").strip()
+                        snippet = (item.findtext("description") or "").strip()
+                        pub = _parse_date(item.findtext("pubDate"))
+
+                        if not title or not url:
+                            continue
+                        if not _is_recent(pub):
+                            continue
+                        if _is_excluded(title + " " + snippet):
+                            continue
+                        if _is_homepage_url(url):
+                            continue
+
+                        items.append(NewsItem(
+                            title=title,
+                            url=url,  # direkt den Artikel-Link nehmen
+                            source=source_name,
+                            published=pub,
+                            snippet=_truncate_words(snippet),
+                        ))
+                except ET.ParseError as e:
+                    logger.warning(f"RSS Parse Fehler ({source_name}): {e}")
+                return items
 
             items.append(NewsItem(
                 title=title,

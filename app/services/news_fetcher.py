@@ -145,6 +145,9 @@ async def _fetch_gnews(client: httpx.AsyncClient, club_name: str) -> list[NewsIt
                 pub     = _parse_date(art.get("publishedAt", ""))
 
                 if not title or not art_url:
+                    if _is_homepage_url(art_url):
+                        logger.debug(f"Homepage-URL übersprungen: {art_url}")
+                        continue
                     continue
                 if _is_excluded(title + " " + snippet):
                     continue
@@ -245,3 +248,11 @@ async def fetch_club_news(club_name: str) -> list[NewsItem]:
 
     logger.info(f"fetch_club_news({club_name}): {len(unique)} Artikel (von {len(all_items)} gesamt)")
     return unique
+
+def _is_homepage_url(url: str) -> bool:
+    """Gibt True zurück wenn URL nur auf eine Homepage zeigt (kein Artikel-Pfad)."""
+    try:
+        path = url.rstrip("/").split("/", 3)
+        return len(path) < 4 or not path[3]
+    except Exception:
+        return False

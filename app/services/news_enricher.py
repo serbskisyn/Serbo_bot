@@ -1,4 +1,5 @@
 import logging
+import httpx
 from app.services.openrouter_client import ask_llm
 
 logger = logging.getLogger(__name__)
@@ -14,6 +15,34 @@ SNIPPET: <snippet>
 
 Wenn der Artikel nichts mit {club} zu tun hat, antworte exakt mit:
 IRRELEVANT"""
+
+
+async def _resolve_url(url: str) -> str:
+    """
+    Löst Redirects auf via GET mit kurzem Timeout.
+    Gibt finale URL zurück oder originale URL bei Fehler.
+    """
+    try:
+        async with httpx.AsyncClient(
+            timeout=6.0,
+            follow_redirects=True,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                              "AppleWebKit/537.36 (KHTML, like Gecko) "
+                              "Chrome/120.0.0.0 Safari/537.36"
+            }
+        ) as client:
+            r = await client.get(url)
+            final = str(r.url)
+            # Wenn finale URL nur Startseite ist (kein Pfad) → originale behalten
+            path = final.rstrip("/").split("/", 3)
+            if len(path) < 4 or not path[3]:
+                logger.debug(f"Redirect zu Startseite ignoriert: {final}")
+                return url
+            return final
+    except Exception as e:
+        logger.debug(f"URL-Auflösung fehlgeschlagen ({url[:60]}): {e}")
+        return url
 
 
 async def _llm_summarize(title: str, snippet: str, fallback_title: str, club: str) -> tuple[str, str] | None:
@@ -39,18 +68,15 @@ async def _llm_summarize(title: str, snippet: str, fallback_title: str, club: st
 
 
 async def enrich_news_item(url: str, title: str, snippet: str, club: str) -> dict | None:
-    """
-    Anreicherung eines News-Items.
-    URL wird direkt übernommen — kein Redirect nötig da GNews echte URLs liefert.
-    Gibt None zurück wenn nicht club-relevant.
-    """
-    result = await _llm_summarize(title, snippet, title, club)
+    real_url = await _resolve_url(url)
+    result   = await _llm_summarize(title, snippet, title, club)
+
     if result is None:
         return None
 
     headline, out_snippet = result
     return {
-        "url":      url,   # originale GNews URL direkt
+        "url":      real_url,
         "headline": headline,
         "snippet":  out_snippet,
     }

@@ -1,12 +1,13 @@
 import re
 import logging
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from app.services.news_fetcher import NewsItem
 
 logger = logging.getLogger(__name__)
 
-SIMILARITY_THRESHOLD = 0.35
+SIMILARITY_THRESHOLD = 0.20      # gesenkt von 0.35
+ENTITY_BOOST_WORDS   = 3         # min. gemeinsame Entitäten für Cluster-Merge
 MEDALS = ["🥇", "🥈", "🥉"]
 
 
@@ -24,8 +25,9 @@ def _normalize(text: str) -> set[str]:
     stopwords = {
         "der", "die", "das", "und", "in", "im", "am", "bei", "für", "von",
         "mit", "nach", "an", "zu", "auf", "ist", "ein", "eine", "des",
-        "fc", "sc", "sv", "vfb", "the", "a", "of", "at", "for",
-        "to", "is", "and", "with", "after", "as", "by",
+        "fc", "sc", "sv", "vfb", "the", "a", "of", "at", "for", "to",
+        "is", "and", "with", "after", "as", "by", "bvb", "borussia",
+        "dortmund", "bayern", "artikel", "laut", "beim",
     }
     tokens = re.findall(r"[a-zäöüß]{3,}", text.lower())
     return {t for t in tokens if t not in stopwords}
@@ -37,6 +39,10 @@ def _jaccard(a: set, b: set) -> float:
     return len(a & b) / len(a | b)
 
 
+def _shared_tokens(a: set, b: set) -> int:
+    return len(a & b)
+
+
 def _best_snippet(snippets: list[str]) -> str:
     clean = [s for s in snippets if s]
     if not clean:
@@ -45,9 +51,13 @@ def _best_snippet(snippets: list[str]) -> str:
 
 
 def _cluster(items: list, get_title) -> list[list[int]]:
-    """Generisches Clustering via Jaccard auf Titel."""
+    """
+    Clustering via Jaccard auf Titeln.
+    Zwei Artikel werden auch geclustert wenn sie mind. ENTITY_BOOST_WORDS
+    gemeinsame Tokens haben (fängt Sancho/Transfer-Artikel etc.)
+    """
     token_sets = [_normalize(get_title(i)) for i in items]
-    clusters: list[list[int]] = []
+    clusters:  list[list[int]] = []
     assigned = [False] * len(items)
 
     for i in range(len(items)):
@@ -58,7 +68,9 @@ def _cluster(items: list, get_title) -> list[list[int]]:
         for j in range(i + 1, len(items)):
             if assigned[j]:
                 continue
-            if _jaccard(token_sets[i], token_sets[j]) >= SIMILARITY_THRESHOLD:
+            jaccard  = _jaccard(token_sets[i], token_sets[j])
+            shared   = _shared_tokens(token_sets[i], token_sets[j])
+            if jaccard >= SIMILARITY_THRESHOLD or shared >= ENTITY_BOOST_WORDS:
                 cluster.append(j)
                 assigned[j] = True
         clusters.append(cluster)
@@ -69,7 +81,6 @@ def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
     if not items:
         return []
 
-    # URL-Deduplizierung
     seen_urls: set[str] = set()
     unique: list[NewsItem] = []
     for item in items:
@@ -77,7 +88,6 @@ def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
             seen_urls.add(item.url)
             unique.append(item)
 
-    # Clustering auf Originaltitel
     clusters = _cluster(unique, lambda x: x.title)
 
     ranked: list[RankedNews] = []
@@ -108,10 +118,7 @@ def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
 
 
 def _re_cluster(items: list[RankedNews]) -> list[RankedNews]:
-    """
-    Zweites Clustering nach LLM-Enrichment auf deutschen Titeln.
-    Fasst gleiche Meldungen zusammen die LLM ähnlich übersetzt hat.
-    """
+    """Zweites Clustering nach LLM-Enrichment auf deutschen Titeln."""
     if not items:
         return []
 
@@ -121,10 +128,9 @@ def _re_cluster(items: list[RankedNews]) -> list[RankedNews]:
     for cluster in clusters:
         cluster_items = [items[i] for i in cluster]
 
-        # Alle Quellen + URLs zusammenführen
         seen_sources: set[str] = set()
-        all_sources: list[str] = []
-        all_urls:    list[str] = []
+        all_sources:  list[str] = []
+        all_urls:     list[str] = []
         for item in cluster_items:
             for src, url in zip(item.sources, item.urls):
                 if src not in seen_sources:
@@ -132,7 +138,6 @@ def _re_cluster(items: list[RankedNews]) -> list[RankedNews]:
                     all_sources.append(src)
                     all_urls.append(url)
 
-        # Bestes Snippet (längster Text)
         best = max(cluster_items, key=lambda x: len(x.snippet))
 
         merged.append(RankedNews(
@@ -152,10 +157,6 @@ def _re_cluster(items: list[RankedNews]) -> list[RankedNews]:
 
 
 async def enrich_ranked_news(ranked: list[RankedNews], club: str) -> list[RankedNews]:
-    """
-    1. Parallel LLM-Enrichment aller Items
-    2. Re-Clustering auf deutschen Titeln
-    """
     from app.services.news_enricher import enrich_news_item
 
     async def _enrich_one(item: RankedNews) -> RankedNews | None:
@@ -175,7 +176,6 @@ async def enrich_ranked_news(ranked: list[RankedNews], club: str) -> list[Ranked
     results  = await asyncio.gather(*[_enrich_one(r) for r in ranked])
     enriched = [r for r in results if r is not None]
 
-    # Zweites Clustering auf deutschen Titeln
     re_clustered = _re_cluster(enriched)
     logger.info(f"Re-Clustering: {len(enriched)} → {len(re_clustered)} News")
     return re_clustered

@@ -10,8 +10,29 @@ from app.bot.conversation import get_history, add_message, clear_history
 from app.bot.memory import add_direct, add_indirect, get_memory_prompt, clear_memory, format_memory_overview
 from app.bot.whitelist import is_allowed
 from app.agents.runner import run as agent_run
+from app.agents.football_news_agent import fetch_news_for_user
 
 logger = logging.getLogger(__name__)
+
+
+def _split_message(text: str, limit: int = 4000) -> list[str]:
+    """Splittet langen Text an Zeilenumbrüchen unter dem Limit."""
+    if len(text) <= limit:
+        return [text]
+    chunks = []
+    current = []
+    current_len = 0
+    for line in text.split("\n"):
+        if current_len + len(line) + 1 > limit:
+            chunks.append("\n".join(current))
+            current = [line]
+            current_len = len(line)
+        else:
+            current.append(line)
+            current_len += len(line) + 1
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
 
 
 async def _process_message(user_id: int, text: str, update: Update, context) -> None:
@@ -47,7 +68,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Ich bin dein KI-Assistent. Schreib mir einfach eine Nachricht.\n\n"
         f"/reset — Gesprächsverlauf löschen\n"
         f"/memory — Was ich über dich weiß\n"
-        f"/forget — Mein Gedächtnis löschen"
+        f"/forget — Mein Gedächtnis löschen\n"
+        f"/news — Aktuelle News deiner Lieblingsclubs"
     )
 
 
@@ -76,6 +98,21 @@ async def forget_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     clear_memory(user_id)
     await update.message.reply_text("🧹 Gedächtnis gelöscht.")
+
+
+async def news_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_allowed(user_id):
+        await update.message.reply_text("⛔ Kein Zugriff.")
+        return
+
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    await update.message.reply_text("⏳ Lade aktuelle News für deine Clubs…")
+
+    result = await fetch_news_for_user(user_id)
+
+    for chunk in _split_message(result):
+        await update.message.reply_text(chunk, parse_mode="Markdown", disable_web_page_preview=True)
 
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -133,7 +170,7 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Deine Nachricht wurde aus Sicherheitsgründen blockiert.")
         return
 
-    await update.message.reply_text(f"🎙️ Ich habe verstanden: _{transcript}_", parse_mode="Markdown")
+    await update.message.reply_text(f"🎤 Ich habe verstanden: _{transcript}_", parse_mode="Markdown")
     await _process_message(user_id, transcript, update, context)
 
 

@@ -9,8 +9,9 @@ from urllib.parse import quote_plus, urlparse, parse_qs, unquote
 logger = logging.getLogger(__name__)
 
 MAX_AGE_HOURS = 48
+SNIPPET_MAX_WORDS = 300
 
-# ── Blacklist: Artikel die diese Keywords im Titel enthalten werden gefiltert ──
+# ── Blacklist ─────────────────────────────────────────────────────────────────
 EXCLUDE_TITLE_KEYWORDS = [
     " ii", " 2", "u23", "u21", "u19", "u17", "u16", "u15",
     "reserve", "reserv",
@@ -43,8 +44,21 @@ class NewsItem:
     snippet: str = ""
 
 
+def _truncate_words(text: str, max_words: int) -> str:
+    """Kürzt Text auf max_words Wörter, hängt '...' an wenn gekürzt."""
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    return " ".join(words[:max_words]) + "…"
+
+
+def _clean_snippet(raw: str) -> str:
+    """HTML-Tags entfernen + auf 300 Wörter kürzen."""
+    text = re.sub(r"<[^>]+>", "", raw).strip()
+    return _truncate_words(text, SNIPPET_MAX_WORDS)
+
+
 def _clean_query(text: str) -> str:
-    """Entfernt Klammern + Sonderzeichen für saubere Google News Queries."""
     text = re.sub(r"\(.*?\)", "", text)
     text = re.sub(r"[^\w\s-]", "", text)
     return text.strip()
@@ -59,23 +73,12 @@ def _google_news_url_en(query: str) -> str:
 
 
 def _unmask_google_url(url: str) -> str:
-    """
-    Google News RSS liefert kryptische Redirect-URLs wie:
-      https://news.google.com/rss/articles/CBMi...
-    Oder manchmal: https://news.google.com/articles/CAIi...
-    Wir versuchen die echte URL aus dem <source> Tag zu nehmen
-    (wird im Caller gesetzt). Fallback: URL so lassen wie sie ist,
-    aber zumindest lesbarer kürzen.
-    """
     if "news.google.com" not in url:
         return url
-    # Versuche ?url= Parameter zu extrahieren (älteres Format)
     parsed = urlparse(url)
     qs = parse_qs(parsed.query)
     if "url" in qs:
         return unquote(qs["url"][0])
-    # Neues Format: kein lesbarer Parameter – URL bleibt, aber wir kürzen
-    # den unlesbaren Token-Teil für die Anzeige (die echte URL bleibt im Link)
     return url
 
 
@@ -104,7 +107,6 @@ def _is_recent(pub: datetime | None) -> bool:
 
 
 def _is_blacklisted(title: str) -> bool:
-    """Filtert Artikel zu Frauenteams, Reserveteams, anderen Sportarten etc."""
     title_lower = title.lower()
     return any(kw in title_lower for kw in EXCLUDE_TITLE_KEYWORDS)
 
@@ -119,7 +121,7 @@ def _parse_feed(xml_text: str, source_name: str) -> list[NewsItem]:
         for item in channel.findall("item"):
             title   = (item.findtext("title") or "").strip()
             raw_url = (item.findtext("link")  or "").strip()
-            snippet = (item.findtext("description") or "").strip()[:500]
+            raw_snip = (item.findtext("description") or "").strip()
             pub     = _parse_date(item.findtext("pubDate"))
 
             if not title or not raw_url:
@@ -129,16 +131,13 @@ def _parse_feed(xml_text: str, source_name: str) -> list[NewsItem]:
             if _is_blacklisted(title):
                 continue
 
-            # Google News Quell-URL bevorzugen wenn vorhanden
+            snippet = _clean_snippet(raw_snip)
+
             source_url = ""
             source_el = item.find("source")
             if source_el is not None:
                 source_url = source_el.get("url", "")
 
-            # Echte URL bestimmen:
-            # 1) source url (direkt zur Quelle)
-            # 2) Unmask-Versuch
-            # 3) raw_url als Fallback
             if source_url and "google.com" not in source_url:
                 final_url = source_url
             else:
@@ -167,7 +166,6 @@ async def _fetch_feed(client: httpx.AsyncClient, url: str, source: str) -> list[
 
 
 async def fetch_club_news(club_name: str) -> list[NewsItem]:
-    """Fetcht News für einen Club aus RSS-Feeds + Google News (DE + EN)."""
     all_items: list[NewsItem] = []
     clean_name = _clean_query(club_name)
     keywords   = _club_keywords(club_name)
@@ -176,22 +174,18 @@ async def fetch_club_news(club_name: str) -> list[NewsItem]:
         headers={"User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1)"}
     ) as client:
 
-        # Google News DE
         for query in [clean_name, f"{clean_name} transfers", f"{clean_name} news"]:
             items = await _fetch_feed(client, _google_news_url(query), "Google News DE")
             all_items.extend(items)
 
-        # Google News EN
         for query in [clean_name, f"{clean_name} transfer"]:
             items = await _fetch_feed(client, _google_news_url_en(query), "Google News EN")
             all_items.extend(items)
 
-        # Statische RSS Feeds
         for source, url in RSS_FEEDS:
             items = await _fetch_feed(client, url, source)
             all_items.extend(items)
 
-    # Club-Keyword Filter
     filtered = [
         item for item in all_items
         if any(
@@ -208,11 +202,9 @@ async def fetch_club_news(club_name: str) -> list[NewsItem]:
 
 
 def _club_keywords(club_name: str) -> list[str]:
-    """Generiert robuste Suchbegriffe inkl. Kurzformen."""
     clean = re.sub(r"\(.*?\)", "", club_name).strip().lower()
     keywords = [clean]
 
-    # Klammerninhalt als zusätzliches Keyword (z.B. "bvb" aus "BVB 09")
     bracket = re.findall(r"\(([^)]+)\)", club_name.lower())
     for b in bracket:
         keywords.append(b.strip())

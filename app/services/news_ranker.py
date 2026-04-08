@@ -1,31 +1,31 @@
 import re
 import logging
-from dataclasses import dataclass, field
-from app.services.news_fetcher import NewsItem
+from dataclasses import dataclass
+from urllib.parse import urlparse
+from app.services.news_fetcher import NewsItem, SNIPPET_MAX_WORDS, _truncate_words
 
 logger = logging.getLogger(__name__)
 
-SIMILARITY_THRESHOLD = 0.35  # ab wann zwei Titel als "gleiche Meldung" gelten
+SIMILARITY_THRESHOLD = 0.35
 
 
 @dataclass
 class RankedNews:
-    title: str           # repräsentativer Titel (längster / meiste Quellen)
-    snippet: str         # bestes Snippet
-    sources: list[str]   # alle Quellen die diese Meldung hatten
-    urls: list[str]      # alle URLs (eine pro Quelle)
-    score: int           # Anzahl Quellen = Priorität
-    published: str = ""  # Datum des neuesten Artikels
+    title: str
+    snippet: str
+    sources: list[str]
+    urls: list[str]
+    score: int
+    published: str = ""
 
 
 # ── Hilfsfunktionen ───────────────────────────────────────────────────────────
 
 def _normalize(text: str) -> set[str]:
-    """Tokenisiert + stopword-filtert einen Titel für Vergleich."""
     stopwords = {
         "der", "die", "das", "und", "in", "im", "am", "bei", "für", "von",
         "mit", "nach", "an", "zu", "auf", "ist", "ein", "eine", "des",
-        "fc", "sc", "sv", "vfb", "the", "a", "of", "in", "at", "for",
+        "fc", "sc", "sv", "vfb", "the", "a", "of", "at", "for",
         "to", "is", "and", "with", "after", "as", "by",
     }
     tokens = re.findall(r"[a-zäöüß]{3,}", text.lower())
@@ -39,8 +39,8 @@ def _jaccard(a: set, b: set) -> float:
 
 
 def _best_snippet(snippets: list[str]) -> str:
-    """Wählt das längste nicht-leere Snippet."""
-    return max(snippets, key=len) if snippets else ""
+    """Wählt das Snippet mit den meisten Wörtern."""
+    return max(snippets, key=lambda s: len(s.split())) if snippets else ""
 
 
 def _format_date(item: "NewsItem") -> str:
@@ -50,16 +50,10 @@ def _format_date(item: "NewsItem") -> str:
 
 
 def _display_url(url: str) -> str:
-    """
-    Gibt einen lesbaren Anzeigenamen für eine URL zurück.
-    Beispiel: https://www.bild.de/sport/... → bild.de
-    """
+    """Gibt lesbaren Domain-Namen zurück: https://www.bild.de/... → bild.de"""
     try:
-        from urllib.parse import urlparse
         host = urlparse(url).netloc
-        # www. entfernen
-        host = re.sub(r"^www\.", "", host)
-        return host
+        return re.sub(r"^www\.", "", host)
     except Exception:
         return url
 
@@ -67,14 +61,9 @@ def _display_url(url: str) -> str:
 # ── Kern-Logik ────────────────────────────────────────────────────────────────
 
 def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
-    """
-    Gruppiert ähnliche Meldungen, bewertet nach Quellenanzahl
-    und gibt Top-N zurück.
-    """
     if not items:
         return []
 
-    # Duplikate via URL entfernen
     seen_urls: set[str] = set()
     unique: list[NewsItem] = []
     for item in items:
@@ -82,10 +71,8 @@ def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
             seen_urls.add(item.url)
             unique.append(item)
 
-    # Tokenisierte Titel vorberechnen
     token_sets = [_normalize(item.title) for item in unique]
 
-    # Cluster bilden
     clusters: list[list[int]] = []
     assigned = [False] * len(unique)
 
@@ -97,13 +84,11 @@ def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
         for j in range(i + 1, len(unique)):
             if assigned[j]:
                 continue
-            sim = _jaccard(token_sets[i], token_sets[j])
-            if sim >= SIMILARITY_THRESHOLD:
+            if _jaccard(token_sets[i], token_sets[j]) >= SIMILARITY_THRESHOLD:
                 cluster.append(j)
                 assigned[j] = True
         clusters.append(cluster)
 
-    # Cluster → RankedNews
     ranked: list[RankedNews] = []
     for cluster in clusters:
         cluster_items = [unique[i] for i in cluster]
@@ -115,10 +100,9 @@ def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
             if item.source not in source_map:
                 source_map[item.source] = item.url
 
-        sources = list(source_map.keys())
-        urls    = list(source_map.values())
-
-        snippet = _best_snippet([item.snippet for item in cluster_items if item.snippet])
+        # Bestes Snippet: meiste Wörter, nochmal auf 300 Wörter begrenzen
+        snippet_raw = _best_snippet([item.snippet for item in cluster_items if item.snippet])
+        snippet = _truncate_words(snippet_raw, SNIPPET_MAX_WORDS)
 
         dated = [item for item in cluster_items if item.published]
         pub_str = _format_date(max(dated, key=lambda x: x.published)) if dated else ""
@@ -126,9 +110,9 @@ def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
         ranked.append(RankedNews(
             title=best_title,
             snippet=snippet,
-            sources=sources,
-            urls=urls,
-            score=len(sources),
+            sources=list(source_map.keys()),
+            urls=list(source_map.values()),
+            score=len(source_map),
             published=pub_str,
         ))
 
@@ -153,17 +137,12 @@ def format_news_output(club_name: str, ranked: list[RankedNews]) -> str:
 
         lines.append(f"\n{medal} {source_count} *{news.title}*")
 
-        # Snippet – HTML-Tags entfernen, max 500 Zeichen
         if news.snippet:
-            snippet = re.sub(r"<[^>]+>", "", news.snippet)[:500].strip()
-            if len(re.sub(r"<[^>]+>", "", news.snippet)) > 500:
-                snippet += "…"
-            lines.append(f"_{snippet}_")
+            lines.append(f"_{news.snippet}_")
 
         if news.published:
             lines.append(f"🕐 {news.published}")
 
-        # Quellen mit lesbaren Domain-Namen statt kryptischer URLs
         source_refs = " · ".join(
             f"[{_display_url(url)}]({url})"
             for url in news.urls

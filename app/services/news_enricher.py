@@ -7,27 +7,28 @@ logger = logging.getLogger(__name__)
 
 TAVILY_EXTRACT_URL = "https://api.tavily.com/extract"
 
-SUMMARIZE_PROMPT = """Du bist ein Sportjournalist. Du bekommst den Rohtext eines Fußball-Artikels.
+SUMMARIZE_PROMPT = """Du bist ein Sportjournalist. Du bekommst den Rohtext eines Fußball-Artikels über {club}.
 Erstelle daraus:
 1. Eine schlagkräftige deutsche Überschrift (max 10 Wörter, kein Clickbait)
-2. Ein strukturiertes Snippet auf Deutsch (120-200 Wörter) das die wichtigsten Fakten enthält
+2. Ein prägnantes Snippet auf Deutsch (max 50 Wörter) mit den wichtigsten Fakten
 
 Antworte NUR in diesem Format:
 HEADLINE: <überschrift>
 SNIPPET: <snippet>
 
-Kein weiterer Text."""
+Wenn der Artikel nichts mit {club} zu tun hat, antworte exakt mit:
+IRRELEVANT"""
 
 
 async def _resolve_redirect(url: str) -> str:
-    """Löst Google-News-Redirects zur echten Artikel-URL auf."""
+    """Löst Google-News-Redirects zur echten Artikel-URL auf via GET."""
     try:
         async with httpx.AsyncClient(
-            timeout=8.0,
+            timeout=10.0,
             follow_redirects=True,
-            headers={"User-Agent": "Mozilla/5.0"}
+            headers={"User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1)"}
         ) as client:
-            r = await client.head(url)
+            r = await client.get(url)
             return str(r.url)
     except Exception as e:
         logger.warning(f"Redirect-Auflösung fehlgeschlagen ({url[:60]}): {e}")
@@ -43,26 +44,32 @@ async def _tavily_extract(url: str) -> str | None:
                 json={"urls": [url], "api_key": TAVILY_API_KEY},
             )
             r.raise_for_status()
-            data = r.json()
+            data    = r.json()
             results = data.get("results", [])
             if not results:
                 return None
             raw = results[0].get("raw_content", "")
-            # Ersten 2000 Zeichen reichen für LLM-Zusammenfassung
             return raw[:2000].strip() if raw else None
     except Exception as e:
         logger.warning(f"Tavily Extract fehlgeschlagen ({url[:60]}): {e}")
         return None
 
 
-async def _llm_summarize(raw_text: str, fallback_title: str) -> tuple[str, str]:
-    """Generiert deutsche Headline + Snippet via LLM."""
+async def _llm_summarize(raw_text: str, fallback_title: str, club: str) -> tuple[str, str] | None:
+    """
+    Generiert deutsche Headline + Snippet via LLM.
+    Gibt None zurück wenn Artikel nicht club-relevant ist.
+    """
     try:
+        prompt   = SUMMARIZE_PROMPT.replace("{club}", club)
         response = await ask_llm(
             f"Artikel-Text:\n\n{raw_text}",
             history=[],
-            system_prompt=SUMMARIZE_PROMPT,
+            system_prompt=prompt,
         )
+        if response.strip().upper() == "IRRELEVANT":
+            return None
+
         headline = fallback_title
         snippet  = ""
         for line in response.splitlines():
@@ -76,23 +83,21 @@ async def _llm_summarize(raw_text: str, fallback_title: str) -> tuple[str, str]:
         return fallback_title, ""
 
 
-async def enrich_news_item(url: str, fallback_title: str) -> dict:
+async def enrich_news_item(url: str, fallback_title: str, club: str) -> dict | None:
     """
-    Vollständige Anreicherung eines News-Items:
-    1. Redirect auflösen → echte URL
-    2. Tavily Extract → Artikel-Text
-    3. LLM → deutsche Headline + Snippet
-
-    Gibt dict zurück: {url, headline, snippet}
+    Vollständige Anreicherung eines News-Items.
+    Gibt None zurück wenn Artikel nicht club-relevant ist.
     """
     real_url = await _resolve_redirect(url)
     raw_text = await _tavily_extract(real_url)
 
     if raw_text:
-        headline, snippet = await _llm_summarize(raw_text, fallback_title)
+        result = await _llm_summarize(raw_text, fallback_title, club)
+        if result is None:
+            logger.info(f"Artikel als irrelevant markiert: {real_url[:60]}")
+            return None
+        headline, snippet = result
     else:
-        # Fallback: nur Redirect auflösen, Originaltitel behalten
-        logger.info(f"Kein Content via Tavily — Fallback für {real_url[:60]}")
         headline = fallback_title
         snippet  = ""
 

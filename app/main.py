@@ -4,7 +4,8 @@ from app.config import validate_config, TELEGRAM_BOT_TOKEN
 from app.utils.logging_setup import setup_logging
 from app.bot.handlers import (
     start_handler, text_handler, voice_handler,
-    error_handler, reset_handler, memory_handler, forget_handler
+    error_handler, reset_handler, memory_handler, forget_handler,
+    news_handler
 )
 
 
@@ -20,6 +21,7 @@ def main():
     app.add_handler(CommandHandler("reset", reset_handler))
     app.add_handler(CommandHandler("memory", memory_handler))
     app.add_handler(CommandHandler("forget", forget_handler))
+    app.add_handler(CommandHandler("news", news_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_handler(MessageHandler(filters.VOICE, voice_handler))
     app.add_error_handler(error_handler)

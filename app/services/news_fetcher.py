@@ -1,8 +1,10 @@
+import re
 import httpx
 import logging
 from datetime import datetime, timezone, timedelta
 from xml.etree import ElementTree as ET
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from urllib.parse import quote_plus
 
 logger = logging.getLogger(__name__)
 
@@ -18,17 +20,29 @@ class NewsItem:
     snippet: str = ""
 
 
+# Funktionierende RSS Feeds (getestet)
 RSS_FEEDS = [
-    ("kicker.de",       "https://www.kicker.de/news/fussball/bundesliga/rss/bundesliga.rss"),
-    ("sport1.de",       "https://www.sport1.de/news.rss"),
-    ("transfermarkt.de","https://www.transfermarkt.de/rss/news"),
-    ("skysports.com",   "https://www.skysports.com/rss/12040"),
+    ("transfermarkt.de", "https://www.transfermarkt.de/rss/news"),
+    ("skysports.com",    "https://www.skysports.com/rss/12040"),
+    ("BBC Sport",        "https://feeds.bbci.co.uk/sport/football/rss.xml"),
+    ("ESPN FC",          "https://www.espn.com/espn/rss/soccer/news"),
+    ("90min.com",        "https://www.90min.com/posts.rss"),
 ]
 
 
+def _clean_query(text: str) -> str:
+    """Entfernt Klammern, Sonderzeichen für saubere Google News Queries."""
+    text = re.sub(r"\(.*?\)", "", text)   # z.B. "(BVB 09)" entfernen
+    text = re.sub(r"[^\w\s-]", "", text)  # Sonderzeichen entfernen
+    return text.strip()
+
+
 def _google_news_url(query: str) -> str:
-    q = query.replace(" ", "+")
-    return f"https://news.google.com/rss/search?q={q}&hl=de&gl=DE&ceid=DE:de"
+    return f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=de&gl=DE&ceid=DE:de"
+
+
+def _google_news_url_en(query: str) -> str:
+    return f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=en&gl=US&ceid=US:en"
 
 
 def _parse_date(date_str: str | None) -> datetime | None:
@@ -48,7 +62,7 @@ def _parse_date(date_str: str | None) -> datetime | None:
 
 def _is_recent(pub: datetime | None) -> bool:
     if pub is None:
-        return True  # kein Datum → nicht ausfiltern
+        return True
     cutoff = datetime.now(timezone.utc) - timedelta(hours=MAX_AGE_HOURS)
     if pub.tzinfo is None:
         pub = pub.replace(tzinfo=timezone.utc)
@@ -96,62 +110,89 @@ async def _fetch_feed(client: httpx.AsyncClient, url: str, source: str) -> list[
 
 
 async def fetch_club_news(club_name: str) -> list[NewsItem]:
-    """Fetcht News für einen Club aus RSS-Feeds + Google News."""
+    """Fetcht News für einen Club aus RSS-Feeds + Google News (DE + EN)."""
     all_items: list[NewsItem] = []
+    clean_name = _clean_query(club_name)
+    keywords   = _club_keywords(club_name)
 
-    async with httpx.AsyncClient(headers={"User-Agent": "Mozilla/5.0"}) as client:
-        # Google News (club-spezifisch, DE + EN)
-        for query in [club_name, f"{club_name} transfers", f"{club_name} news"]:
-            items = await _fetch_feed(client, _google_news_url(query), "Google News")
+    async with httpx.AsyncClient(
+        headers={"User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1)"}
+    ) as client:
+
+        # Google News DE
+        for query in [clean_name, f"{clean_name} transfers", f"{clean_name} news"]:
+            items = await _fetch_feed(client, _google_news_url(query), "Google News DE")
             all_items.extend(items)
 
-        # Statische RSS Feeds (allgemein, werden später per Club gefiltert)
+        # Google News EN (internationale Transfers etc.)
+        for query in [clean_name, f"{clean_name} transfer"]:
+            items = await _fetch_feed(client, _google_news_url_en(query), "Google News EN")
+            all_items.extend(items)
+
+        # Statische RSS Feeds
         for source, url in RSS_FEEDS:
             items = await _fetch_feed(client, url, source)
             all_items.extend(items)
 
-    # Nur Artikel die den Club-Namen im Titel oder Snippet enthalten
-    club_lower = club_name.lower()
-    # Auch gängige Kurzformen berücksichtigen (z.B. "Bayern" für "FC Bayern München")
-    keywords = _club_keywords(club_name)
+    # Filter: nur Artikel die mindestens ein Keyword im Titel oder Snippet haben
     filtered = [
         item for item in all_items
-        if any(kw in item.title.lower() or kw in item.snippet.lower() for kw in keywords)
+        if any(
+            kw in item.title.lower() or kw in item.snippet.lower()
+            for kw in keywords
+        )
     ]
 
-    logger.info(f"fetch_club_news({club_name}): {len(filtered)} Artikel gefunden")
+    logger.info(f"fetch_club_news({club_name}): {len(filtered)} Artikel gefunden (von {len(all_items)} gesamt)")
     return filtered
 
 
 def _club_keywords(club_name: str) -> list[str]:
-    """Generiert Suchbegriffe für einen Club (Kurzformen etc.)."""
-    name = club_name.lower()
-    keywords = [name]
-    # Gängige Muster
-    replacements = {
-        "fc bayern münchen": ["bayern", "fcb", "fc bayern"],
-        "borussia dortmund": ["dortmund", "bvb"],
-        "rb leipzig":        ["leipzig", "rbl"],
-        "bayer leverkusen":  ["leverkusen"],
-        "borussia mönchengladbach": ["gladbach", "bmg"],
-        "vfb stuttgart":     ["stuttgart", "vfb"],
-        "eintracht frankfurt": ["frankfurt", "sge"],
-        "sc freiburg":       ["freiburg"],
-        "fc schalke 04":     ["schalke", "s04"],
-        "hamburger sv":      ["hsv", "hamburg"],
-        "real madrid":       ["real madrid", "madrid"],
-        "fc barcelona":      ["barcelona", "barça", "barca"],
-        "manchester city":   ["man city", "city"],
-        "manchester united":  ["man united", "united", "man utd"],
-        "liverpool fc":      ["liverpool"],
-        "chelsea fc":        ["chelsea"],
-        "arsenal fc":        ["arsenal"],
-        "paris saint-germain": ["psg", "paris"],
-        "juventus":          ["juventus", "juve"],
-        "inter milan":       ["inter", "inter mailand"],
-        "ac milan":          ["milan", "ac milan"],
+    """Generiert robuste Suchbegriffe inkl. Kurzformen."""
+    # Klammerzusatz entfernen: "Borussia Dortmund (BVB 09)" → "borussia dortmund"
+    clean = re.sub(r"\(.*?\)", "", club_name).strip().lower()
+    keywords = [clean]
+
+    # Klammerninhalt als zusätzliches Keyword
+    bracket = re.findall(r"\(([^)]+)\)", club_name.lower())
+    for b in bracket:
+        # "bvb 09" → ["bvb 09", "bvb"]
+        keywords.append(b.strip())
+        keywords.append(b.split()[0].strip())  # erstes Wort aus Klammer
+
+    aliases = {
+        "fc bayern münchen":         ["bayern", "fcb", "fc bayern", "bavaria"],
+        "borussia dortmund":          ["dortmund", "bvb"],
+        "rb leipzig":                 ["leipzig", "rbl", "red bull leipzig"],
+        "bayer leverkusen":           ["leverkusen", "bayer"],
+        "borussia mönchengladbach":  ["gladbach", "bmg", "mönchengladbach"],
+        "vfb stuttgart":              ["stuttgart", "vfb"],
+        "eintracht frankfurt":        ["frankfurt", "sge"],
+        "sc freiburg":                ["freiburg"],
+        "fc schalke 04":              ["schalke", "s04"],
+        "hamburger sv":               ["hsv", "hamburg"],
+        "werder bremen":              ["werder", "bremen"],
+        "1. fc köln":                ["köln", "cologne", "koeln"],
+        "hertha bsc":                 ["hertha", "bsc"],
+        "real madrid":                ["real madrid", "madrid", "los blancos"],
+        "fc barcelona":               ["barcelona", "barça", "barca", "blaugrana"],
+        "manchester city":            ["man city", "city", "mcfc"],
+        "manchester united":          ["man united", "united", "man utd", "mufc"],
+        "liverpool fc":               ["liverpool", "reds", "lfc"],
+        "chelsea fc":                 ["chelsea", "blues", "cfc"],
+        "arsenal fc":                 ["arsenal", "gunners"],
+        "tottenham hotspur":          ["tottenham", "spurs", "thfc"],
+        "paris saint-germain":        ["psg", "paris", "saint-germain"],
+        "juventus":                   ["juventus", "juve", "bianconeri"],
+        "inter milan":                ["inter", "inter mailand", "internazionale"],
+        "ac milan":                   ["milan", "ac milan", "rossoneri"],
+        "atletico madrid":            ["atletico", "atlético"],
+        "as roma":                    ["roma", "as roma"],
+        "ssc napoli":                 ["napoli"],
     }
-    for key, aliases in replacements.items():
-        if key in name or name in key:
-            keywords.extend(aliases)
+
+    for key, alias_list in aliases.items():
+        if key in clean or clean in key:
+            keywords.extend(alias_list)
+
     return list(set(keywords))

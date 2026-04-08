@@ -1,4 +1,3 @@
-
 import re
 import httpx
 import logging
@@ -24,6 +23,51 @@ RSS_FEEDS = [
     ("bild.de",      "http://www.bild.de/rss-feeds/rss-16725492,feed=sport.bild.html"),
     ("skysports.com","https://www.skysports.com/rss/12040"),
 ]
+
+CLUB_FEEDS: dict[str, list[str]] = {
+    "borussia dortmund": [
+        "https://www.transfermarkt.de/borussia-dortmund/rss/verein/16",
+    ],
+    "dynamo dresden": [
+        "https://www.dynamo-dresden.de/news/rss.xml",
+        "https://www.transfermarkt.de/dynamo-dresden/rss/verein/377",
+        "https://www.saechsische.de/sport/rss.xml",
+        "https://www.mdr.de/sport/index-rss.xml",
+    ],
+    "fc bayern münchen": [
+        "https://www.transfermarkt.de/fc-bayern-munchen/rss/verein/27",
+    ],
+    "rb leipzig": [
+        "https://www.transfermarkt.de/rb-leipzig/rss/verein/23826",
+    ],
+    "bayer leverkusen": [
+        "https://www.transfermarkt.de/bayer-04-leverkusen/rss/verein/15",
+    ],
+    "eintracht frankfurt": [
+        "https://www.transfermarkt.de/eintracht-frankfurt/rss/verein/24",
+    ],
+    "vfb stuttgart": [
+        "https://www.transfermarkt.de/vfb-stuttgart/rss/verein/79",
+    ],
+    "sc freiburg": [
+        "https://www.transfermarkt.de/sport-club-freiburg/rss/verein/17",
+    ],
+    "real madrid": [
+        "https://www.transfermarkt.de/real-madrid/rss/verein/418",
+    ],
+    "fc barcelona": [
+        "https://www.transfermarkt.de/fc-barcelona/rss/verein/131",
+    ],
+    "manchester city": [
+        "https://www.transfermarkt.de/manchester-city/rss/verein/281",
+    ],
+    "manchester united": [
+        "https://www.transfermarkt.de/manchester-united/rss/verein/985",
+    ],
+    "liverpool fc": [
+        "https://www.transfermarkt.de/fc-liverpool/rss/verein/31",
+    ],
+}
 
 
 @dataclass
@@ -54,6 +98,14 @@ def _is_recent(pub: datetime | None) -> bool:
 def _is_excluded(text: str) -> bool:
     low = text.lower()
     return any(kw in low for kw in EXCLUDE_KEYWORDS)
+
+
+def _is_homepage_url(url: str) -> bool:
+    try:
+        path = url.rstrip("/").split("/", 3)
+        return len(path) < 4 or not path[3]
+    except Exception:
+        return False
 
 
 def _parse_date(date_str: str | None) -> datetime | None:
@@ -102,6 +154,7 @@ def _club_keywords(club_name: str) -> list[str]:
         "juventus":          ["juventus", "juve"],
         "inter milan":       ["inter", "inter mailand"],
         "ac milan":          ["milan", "ac milan"],
+        "dynamo dresden":    ["dynamo", "sgd"],
     }
     for key, aliases in replacements.items():
         if key in name_clean or name_clean in key:
@@ -113,6 +166,14 @@ def _club_keywords(club_name: str) -> list[str]:
         keywords.append(short)
 
     return list(set(keywords))
+
+
+def _get_club_feeds(club_name: str) -> list[str]:
+    name_clean = re.sub(r"\(.*?\)", "", club_name).lower().strip()
+    for key, feeds in CLUB_FEEDS.items():
+        if key in name_clean or name_clean in key:
+            return feeds
+    return []
 
 
 def _gnews_from() -> str:
@@ -140,19 +201,18 @@ async def _fetch_gnews(client: httpx.AsyncClient, club_name: str) -> list[NewsIt
             for art in data.get("articles", []):
                 title   = art.get("title", "").strip()
                 art_url = art.get("url", "").strip()
-                logger.info(f"GNews URL: {art_url}")
                 snippet = art.get("description", "").strip()
                 source  = art.get("source", {}).get("name", "GNews")
                 pub     = _parse_date(art.get("publishedAt", ""))
 
                 if not title or not art_url:
-                    if _is_homepage_url(art_url):
-                        logger.debug(f"Homepage-URL übersprungen: {art_url}")
-                        continue
                     continue
                 if _is_excluded(title + " " + snippet):
                     continue
+                if _is_homepage_url(art_url):
+                    continue
 
+                logger.info(f"GNews URL: {art_url}")
                 items.append(NewsItem(
                     title=title,
                     url=art_url,
@@ -183,41 +243,12 @@ def _parse_feed(xml_text: str, source_name: str) -> list[NewsItem]:
                 continue
             if _is_excluded(title + " " + snippet):
                 continue
-
-            def _parse_feed(xml_text: str, source_name: str) -> list[NewsItem]:
-                items = []
-                try:
-                    root = ET.fromstring(xml_text)
-                    channel = root.find("channel") or root
-                    for item in channel.findall("item"):
-                        title = (item.findtext("title") or "").strip()
-                        url = (item.findtext("link") or "").strip()
-                        snippet = (item.findtext("description") or "").strip()
-                        pub = _parse_date(item.findtext("pubDate"))
-
-                        if not title or not url:
-                            continue
-                        if not _is_recent(pub):
-                            continue
-                        if _is_excluded(title + " " + snippet):
-                            continue
-                        if _is_homepage_url(url):
-                            continue
-
-                        items.append(NewsItem(
-                            title=title,
-                            url=url,  # direkt den Artikel-Link nehmen
-                            source=source_name,
-                            published=pub,
-                            snippet=_truncate_words(snippet),
-                        ))
-                except ET.ParseError as e:
-                    logger.warning(f"RSS Parse Fehler ({source_name}): {e}")
-                return items
+            if _is_homepage_url(url):
+                continue
 
             items.append(NewsItem(
                 title=title,
-                url=real_url,
+                url=url,
                 source=source_name,
                 published=pub,
                 snippet=_truncate_words(snippet),
@@ -247,24 +278,37 @@ async def fetch_club_news(club_name: str) -> list[NewsItem]:
 
     async with httpx.AsyncClient(headers={"User-Agent": "Mozilla/5.0"}) as client:
 
+        # Layer 1: GNews API
         gnews_items = await _fetch_gnews(client, club_name)
         all_items.extend(gnews_items)
         logger.info(f"GNews: {len(gnews_items)} Artikel fuer {club_name}")
 
+        # Layer 2: Google News RSS
         name_clean = re.sub(r"\(.*?\)", "", club_name).strip()
         for query in [name_clean, f"{name_clean} Bundesliga", f"{name_clean} transfer"]:
             items = await _fetch_rss(client, _google_news_url(query), "Google News")
             all_items.extend(items)
 
+        # Layer 3: Statische RSS Feeds
         for source, url in RSS_FEEDS:
             items = await _fetch_rss(client, url, source)
             all_items.extend(items)
 
+        # Layer 4: Club-spezifische Feeds
+        club_specific = _get_club_feeds(club_name)
+        for url in club_specific:
+            domain = url.split("/")[2].replace("www.", "")
+            items  = await _fetch_rss(client, url, domain)
+            all_items.extend(items)
+            logger.info(f"Club-Feed ({domain}): {len(items)} Artikel")
+
+    # Club-Keyword Filter
     filtered = [
         item for item in all_items
         if any(kw in item.title.lower() or kw in item.snippet.lower() for kw in keywords)
     ]
 
+    # URL-Deduplizierung
     seen: set[str] = set()
     unique = []
     for item in filtered:
@@ -274,11 +318,3 @@ async def fetch_club_news(club_name: str) -> list[NewsItem]:
 
     logger.info(f"fetch_club_news({club_name}): {len(unique)} Artikel (von {len(all_items)} gesamt)")
     return unique
-
-def _is_homepage_url(url: str) -> bool:
-    """Gibt True zurück wenn URL nur auf eine Homepage zeigt (kein Artikel-Pfad)."""
-    try:
-        path = url.rstrip("/").split("/", 3)
-        return len(path) < 4 or not path[3]
-    except Exception:
-        return False

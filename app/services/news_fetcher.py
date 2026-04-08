@@ -10,6 +10,29 @@ logger = logging.getLogger(__name__)
 
 MAX_AGE_HOURS = 48
 
+# ── Blacklist: Artikel die diese Keywords im Titel enthalten werden gefiltert ──
+EXCLUDE_TITLE_KEYWORDS = [
+    " ii", " 2", "u23", "u21", "u19", "u17", "u16", "u15",
+    "reserve", "reserv",
+    "frauen", "women", "female", "damen",
+    "handball", "basketball", "esport", "fantasy",
+    "youth", "jugend", "nachwuchs",
+]
+
+# ── RSS Feeds ─────────────────────────────────────────────────────────────────
+RSS_FEEDS = [
+    ("transfermarkt.de", "https://www.transfermarkt.de/rss/news"),
+    ("skysports.com",    "https://www.skysports.com/rss/12040"),
+    ("BBC Sport",        "https://feeds.bbci.co.uk/sport/football/rss.xml"),
+    ("ESPN FC",          "https://www.espn.com/espn/rss/soccer/news"),
+    ("90min.com",        "https://www.90min.com/posts.rss"),
+    ("Goal.com DE",      "https://www.goal.com/feeds/de/news"),
+    ("Eurosport DE",     "https://www.eurosport.de/fussball/rss.xml"),
+    ("UEFA.com",         "https://www.uefa.com/rssfeed/news"),
+    ("DFB.de",           "https://www.dfb.de/news/rss-feed/"),
+    ("Bild.de Sport",    "https://www.bild.de/rss/sport/sport-16513140,sort=1,view=rss2.bild.xml"),
+]
+
 
 @dataclass
 class NewsItem:
@@ -20,20 +43,10 @@ class NewsItem:
     snippet: str = ""
 
 
-# Funktionierende RSS Feeds (getestet)
-RSS_FEEDS = [
-    ("transfermarkt.de", "https://www.transfermarkt.de/rss/news"),
-    ("skysports.com",    "https://www.skysports.com/rss/12040"),
-    ("BBC Sport",        "https://feeds.bbci.co.uk/sport/football/rss.xml"),
-    ("ESPN FC",          "https://www.espn.com/espn/rss/soccer/news"),
-    ("90min.com",        "https://www.90min.com/posts.rss"),
-]
-
-
 def _clean_query(text: str) -> str:
-    """Entfernt Klammern, Sonderzeichen für saubere Google News Queries."""
-    text = re.sub(r"\(.*?\)", "", text)   # z.B. "(BVB 09)" entfernen
-    text = re.sub(r"[^\w\s-]", "", text)  # Sonderzeichen entfernen
+    """Entfernt Klammern + Sonderzeichen für saubere Google News Queries."""
+    text = re.sub(r"\(.*?\)", "", text)
+    text = re.sub(r"[^\w\s-]", "", text)
     return text.strip()
 
 
@@ -69,6 +82,12 @@ def _is_recent(pub: datetime | None) -> bool:
     return pub >= cutoff
 
 
+def _is_blacklisted(title: str) -> bool:
+    """Filtert Artikel zu Frauenteams, Reserveteams, anderen Sportarten etc."""
+    title_lower = title.lower()
+    return any(kw in title_lower for kw in EXCLUDE_TITLE_KEYWORDS)
+
+
 def _parse_feed(xml_text: str, source_name: str) -> list[NewsItem]:
     items = []
     try:
@@ -85,6 +104,8 @@ def _parse_feed(xml_text: str, source_name: str) -> list[NewsItem]:
             if not title or not url:
                 continue
             if not _is_recent(pub):
+                continue
+            if _is_blacklisted(title):
                 continue
 
             items.append(NewsItem(
@@ -124,7 +145,7 @@ async def fetch_club_news(club_name: str) -> list[NewsItem]:
             items = await _fetch_feed(client, _google_news_url(query), "Google News DE")
             all_items.extend(items)
 
-        # Google News EN (internationale Transfers etc.)
+        # Google News EN
         for query in [clean_name, f"{clean_name} transfer"]:
             items = await _fetch_feed(client, _google_news_url_en(query), "Google News EN")
             all_items.extend(items)
@@ -134,7 +155,7 @@ async def fetch_club_news(club_name: str) -> list[NewsItem]:
             items = await _fetch_feed(client, url, source)
             all_items.extend(items)
 
-    # Filter: nur Artikel die mindestens ein Keyword im Titel oder Snippet haben
+    # Club-Keyword Filter
     filtered = [
         item for item in all_items
         if any(
@@ -143,52 +164,53 @@ async def fetch_club_news(club_name: str) -> list[NewsItem]:
         )
     ]
 
-    logger.info(f"fetch_club_news({club_name}): {len(filtered)} Artikel gefunden (von {len(all_items)} gesamt)")
+    logger.info(
+        f"fetch_club_news({club_name}): {len(filtered)} Artikel "
+        f"(von {len(all_items)} gesamt, nach Blacklist + Keyword-Filter)"
+    )
     return filtered
 
 
 def _club_keywords(club_name: str) -> list[str]:
     """Generiert robuste Suchbegriffe inkl. Kurzformen."""
-    # Klammerzusatz entfernen: "Borussia Dortmund (BVB 09)" → "borussia dortmund"
     clean = re.sub(r"\(.*?\)", "", club_name).strip().lower()
     keywords = [clean]
 
-    # Klammerninhalt als zusätzliches Keyword
+    # Klammerninhalt als zusätzliches Keyword (z.B. "bvb" aus "BVB 09")
     bracket = re.findall(r"\(([^)]+)\)", club_name.lower())
     for b in bracket:
-        # "bvb 09" → ["bvb 09", "bvb"]
         keywords.append(b.strip())
-        keywords.append(b.split()[0].strip())  # erstes Wort aus Klammer
+        keywords.append(b.split()[0].strip())
 
     aliases = {
-        "fc bayern münchen":         ["bayern", "fcb", "fc bayern", "bavaria"],
-        "borussia dortmund":          ["dortmund", "bvb"],
-        "rb leipzig":                 ["leipzig", "rbl", "red bull leipzig"],
-        "bayer leverkusen":           ["leverkusen", "bayer"],
-        "borussia mönchengladbach":  ["gladbach", "bmg", "mönchengladbach"],
-        "vfb stuttgart":              ["stuttgart", "vfb"],
-        "eintracht frankfurt":        ["frankfurt", "sge"],
-        "sc freiburg":                ["freiburg"],
-        "fc schalke 04":              ["schalke", "s04"],
-        "hamburger sv":               ["hsv", "hamburg"],
-        "werder bremen":              ["werder", "bremen"],
-        "1. fc köln":                ["köln", "cologne", "koeln"],
-        "hertha bsc":                 ["hertha", "bsc"],
-        "real madrid":                ["real madrid", "madrid", "los blancos"],
-        "fc barcelona":               ["barcelona", "barça", "barca", "blaugrana"],
-        "manchester city":            ["man city", "city", "mcfc"],
-        "manchester united":          ["man united", "united", "man utd", "mufc"],
-        "liverpool fc":               ["liverpool", "reds", "lfc"],
-        "chelsea fc":                 ["chelsea", "blues", "cfc"],
-        "arsenal fc":                 ["arsenal", "gunners"],
-        "tottenham hotspur":          ["tottenham", "spurs", "thfc"],
-        "paris saint-germain":        ["psg", "paris", "saint-germain"],
-        "juventus":                   ["juventus", "juve", "bianconeri"],
-        "inter milan":                ["inter", "inter mailand", "internazionale"],
-        "ac milan":                   ["milan", "ac milan", "rossoneri"],
-        "atletico madrid":            ["atletico", "atlético"],
-        "as roma":                    ["roma", "as roma"],
-        "ssc napoli":                 ["napoli"],
+        "fc bayern münchen":        ["bayern", "fcb", "fc bayern", "bavaria"],
+        "borussia dortmund":         ["dortmund", "bvb"],
+        "rb leipzig":                ["leipzig", "rbl", "red bull leipzig"],
+        "bayer leverkusen":          ["leverkusen", "bayer"],
+        "borussia mönchengladbach": ["gladbach", "bmg", "mönchengladbach"],
+        "vfb stuttgart":             ["stuttgart", "vfb"],
+        "eintracht frankfurt":       ["frankfurt", "sge"],
+        "sc freiburg":               ["freiburg"],
+        "fc schalke 04":             ["schalke", "s04"],
+        "hamburger sv":              ["hsv", "hamburg"],
+        "werder bremen":             ["werder", "bremen"],
+        "1. fc köln":               ["köln", "cologne", "koeln"],
+        "hertha bsc":                ["hertha", "bsc"],
+        "real madrid":               ["real madrid", "madrid", "los blancos"],
+        "fc barcelona":              ["barcelona", "barça", "barca", "blaugrana"],
+        "manchester city":           ["man city", "city", "mcfc"],
+        "manchester united":         ["man united", "united", "man utd", "mufc"],
+        "liverpool fc":              ["liverpool", "reds", "lfc"],
+        "chelsea fc":                ["chelsea", "blues", "cfc"],
+        "arsenal fc":                ["arsenal", "gunners"],
+        "tottenham hotspur":         ["tottenham", "spurs", "thfc"],
+        "paris saint-germain":       ["psg", "paris", "saint-germain"],
+        "juventus":                  ["juventus", "juve", "bianconeri"],
+        "inter milan":               ["inter", "inter mailand", "internazionale"],
+        "ac milan":                  ["milan", "ac milan", "rossoneri"],
+        "atletico madrid":           ["atletico", "atlético"],
+        "as roma":                   ["roma", "as roma"],
+        "ssc napoli":                ["napoli"],
     }
 
     for key, alias_list in aliases.items():

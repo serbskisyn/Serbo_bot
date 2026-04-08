@@ -1,3 +1,5 @@
+cat > app/services/news_fetcher.py << 'EOF'
+import re
 import httpx
 import logging
 from datetime import datetime, timezone, timedelta
@@ -18,12 +20,10 @@ EXCLUDE_KEYWORDS = [
 ]
 
 RSS_FEEDS = [
-    ("goal.com",      "https://www.goal.com/feeds/en/news"),
-    ("eurosport.de",  "https://www.eurosport.de/rss.xml"),
-    ("uefa.com",      "https://www.uefa.com/rssfeed/news/"),
-    ("dfb.de",        "https://www.dfb.de/news/rss-feed/"),
-    ("skysports.com", "https://www.skysports.com/rss/12040"),
-    ("bild.de",       "https://www.bild.de/feed/sport-rss.xml"),
+    ("sportbild.de", "http://sportbild.bild.de/rss/vw-fussball/vw-fussball-45036878,sort=1,view=rss2.sport.xml"),
+    ("bild.de",      "http://www.bild.de/rss-feeds/rss-16725492,feed=sport.bild.html"),
+    ("skysports.com","https://www.skysports.com/rss/12040"),
+    ("eyefootball",  "https://www.eyefootball.com/football-news.rss"),
 ]
 
 
@@ -40,7 +40,7 @@ def _truncate_words(text: str, max_words: int = SNIPPET_MAX_WORDS) -> str:
     words = text.split()
     if len(words) <= max_words:
         return text
-    return " ".join(words[:max_words]) + "…"
+    return " ".join(words[:max_words]) + "..."
 
 
 def _is_recent(pub: datetime | None) -> bool:
@@ -75,8 +75,6 @@ def _parse_date(date_str: str | None) -> datetime | None:
 
 def _club_keywords(club_name: str) -> list[str]:
     name = club_name.lower()
-    # Klammern entfernen z.B. "Borussia Dortmund (BVB 09)" → "borussia dortmund"
-    import re
     name_clean = re.sub(r"\(.*?\)", "", name).strip()
     keywords = [name_clean]
 
@@ -92,7 +90,7 @@ def _club_keywords(club_name: str) -> list[str]:
         "fc schalke 04":     ["schalke", "s04"],
         "hamburger sv":      ["hsv", "hamburg"],
         "real madrid":       ["real madrid", "madrid"],
-        "fc barcelona":      ["barcelona", "barça", "barca"],
+        "fc barcelona":      ["barcelona", "barca"],
         "manchester city":   ["man city", "city"],
         "manchester united": ["man united", "united", "man utd"],
         "liverpool fc":      ["liverpool"],
@@ -107,21 +105,20 @@ def _club_keywords(club_name: str) -> list[str]:
         if key in name_clean or name_clean in key:
             keywords.extend(aliases)
 
-    # Klammer-Inhalt als zusätzliches Keyword (z.B. "bvb 09" → "bvb")
-    import re as _re
-    bracket = _re.search(r"\(([^)]+)\)", club_name.lower())
+    bracket = re.search(r"\(([^)]+)\)", club_name.lower())
     if bracket:
-        short = bracket.group(1).split()[0]  # "bvb" aus "bvb 09"
+        short = bracket.group(1).split()[0]
         keywords.append(short)
 
     return list(set(keywords))
 
 
-# ── GNews API ─────────────────────────────────────────────────────────────────
+def _gnews_from() -> str:
+    dt = datetime.now(timezone.utc) - timedelta(hours=MAX_AGE_HOURS)
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
 
 async def _fetch_gnews(client: httpx.AsyncClient, club_name: str) -> list[NewsItem]:
-    """Fetcht Club-News direkt via GNews API inkl. Snippet."""
-    import re
     name_clean = re.sub(r"\(.*?\)", "", club_name).strip()
     items = []
 
@@ -143,8 +140,7 @@ async def _fetch_gnews(client: httpx.AsyncClient, club_name: str) -> list[NewsIt
                 art_url = art.get("url", "").strip()
                 snippet = art.get("description", "").strip()
                 source  = art.get("source", {}).get("name", "GNews")
-                pub_str = art.get("publishedAt", "")
-                pub     = _parse_date(pub_str)
+                pub     = _parse_date(art.get("publishedAt", ""))
 
                 if not title or not art_url:
                     continue
@@ -164,14 +160,6 @@ async def _fetch_gnews(client: httpx.AsyncClient, club_name: str) -> list[NewsIt
     return items
 
 
-def _gnews_from() -> str:
-    """ISO8601 Timestamp für 48h zurück."""
-    dt = datetime.now(timezone.utc) - timedelta(hours=MAX_AGE_HOURS)
-    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-# ── RSS Feeds (Fallback) ──────────────────────────────────────────────────────
-
 def _parse_feed(xml_text: str, source_name: str) -> list[NewsItem]:
     items = []
     try:
@@ -190,16 +178,15 @@ def _parse_feed(xml_text: str, source_name: str) -> list[NewsItem]:
             if _is_excluded(title + " " + snippet):
                 continue
 
-            # Echte URL aus Google News source-Tag
             source_el = item.find("source")
             if source_el is not None and source_el.get("url"):
-                real_source = source_el.get("url", "")
+                real_url = source_el.get("url", "")
             else:
-                real_source = url
+                real_url = url
 
             items.append(NewsItem(
                 title=title,
-                url=real_source,
+                url=real_url,
                 source=source_name,
                 published=pub,
                 snippet=_truncate_words(snippet),
@@ -223,43 +210,30 @@ async def _fetch_rss(client: httpx.AsyncClient, url: str, source: str) -> list[N
         return []
 
 
-# ── Hauptfunktion ─────────────────────────────────────────────────────────────
-
 async def fetch_club_news(club_name: str) -> list[NewsItem]:
-    """
-    Fetcht News für einen Club:
-    1. GNews API (primär) — liefert Snippet direkt
-    2. Google News RSS + statische Feeds (Fallback)
-    """
     all_items: list[NewsItem] = []
     keywords = _club_keywords(club_name)
 
     async with httpx.AsyncClient(headers={"User-Agent": "Mozilla/5.0"}) as client:
 
-        # Layer 1: GNews API
         gnews_items = await _fetch_gnews(client, club_name)
         all_items.extend(gnews_items)
-        logger.info(f"GNews: {len(gnews_items)} Artikel für {club_name}")
+        logger.info(f"GNews: {len(gnews_items)} Artikel fuer {club_name}")
 
-        # Layer 2: Google News RSS
-        import re
         name_clean = re.sub(r"\(.*?\)", "", club_name).strip()
         for query in [name_clean, f"{name_clean} Bundesliga", f"{name_clean} transfer"]:
             items = await _fetch_rss(client, _google_news_url(query), "Google News")
             all_items.extend(items)
 
-        # Layer 3: Statische RSS Feeds
         for source, url in RSS_FEEDS:
             items = await _fetch_rss(client, url, source)
             all_items.extend(items)
 
-    # Club-Keyword Filter
     filtered = [
         item for item in all_items
         if any(kw in item.title.lower() or kw in item.snippet.lower() for kw in keywords)
     ]
 
-    # URL-Deduplizierung
     seen: set[str] = set()
     unique = []
     for item in filtered:
@@ -269,3 +243,4 @@ async def fetch_club_news(club_name: str) -> list[NewsItem]:
 
     logger.info(f"fetch_club_news({club_name}): {len(unique)} Artikel (von {len(all_items)} gesamt)")
     return unique
+EOF

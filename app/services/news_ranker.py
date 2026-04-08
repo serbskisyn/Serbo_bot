@@ -1,7 +1,7 @@
 import re
 import logging
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from app.services.news_fetcher import NewsItem
 
 logger = logging.getLogger(__name__)
@@ -44,10 +44,32 @@ def _best_snippet(snippets: list[str]) -> str:
     return max(clean, key=lambda s: len(s.split()))
 
 
+def _cluster(items: list, get_title) -> list[list[int]]:
+    """Generisches Clustering via Jaccard auf Titel."""
+    token_sets = [_normalize(get_title(i)) for i in items]
+    clusters: list[list[int]] = []
+    assigned = [False] * len(items)
+
+    for i in range(len(items)):
+        if assigned[i]:
+            continue
+        cluster = [i]
+        assigned[i] = True
+        for j in range(i + 1, len(items)):
+            if assigned[j]:
+                continue
+            if _jaccard(token_sets[i], token_sets[j]) >= SIMILARITY_THRESHOLD:
+                cluster.append(j)
+                assigned[j] = True
+        clusters.append(cluster)
+    return clusters
+
+
 def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
     if not items:
         return []
 
+    # URL-Deduplizierung
     seen_urls: set[str] = set()
     unique: list[NewsItem] = []
     for item in items:
@@ -55,22 +77,8 @@ def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
             seen_urls.add(item.url)
             unique.append(item)
 
-    token_sets = [_normalize(item.title) for item in unique]
-    clusters:  list[list[int]] = []
-    assigned = [False] * len(unique)
-
-    for i in range(len(unique)):
-        if assigned[i]:
-            continue
-        cluster = [i]
-        assigned[i] = True
-        for j in range(i + 1, len(unique)):
-            if assigned[j]:
-                continue
-            if _jaccard(token_sets[i], token_sets[j]) >= SIMILARITY_THRESHOLD:
-                cluster.append(j)
-                assigned[j] = True
-        clusters.append(cluster)
+    # Clustering auf Originaltitel
+    clusters = _cluster(unique, lambda x: x.title)
 
     ranked: list[RankedNews] = []
     for cluster in clusters:
@@ -99,8 +107,55 @@ def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
     return ranked[:top_n]
 
 
+def _re_cluster(items: list[RankedNews]) -> list[RankedNews]:
+    """
+    Zweites Clustering nach LLM-Enrichment auf deutschen Titeln.
+    Fasst gleiche Meldungen zusammen die LLM ähnlich übersetzt hat.
+    """
+    if not items:
+        return []
+
+    clusters = _cluster(items, lambda x: x.title)
+    merged: list[RankedNews] = []
+
+    for cluster in clusters:
+        cluster_items = [items[i] for i in cluster]
+
+        # Alle Quellen + URLs zusammenführen
+        seen_sources: set[str] = set()
+        all_sources: list[str] = []
+        all_urls:    list[str] = []
+        for item in cluster_items:
+            for src, url in zip(item.sources, item.urls):
+                if src not in seen_sources:
+                    seen_sources.add(src)
+                    all_sources.append(src)
+                    all_urls.append(url)
+
+        # Bestes Snippet (längster Text)
+        best = max(cluster_items, key=lambda x: len(x.snippet))
+
+        merged.append(RankedNews(
+            title=best.title,
+            snippet=best.snippet,
+            sources=all_sources,
+            urls=all_urls,
+            score=len(all_sources),
+            published=max(
+                (i.published for i in cluster_items if i.published),
+                default=""
+            ),
+        ))
+
+    merged.sort(key=lambda x: (x.score, x.published), reverse=True)
+    return merged
+
+
 async def enrich_ranked_news(ranked: list[RankedNews], club: str) -> list[RankedNews]:
-    """Reichert alle RankedNews parallel an — filtert irrelevante Artikel raus."""
+    """
+    1. Parallel LLM-Enrichment aller Items
+    2. Re-Clustering auf deutschen Titeln
+    """
     from app.services.news_enricher import enrich_news_item
 
     async def _enrich_one(item: RankedNews) -> RankedNews | None:
@@ -117,8 +172,13 @@ async def enrich_ranked_news(ranked: list[RankedNews], club: str) -> list[Ranked
         item.urls[0] = enriched["url"]
         return item
 
-    results = await asyncio.gather(*[_enrich_one(r) for r in ranked])
-    return [r for r in results if r is not None]
+    results  = await asyncio.gather(*[_enrich_one(r) for r in ranked])
+    enriched = [r for r in results if r is not None]
+
+    # Zweites Clustering auf deutschen Titeln
+    re_clustered = _re_cluster(enriched)
+    logger.info(f"Re-Clustering: {len(enriched)} → {len(re_clustered)} News")
+    return re_clustered
 
 
 def format_news_output(club_name: str, ranked: list[RankedNews]) -> str:

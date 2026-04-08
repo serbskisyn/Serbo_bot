@@ -1,31 +1,30 @@
 import re
 import logging
+import asyncio
 from dataclasses import dataclass
-from urllib.parse import urlparse
-from app.services.news_fetcher import NewsItem, SNIPPET_MAX_WORDS, _truncate_words
+from app.services.news_fetcher import NewsItem
 
 logger = logging.getLogger(__name__)
 
 SIMILARITY_THRESHOLD = 0.35
+MEDALS = ["🥇", "🥈", "🥉"]
 
 
 @dataclass
 class RankedNews:
-    title: str
-    snippet: str
-    sources: list[str]
-    urls: list[str]
-    score: int
+    title:     str
+    snippet:   str
+    sources:   list[str]
+    urls:      list[str]
+    score:     int
     published: str = ""
 
-
-# ── Hilfsfunktionen ───────────────────────────────────────────────────────────
 
 def _normalize(text: str) -> set[str]:
     stopwords = {
         "der", "die", "das", "und", "in", "im", "am", "bei", "für", "von",
         "mit", "nach", "an", "zu", "auf", "ist", "ein", "eine", "des",
-        "fc", "sc", "sv", "vfb", "the", "a", "of", "at", "for",
+        "fc", "sc", "sv", "vfb", "the", "a", "of", "in", "at", "for",
         "to", "is", "and", "with", "after", "as", "by",
     }
     tokens = re.findall(r"[a-zäöüß]{3,}", text.lower())
@@ -39,26 +38,17 @@ def _jaccard(a: set, b: set) -> float:
 
 
 def _best_snippet(snippets: list[str]) -> str:
-    """Wählt das Snippet mit den meisten Wörtern."""
-    return max(snippets, key=lambda s: len(s.split())) if snippets else ""
+    clean = [s for s in snippets if s]
+    if not clean:
+        return ""
+    return max(clean, key=lambda s: len(s.split()))
 
 
-def _format_date(item: "NewsItem") -> str:
+def _format_date(item: NewsItem) -> str:
     if item.published is None:
         return ""
     return item.published.strftime("%d.%m.%Y %H:%M")
 
-
-def _display_url(url: str) -> str:
-    """Gibt lesbaren Domain-Namen zurück: https://www.bild.de/... → bild.de"""
-    try:
-        host = urlparse(url).netloc
-        return re.sub(r"^www\.", "", host)
-    except Exception:
-        return url
-
-
-# ── Kern-Logik ────────────────────────────────────────────────────────────────
 
 def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
     if not items:
@@ -72,8 +62,7 @@ def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
             unique.append(item)
 
     token_sets = [_normalize(item.title) for item in unique]
-
-    clusters: list[list[int]] = []
+    clusters:  list[list[int]] = []
     assigned = [False] * len(unique)
 
     for i in range(len(unique)):
@@ -92,20 +81,15 @@ def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
     ranked: list[RankedNews] = []
     for cluster in clusters:
         cluster_items = [unique[i] for i in cluster]
-
-        best_title = max(cluster_items, key=lambda x: len(x.title)).title
-
+        best_title    = max(cluster_items, key=lambda x: len(x.title)).title
         source_map: dict[str, str] = {}
         for item in cluster_items:
             if item.source not in source_map:
                 source_map[item.source] = item.url
 
-        # Bestes Snippet: meiste Wörter, nochmal auf 300 Wörter begrenzen
-        snippet_raw = _best_snippet([item.snippet for item in cluster_items if item.snippet])
-        snippet = _truncate_words(snippet_raw, SNIPPET_MAX_WORDS)
-
-        dated = [item for item in cluster_items if item.published]
-        pub_str = _format_date(max(dated, key=lambda x: x.published)) if dated else ""
+        snippet = _best_snippet([i.snippet for i in cluster_items])
+        dated   = [i for i in cluster_items if i.published]
+        pub_str = max(dated, key=lambda x: x.published).published.strftime("%d.%m.%Y %H:%M") if dated else ""
 
         ranked.append(RankedNews(
             title=best_title,
@@ -120,9 +104,19 @@ def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
     return ranked[:top_n]
 
 
-# ── Formatter ─────────────────────────────────────────────────────────────────
+async def enrich_ranked_news(ranked: list[RankedNews]) -> list[RankedNews]:
+    """Reichert alle RankedNews parallel mit echten URLs + LLM-Snippets an."""
+    from app.services.news_enricher import enrich_news_item
 
-MEDALS = ["🥇", "🥈", "🥉"]
+    async def _enrich_one(item: RankedNews) -> RankedNews:
+        # Ersten URL des Clusters anreichern
+        enriched = await enrich_news_item(item.urls[0], item.title)
+        item.title   = enriched["headline"]
+        item.snippet = enriched["snippet"]
+        item.urls[0] = enriched["url"]
+        return item
+
+    return list(await asyncio.gather(*[_enrich_one(r) for r in ranked]))
 
 
 def format_news_output(club_name: str, ranked: list[RankedNews]) -> str:
@@ -132,21 +126,30 @@ def format_news_output(club_name: str, ranked: list[RankedNews]) -> str:
     lines = [f"⚽ *{club_name}* – Top News\n{'─' * 30}"]
 
     for i, news in enumerate(ranked):
-        medal = MEDALS[i] if i < 3 else f"{i + 1}."
+        medal        = MEDALS[i] if i < 3 else f"{i + 1}."
         source_count = f"[{news.score} {'Quelle' if news.score == 1 else 'Quellen'}]"
 
         lines.append(f"\n{medal} {source_count} *{news.title}*")
 
         if news.snippet:
-            lines.append(f"_{news.snippet}_")
+            lines.append(f"{news.snippet}")
 
         if news.published:
             lines.append(f"🕐 {news.published}")
 
-        source_refs = " · ".join(
-            f"[{_display_url(url)}]({url})"
+        # Quellen als nummerierte Links mit Domain als Linktext
+        source_links = " · ".join(
+            f"[{_domain(url)}]({url})"
             for url in news.urls
         )
-        lines.append(source_refs)
+        lines.append(source_links)
 
     return "\n".join(lines)
+
+
+def _domain(url: str) -> str:
+    try:
+        host = url.split("/")[2]
+        return host.replace("www.", "")
+    except Exception:
+        return url

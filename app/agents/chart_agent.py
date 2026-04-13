@@ -1,4 +1,3 @@
-import io
 import logging
 import re
 import tempfile
@@ -11,14 +10,10 @@ from app.services.openrouter_client import ask_llm
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
-    "Du bist ein Datenvisualisierungs-Experte. "
-    "Wenn der Nutzer einen Chart anfordert, antworte NUR mit ausführbarem Python-Code. "
-    "Kein Text davor oder danach, nur den Code-Block. "
-    "Verwende matplotlib. "
-    "Speichere den Chart am Ende mit: plt.savefig(OUTPUT_PATH, bbox_inches='tight', dpi=150) "
-    "Die Variable OUTPUT_PATH ist bereits definiert — nutze sie direkt, nicht als String. "
-    "Kein plt.show(). "
-    "Kein import für OUTPUT_PATH nötig."
+    "Datenvisualisierungs-Experte. NUR ausführbaren Python-Code ausgeben. "
+    "Kein Text vor/nach Code-Block. matplotlib verwenden. "
+    "Chart speichern: plt.savefig(OUTPUT_PATH, bbox_inches='tight', dpi=150). "
+    "OUTPUT_PATH bereits definiert. Kein plt.show(). Kein import für OUTPUT_PATH."
 )
 
 

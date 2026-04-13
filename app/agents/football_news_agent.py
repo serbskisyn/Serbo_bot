@@ -1,14 +1,13 @@
 import logging
 import re
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 from app.bot.memory import get_confirmed
-from app.config import NEWS_STALE_LABEL_HOURS, NEWS_CACHE_MAX_AGE_HOURS
+from app.config import NEWS_STALE_LABEL_HOURS
 from app.services.news_cache import (
     load_from_cache, get_cache_age_label, get_cache_meta, is_cache_fresh, refresh_club_cache
 )
-from app.services.news_ranker import format_news_output
-from app.services.news_fetcher import NewsItem
+from app.services.news_ranker import format_news_output, RankedNews
 
 logger = logging.getLogger(__name__)
 
@@ -41,24 +40,23 @@ def _extract_clubs(memory: dict) -> list[str]:
     return unique
 
 
-def _cache_rows_to_items(rows: list[dict]) -> list[NewsItem]:
-    """Konvertiert Cache-Rows zurueck in NewsItem-Objekte fuer format_news_output."""
+def _cache_rows_to_ranked(rows: list[dict]) -> list[RankedNews]:
+    """Konvertiert Cache-Rows in RankedNews-Objekte fuer format_news_output."""
     items = []
     for r in rows:
-        pub = None
-        if r.get("published"):
-            try:
-                pub = datetime.fromisoformat(r["published"])
-            except ValueError:
-                pass
-        item = NewsItem(
-            title=r["enriched"] or r["title"],
-            url=r["url"],
-            source=r["source"] or "",
-            published=pub,
-            snippet=r["snippet"] or "",
-        )
-        items.append(item)
+        # source ist kommagetrennte Quellenliste aus _save_to_cache
+        source_str = r.get("source") or ""
+        sources = [s.strip() for s in source_str.split(",") if s.strip()] or ["Unbekannt"]
+        url = r.get("url") or ""
+
+        items.append(RankedNews(
+            title=r.get("title") or "",
+            snippet=r.get("snippet") or "",
+            sources=sources,
+            urls=[url],
+            score=int(r.get("score") or 0),
+            published=r.get("published") or "",
+        ))
     return items
 
 
@@ -92,17 +90,14 @@ async def fetch_news_for_user(user_id: int, force_refresh: bool = False) -> str:
     output_blocks = []
     for club in clubs:
         try:
-            # Force-Refresh: Live-Fetch und Cache aktualisieren
             if force_refresh:
                 logger.info("Force-Refresh fuer %s", club)
                 success = await refresh_club_cache(club)
                 if not success:
                     output_blocks.append(f"⚠️ Refresh fehlgeschlagen fuer *{club}*. Zeige Cache-Version.")
 
-            # Cache laden
             rows = load_from_cache(club)
 
-            # Falls Cache leer oder abgelaufen: einmaliger Live-Fetch als Fallback
             if not rows or not is_cache_fresh(club):
                 logger.info("Cache leer/abgelaufen fuer %s — Live-Fallback", club)
                 await refresh_club_cache(club)
@@ -112,8 +107,8 @@ async def fetch_news_for_user(user_id: int, force_refresh: bool = False) -> str:
                 output_blocks.append(f"Keine News fuer *{club}* gefunden.")
                 continue
 
-            items = _cache_rows_to_items(rows)
-            block = format_news_output(club, items)
+            ranked = _cache_rows_to_ranked(rows)
+            block  = format_news_output(club, ranked)
             block += _freshness_label(club)
             output_blocks.append(block)
 

@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 def _split_message(text: str, limit: int = 4000) -> list[str]:
-    """Splittet langen Text an Zeilenumbrüchen unter dem Limit."""
+    """Splittet langen Text an Zeilenumbruechen unter dem Limit."""
     if len(text) <= limit:
         return [text]
     chunks = []
@@ -69,7 +69,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/reset — Gesprächsverlauf löschen\n"
         f"/memory — Was ich über dich weiß\n"
         f"/forget — Mein Gedächtnis löschen\n"
-        f"/news — Aktuelle News deiner Lieblingsclubs"
+        f"/news — Aktuelle News deiner Lieblingsclubs\n"
+        f"/news fresh — News sofort neu laden (Live-Fetch)"
     )
 
 
@@ -106,10 +107,16 @@ async def news_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ Kein Zugriff.")
         return
 
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-    await update.message.reply_text("⏳ Lade aktuelle News für deine Clubs…")
+    # Argument-Parsing: /news [fresh]
+    args = context.args or []
+    force_refresh = any(a.lower() == "fresh" for a in args)
 
-    result = await fetch_news_for_user(user_id)
+    if force_refresh:
+        await update.message.reply_text("🔄 Lade News live neu — einen Moment…")
+    else:
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
+    result = await fetch_news_for_user(user_id, force_refresh=force_refresh)
 
     for chunk in _split_message(result):
         await update.message.reply_text(chunk, parse_mode="Markdown", disable_web_page_preview=True)
@@ -118,21 +125,21 @@ async def news_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_text = update.message.text
-    logger.info(f"Textnachricht von User {user_id}")
+    logger.info("Textnachricht von User %d", user_id)
 
     if not is_allowed(user_id):
-        logger.warning(f"Unauthorized user | user={user_id}")
+        logger.warning("Unauthorized user | user=%d", user_id)
         await update.message.reply_text("⛔ Kein Zugriff.")
         return
 
     limited, retry_after = is_rate_limited(user_id)
     if limited:
-        logger.warning(f"Rate limit exceeded | user={user_id}")
+        logger.warning("Rate limit exceeded | user=%d", user_id)
         await update.message.reply_text(f"⏳ Zu viele Nachrichten. Bitte {retry_after}s warten.")
         return
 
     if await is_injection_async(user_text):
-        logger.warning(f"Injection blocked (text) | user={user_id} | text={user_text[:60]}")
+        logger.warning("Injection blocked (text) | user=%d | text=%s", user_id, user_text[:60])
         await update.message.reply_text("⚠️ Deine Nachricht wurde aus Sicherheitsgründen blockiert.")
         return
 
@@ -142,16 +149,16 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    logger.info(f"Sprachnachricht von User {user_id}")
+    logger.info("Sprachnachricht von User %d", user_id)
 
     if not is_allowed(user_id):
-        logger.warning(f"Unauthorized user | user={user_id}")
+        logger.warning("Unauthorized user | user=%d", user_id)
         await update.message.reply_text("⛔ Kein Zugriff.")
         return
 
     limited, retry_after = is_rate_limited(user_id)
     if limited:
-        logger.warning(f"Rate limit exceeded | user={user_id}")
+        logger.warning("Rate limit exceeded | user=%d", user_id)
         await update.message.reply_text(f"⏳ Zu viele Nachrichten. Bitte {retry_after}s warten.")
         return
 
@@ -166,7 +173,7 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if await is_injection_async(transcript):
-        logger.warning(f"Injection blocked (voice) | user={user_id} | transcript={transcript[:60]}")
+        logger.warning("Injection blocked (voice) | user=%d | transcript=%s", user_id, transcript[:60])
         await update.message.reply_text("⚠️ Deine Nachricht wurde aus Sicherheitsgründen blockiert.")
         return
 
@@ -175,4 +182,4 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    logger.error(f"Fehler: {context.error}", exc_info=context.error)
+    logger.error("Fehler: %s", context.error, exc_info=context.error)

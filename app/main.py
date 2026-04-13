@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 from app.config import validate_config, TELEGRAM_BOT_TOKEN
@@ -7,6 +8,7 @@ from app.bot.handlers import (
     error_handler, reset_handler, memory_handler, forget_handler,
     news_handler
 )
+from app.services.news_cache import start_background_scheduler
 
 
 def main():
@@ -25,6 +27,13 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_handler(MessageHandler(filters.VOICE, voice_handler))
     app.add_error_handler(error_handler)
+
+    # News Cache Scheduler als Background-Task starten
+    async def post_init(application):
+        logger.info("News-Cache Background-Scheduler wird gestartet...")
+        start_background_scheduler()
+
+    app.post_init = post_init
 
     logger.info("Bot läuft. Warte auf Nachrichten...")
     app.run_polling(drop_pending_updates=True)

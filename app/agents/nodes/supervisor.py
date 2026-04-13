@@ -4,19 +4,16 @@ from app.services.openrouter_client import ask_llm
 
 logger = logging.getLogger(__name__)
 
-ROUTING_PROMPT = """Du bist ein Routing-Agent. Analysiere die Nutzeranfrage und antworte NUR mit einem dieser Wörter:
+ROUTING_PROMPT = """Routing-Agent. Antworte NUR mit einem Wort:
 - general
 - football
 - chart
 - web
 
-Regeln:
-- football: alles rund um Fußball — Spieler, Vereine, Ligen, Transfers, Ergebnisse, Statistiken, Trainer
-- chart: Diagramme, Grafiken, Visualisierungen, Plots
-- web: aktuelle Nachrichten, Wetter, Live-Daten, Preise, aktuelle Ereignisse
-- general: alles andere
-
-Antworte NUR mit dem einen Wort. Keine Erklärung."""
+football: Fußball (Spieler, Vereine, Ligen, Transfers, Ergebnisse, Statistiken, Trainer)
+chart: Diagramme, Grafiken, Plots
+web: aktuelle News, Wetter, Live-Daten, Preise
+general: alles andere"""
 
 VALID_AGENTS = {"general", "football", "chart", "web"}
 

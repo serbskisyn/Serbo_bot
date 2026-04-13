@@ -6,10 +6,8 @@ from app.services.openrouter_client import ask_llm
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
-    "Du bist ein hilfreicher Assistent mit Zugriff auf aktuelle Websuche. "
-    "Nutze die bereitgestellten Suchergebnisse um die Frage zu beantworten. "
-    "Antworte auf Deutsch, kurz und präzise. "
-    "Gib am Ende die relevantesten Quellen als Liste an."
+    "Web-Assistent. Deutsch. Präzise, kein Fülltext, direkt zum Punkt. "
+    "Suchergebnisse nutzen. Quellen am Ende als Liste."
 )
 
 
@@ -20,17 +18,12 @@ async def web_node(state: BotState) -> BotState:
     results = await search(query)
     context = format_results(results)
 
-    prompt = (
-        f"Suchanfrage: {query}\n\n"
-        f"Suchergebnisse:\n{context}\n\n"
-        f"Beantworte die Anfrage basierend auf diesen Ergebnissen."
-    )
+    prompt = f"Suchanfrage: {query}\n\nErgebnisse:\n{context}\n\nBeantworte basierend auf diesen Ergebnissen."
 
     response = await ask_llm(
         prompt,
         history=state.get("messages", []),
         system_prompt=SYSTEM_PROMPT
     )
-
     logger.info(f"Web Node -> Antwort generiert | user={state['user_id']}")
     return {**state, "response": response}

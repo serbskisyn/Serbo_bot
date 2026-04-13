@@ -2,7 +2,7 @@
 news_cache.py
 -------------
 SQLite-basierter News-Cache mit Background-Scheduler.
-Fetcht Nachrichten im Hintergrund in unregelmässigen Intervallen
+Fetcht Nachrichten im Hintergrund in unregelmaessigen Intervallen
 — unabhaengig von User-Anfragen. User bekommen immer gecachte Version.
 """
 
@@ -10,7 +10,6 @@ import asyncio
 import logging
 import random
 import sqlite3
-import json
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -28,7 +27,7 @@ from app.services.news_ranker import rank_news, enrich_ranked_news
 logger = logging.getLogger(__name__)
 
 
-# ── DB Setup ──────────────────────────────────────────────────────────────────
+# ── DB Setup ────────────────────────────────────────────────────────────────
 
 def _get_db() -> sqlite3.Connection:
     db_path = Path(NEWS_CACHE_DB_PATH)
@@ -39,20 +38,20 @@ def _get_db() -> sqlite3.Connection:
 
 
 def init_cache_db() -> None:
-    """Erstellt die Cache-Tabelle falls nicht vorhanden."""
+    """Erstellt die Cache-Tabellen falls nicht vorhanden."""
     conn = _get_db()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS news_cache (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             club_name    TEXT    NOT NULL,
             title        TEXT    NOT NULL,
-            url          TEXT    NOT NULL UNIQUE,
+            url          TEXT    NOT NULL,
             source       TEXT,
             published    TEXT,
             snippet      TEXT,
-            enriched     TEXT,
             score        REAL    DEFAULT 0.0,
-            cached_at    TEXT    NOT NULL
+            cached_at    TEXT    NOT NULL,
+            UNIQUE(club_name, url)
         )
     """)
     conn.execute("""
@@ -68,33 +67,56 @@ def init_cache_db() -> None:
 
 # ── Cache schreiben ───────────────────────────────────────────────────────────
 
+def _pub_to_str(published) -> str | None:
+    """
+    Normalisiert published auf einen String fuer SQLite.
+    Akzeptiert: datetime, str, None.
+    """
+    if published is None:
+        return None
+    if isinstance(published, datetime):
+        return published.isoformat()
+    if isinstance(published, str):
+        return published if published.strip() else None
+    return str(published)
+
+
 def _save_to_cache(club_name: str, enriched_items: list) -> None:
-    """Speichert enriched NewsItems fuer einen Club in den Cache."""
+    """
+    Speichert RankedNews-Objekte fuer einen Club in den Cache.
+    RankedNews hat: title, snippet, sources (list), urls (list), score (int), published (str)
+    """
     now = datetime.now(timezone.utc).isoformat()
     conn = _get_db()
     try:
-        # Alte Eintraege dieses Clubs loeschen
         conn.execute("DELETE FROM news_cache WHERE club_name = ?", (club_name,))
 
         for item in enriched_items:
-            pub = item.published.isoformat() if item.published else None
+            # RankedNews: sources=list, urls=list — erste URL + Quellen als kommagetrennt
+            if hasattr(item, "urls") and item.urls:
+                primary_url = item.urls[0]
+                source_str  = ", ".join(item.sources) if hasattr(item, "sources") else ""
+            else:
+                primary_url = getattr(item, "url", "")
+                source_str  = getattr(item, "source", "")
+
+            pub = _pub_to_str(getattr(item, "published", None))
+
             conn.execute("""
                 INSERT OR REPLACE INTO news_cache
-                    (club_name, title, url, source, published, snippet, enriched, score, cached_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (club_name, title, url, source, published, snippet, score, cached_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 club_name,
                 item.title,
-                item.url,
-                item.source,
+                primary_url,
+                source_str,
                 pub,
                 item.snippet,
-                getattr(item, "enriched_headline", None),
-                getattr(item, "score", 0.0),
+                getattr(item, "score", 0),
                 now,
             ))
 
-        # Meta aktualisieren
         conn.execute("""
             INSERT OR REPLACE INTO cache_meta (club_name, last_refresh)
             VALUES (?, ?)
@@ -151,7 +173,7 @@ def load_from_cache(club_name: str) -> list[dict]:
     conn = _get_db()
     try:
         rows = conn.execute("""
-            SELECT title, url, source, published, snippet, enriched, score
+            SELECT title, url, source, published, snippet, score
             FROM news_cache
             WHERE club_name = ?
             ORDER BY score DESC, published DESC
@@ -167,8 +189,8 @@ async def refresh_club_cache(club_name: str) -> bool:
     """Fetcht frische News fuer einen Club und speichert in Cache. Gibt True bei Erfolg."""
     logger.info("Cache Refresh gestartet: %s", club_name)
     try:
-        items = await fetch_club_news(club_name)
-        ranked = rank_news(items, top_n=10)
+        items    = await fetch_club_news(club_name)
+        ranked   = rank_news(items, top_n=10)
         enriched = await enrich_ranked_news(ranked, club_name)
         _save_to_cache(club_name, enriched)
         return True
@@ -180,7 +202,7 @@ async def refresh_club_cache(club_name: str) -> bool:
 # ── Background Scheduler ──────────────────────────────────────────────────────
 
 async def _scheduler_loop() -> None:
-    """Laeuft als asyncio.Task — refresht Favoriten-Clubs in unregelmässigen Intervallen."""
+    """Laeuft als asyncio.Task — refresht Favoriten-Clubs in unregelmaessigen Intervallen."""
     logger.info(
         "News-Scheduler gestartet | Clubs: %s | Basis: %dmin | Jitter: ±%dmin",
         NEWS_FAVORITE_CLUBS, NEWS_SCHEDULER_BASE_MINUTES, NEWS_SCHEDULER_JITTER_MINUTES
@@ -189,7 +211,7 @@ async def _scheduler_loop() -> None:
     # Beim Start: alle Favoriten initial laden (mit Versatz zwischen Clubs)
     for i, club in enumerate(NEWS_FAVORITE_CLUBS):
         if i > 0:
-            startup_delay = random.uniform(30, 90)  # 30-90s Abstand beim Start
+            startup_delay = random.uniform(30, 90)
             logger.info("Startup-Delay %ds fuer %s", int(startup_delay), club)
             await asyncio.sleep(startup_delay)
         await refresh_club_cache(club)
@@ -211,7 +233,7 @@ async def _scheduler_loop() -> None:
 
         for i, club in enumerate(NEWS_FAVORITE_CLUBS):
             if i > 0:
-                inter_club_delay = random.uniform(30, 120)  # 30-120s zwischen Clubs
+                inter_club_delay = random.uniform(30, 120)
                 logger.info("Inter-Club-Delay %.0fs vor %s", inter_club_delay, club)
                 await asyncio.sleep(inter_club_delay)
             await refresh_club_cache(club)

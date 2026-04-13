@@ -9,10 +9,8 @@ logger = logging.getLogger(__name__)
 async def general_node(state: BotState) -> BotState:
     memory_context = get_memory_prompt(state["user_id"])
     system_prompt = (
-        "Du bist ein hilfreicher Assistent. Antworte auf Deutsch. "
-        "Antworte immer so kurz und präzise wie möglich. "
-        "Keine langen Erklärungen, keine Prosa, keine Einleitungssätze. "
-        "Bullet Points oder direkte Antworten bevorzugen."
+        "Hilfreicher Assistent. Deutsch. Präzise, kein Fülltext, direkt zum Punkt. "
+        "Bullet Points bevorzugen. Keine Einleitungssätze. Fragmente OK. "
         f"{memory_context}"
     )
     response = await ask_llm(

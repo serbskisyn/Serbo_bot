@@ -14,13 +14,22 @@ ROUTING_PROMPT = """Routing-Agent. Antworte NUR mit JSON, kein Text drumherum:
 {"agent": "<agent>", "confidence": <0.0-1.0>}
 
 Agenten:
-- football: Fussball (Spieler, Vereine, Ligen, Transfers, Ergebnisse, Kader, Taktik, Trainer)
+- football: Alles mit Fussball-Bezug: Spieler, Vereine, Ligen, Transfers, Ergebnisse,
+  Kader, Taktik, Trainer, Tabelle, Tabellenstand, Tabellenposition, Spieltag,
+  Aufstellung, Verletzung, Tor, Bundesliga, Champions League, DFB-Pokal.
+  WICHTIG: Wenn ein Vereinsname (z.B. Dynamo Dresden, Bayern, BVB, Dortmund) vorkommt
+  und gleichzeitig ein Fussball-Begriff (Tabelle, Platz, Punkte, Kader, Spiel,
+  Ergebnis, Trainer, Transfer) -> immer football, auch wenn 'aktuell' oder
+  'heute' im Text steht.
 - chart: Diagramme, Grafiken, Plots, Visualisierungen
-- web: aktuelle News, Wetter, Live-Daten, Preise, heutige Ereignisse
+- web: Allgemeine aktuelle News, Wetter, Preise, heutige Ereignisse OHNE Fussball-Bezug.
+  NIEMALS web wenn ein Verein + Fussball-Begriff vorkommt.
 - general: alles andere, Small Talk, allgemeine Fragen
 
+Prioritaet: football > web wenn Fussball-Kontext erkennbar.
+
 Confidence-Regeln:
-- Eindeutiger Intent ("Wer hat die CL gewonnen?") -> 0.9+
+- Eindeutiger Intent -> 0.9+
 - Kurze Folge-Antwort ohne klaren Kontext ("ja", "mehr dazu", "und?") -> 0.2-0.4
 - Thema erkennbar aber nicht sicher -> 0.5-0.7"""
 
@@ -47,8 +56,36 @@ async def supervisor_node(state: BotState) -> BotState:
         logger.warning("Supervisor JSON-Parse-Fehler: %s | raw='%s'", e, response[:80])
 
     if agent not in VALID_AGENTS:
-        logger.warning("Supervisor -> ungültiges Routing '%s', fallback general", agent)
+        logger.warning("Supervisor -> ungueltiges Routing '%s', fallback general", agent)
         agent = "general"
+
+    # Sicherheitsnetz: enthaelt der Text einen Vereinsnamen + Fussball-Begriff
+    # -> immer football, egal was der LLM sagt
+    CLUB_NAMES = [
+        "dynamo", "dresden", "bvb", "dortmund", "bayern", "leipzig", "leverkusen",
+        "frankfurt", "stuttgart", "freiburg", "schalke", "hamburg", "berlin",
+        "gladbach", "werder", "bremen", "koeln", "koln", "hoffenheim", "augsburg",
+        "mainz", "bochum", "wolfsburg", "hertha", "real madrid", "barcelona",
+        "liverpool", "chelsea", "arsenal", "manchester", "juventus", "milan",
+        "inter", "psg", "paris",
+    ]
+    FOOTBALL_TERMS = [
+        "tabelle", "tabellenstand", "tabellenposition", "platz", "punkte",
+        "kader", "aufstellung", "spieltag", "spielplan", "ergebnis", "ergebnisse",
+        "transfer", "verletzt", "verletzung", "trainer", "formation", "taktik",
+        "tor", "tore", "bundesliga", "champions league", "dfb", "liga",
+        "saison", "abstieg", "aufstieg", "meister",
+    ]
+    low = state["text"].lower()
+    has_club    = any(c in low for c in CLUB_NAMES)
+    has_fb_term = any(t in low for t in FOOTBALL_TERMS)
+    if has_club and has_fb_term and agent != "football":
+        logger.info(
+            "Supervisor -> Sicherheitsnetz greift: %s -> football | user=%d",
+            agent, state["user_id"]
+        )
+        agent      = "football"
+        confidence = 0.9
 
     # Topic-Carry: bei niedriger Confidence vorherigen stabilen Topic verwenden
     prev_topic = state.get("topic", "")

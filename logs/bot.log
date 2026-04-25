@@ -1,0 +1,266 @@
+nohup: ignoring input
+2026-04-25 10:27:16,513 | INFO     | __main__ | Konfiguration OK — Bot wird gestartet...
+2026-04-25 10:27:16,720 | INFO     | __main__ | Bot läuft. Warte auf Nachrichten...
+2026-04-25 10:27:16,873 | INFO     | __main__ | News-Cache Background-Scheduler wird gestartet...
+2026-04-25 10:27:16,875 | INFO     | app.services.news_cache | News-Cache DB initialisiert: app/data/news_cache.db
+2026-04-25 10:27:16,875 | INFO     | app.services.news_cache | News-Scheduler gestartet | Clubs: ['Borussia Dortmund', 'Dynamo Dresden'] | Basis: 45min | Jitter: ±15min
+2026-04-25 10:27:16,876 | INFO     | app.services.news_cache | Cache Refresh gestartet: Borussia Dortmund
+2026-04-25 10:27:17,440 | INFO     | app.services.news_fetcher | GNews URL: https://www.yardbarker.com/soccer/articles/arteta_targets_60m_speedster_as_man_united_prepare_bid_for_15_ga_forward/s1_15953_43766795
+2026-04-25 10:27:17,441 | INFO     | app.services.news_fetcher | GNews URL: https://www.yardbarker.com/soccer/articles/atletico_madrid_borussia_dortmund_willing_to_spend_big_to_convince_inter_milan_to_pass_on_serbia_talent/s1_17130_43765157
+2026-04-25 10:27:17,441 | INFO     | app.services.news_fetcher | GNews URL: https://www.yardbarker.com/soccer/articles/positive_talks_man_united_star_indicates_hes_ready_to_accept_transfer_to_euro_giants/s1_15953_43764682
+2026-04-25 10:27:17,442 | INFO     | app.services.news_fetcher | GNews URL: https://www.thesun.co.uk/sport/38913782/jadon-sancho-borussia-dortmund-man-utd-aston-villa/
+2026-04-25 10:27:17,442 | INFO     | app.services.news_fetcher | GNews URL: https://www.thesun.ie/sport/16865840/jadon-sancho-borussia-dortmund-man-utd-aston-villa/
+2026-04-25 10:27:17,443 | INFO     | app.services.news_fetcher | GNews URL: https://www.yardbarker.com/soccer/articles/atletico_madrid_identify_borussia_dortmund_star_as_antoine_griezmann_replacement/s1_15980_43762750
+2026-04-25 10:27:17,443 | INFO     | app.services.news_fetcher | GNews URL: https://metro.co.uk/2026/04/23/jadon-sancho-makes-decision-next-club-ahead-manchester-united-exit-28094135/
+2026-04-25 10:27:17,443 | INFO     | app.services.news_fetcher | GNews URL: https://www.yardbarker.com/soccer/articles/journalist_claims_deal_advanced_as_ex_dortmund_man_nears_tottenham_move/s1_15953_43762525
+2026-04-25 10:27:17,444 | INFO     | app.services.news_fetcher | GNews URL: https://www.express.co.uk/sport/football/2197723/tottenham-sebastian-kehl-johan-lange
+2026-04-25 10:27:17,444 | INFO     | app.services.news_fetcher | GNews URL: https://www.yardbarker.com/soccer/articles/jadon_sancho_agrees_to_rejoin_borussia_dortmund/s1_17737_43761655
+2026-04-25 10:27:17,444 | INFO     | app.services.news_fetcher | GNews: 10 Artikel fuer Borussia Dortmund
+2026-04-25 10:27:20,887 | WARNING  | app.services.news_fetcher | RSS Feed Fehler (transfermarkt.de): Client error '403 Forbidden' for url 'https://www.transfermarkt.de/rss/news'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403
+2026-04-25 10:27:20,894 | INFO     | app.services.news_fetcher | fetch_club_news(Borussia Dortmund): 107 Artikel (von 413 gesamt)
+2026-04-25 10:27:21,962 | ERROR    | app.bot.handlers | Error: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+Traceback (most recent call last):
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_utils/networkloop.py", line 161, in network_retry_loop
+    await do_action()
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_utils/networkloop.py", line 154, in do_action
+    action_cb_task.result()
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_updater.py", line 340, in polling_action_cb
+    updates = await self.bot.get_updates(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_extbot.py", line 672, in get_updates
+    updates = await super().get_updates(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/_bot.py", line 4865, in get_updates
+    await self._post(
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/_bot.py", line 704, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_extbot.py", line 370, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/_bot.py", line 733, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.Conflict: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2026-04-25 10:27:23,710 | INFO     | app.services.news_ranker | Re-Clustering: 10 → 7 News
+2026-04-25 10:27:23,733 | INFO     | app.services.news_cache | Cache aktualisiert: Borussia Dortmund | 7 Artikel
+2026-04-25 10:27:23,734 | INFO     | app.services.news_cache | Startup-Delay 75s fuer Dynamo Dresden
+2026-04-25 10:27:27,534 | ERROR    | app.bot.handlers | Error: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+Traceback (most recent call last):
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_utils/networkloop.py", line 161, in network_retry_loop
+    await do_action()
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_utils/networkloop.py", line 154, in do_action
+    action_cb_task.result()
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_updater.py", line 340, in polling_action_cb
+    updates = await self.bot.get_updates(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_extbot.py", line 672, in get_updates
+    updates = await super().get_updates(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/_bot.py", line 4865, in get_updates
+    await self._post(
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/_bot.py", line 704, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_extbot.py", line 370, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/_bot.py", line 733, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.Conflict: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2026-04-25 10:27:34,371 | ERROR    | app.bot.handlers | Error: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+Traceback (most recent call last):
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_utils/networkloop.py", line 161, in network_retry_loop
+    await do_action()
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_utils/networkloop.py", line 154, in do_action
+    action_cb_task.result()
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_updater.py", line 340, in polling_action_cb
+    updates = await self.bot.get_updates(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_extbot.py", line 672, in get_updates
+    updates = await super().get_updates(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/_bot.py", line 4865, in get_updates
+    await self._post(
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/_bot.py", line 704, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_extbot.py", line 370, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/_bot.py", line 733, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.Conflict: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2026-04-25 10:27:40,087 | ERROR    | app.bot.handlers | Error: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+Traceback (most recent call last):
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_utils/networkloop.py", line 161, in network_retry_loop
+    await do_action()
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_utils/networkloop.py", line 154, in do_action
+    action_cb_task.result()
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_updater.py", line 340, in polling_action_cb
+    updates = await self.bot.get_updates(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_extbot.py", line 672, in get_updates
+    updates = await super().get_updates(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/_bot.py", line 4865, in get_updates
+    await self._post(
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/_bot.py", line 704, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_extbot.py", line 370, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/_bot.py", line 733, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.Conflict: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2026-04-25 10:27:48,708 | ERROR    | app.bot.handlers | Error: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+Traceback (most recent call last):
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_utils/networkloop.py", line 161, in network_retry_loop
+    await do_action()
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_utils/networkloop.py", line 154, in do_action
+    action_cb_task.result()
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_updater.py", line 340, in polling_action_cb
+    updates = await self.bot.get_updates(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_extbot.py", line 672, in get_updates
+    updates = await super().get_updates(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/_bot.py", line 4865, in get_updates
+    await self._post(
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/_bot.py", line 704, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_extbot.py", line 370, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/_bot.py", line 733, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.Conflict: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2026-04-25 10:28:01,650 | ERROR    | app.bot.handlers | Error: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+Traceback (most recent call last):
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_utils/networkloop.py", line 161, in network_retry_loop
+    await do_action()
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_utils/networkloop.py", line 154, in do_action
+    action_cb_task.result()
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_updater.py", line 340, in polling_action_cb
+    updates = await self.bot.get_updates(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_extbot.py", line 672, in get_updates
+    updates = await super().get_updates(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/_bot.py", line 4865, in get_updates
+    await self._post(
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/_bot.py", line 704, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_extbot.py", line 370, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/_bot.py", line 733, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.Conflict: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2026-04-25 10:28:20,920 | ERROR    | app.bot.handlers | Error: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+Traceback (most recent call last):
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_utils/networkloop.py", line 161, in network_retry_loop
+    await do_action()
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_utils/networkloop.py", line 154, in do_action
+    action_cb_task.result()
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_updater.py", line 340, in polling_action_cb
+    updates = await self.bot.get_updates(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_extbot.py", line 672, in get_updates
+    updates = await super().get_updates(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/_bot.py", line 4865, in get_updates
+    await self._post(
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/_bot.py", line 704, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_extbot.py", line 370, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/_bot.py", line 733, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.Conflict: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2026-04-25 10:28:38,935 | INFO     | app.services.news_cache | Cache Refresh gestartet: Dynamo Dresden
+2026-04-25 10:28:39,485 | INFO     | app.services.news_fetcher | GNews: 0 Artikel fuer Dynamo Dresden
+2026-04-25 10:28:42,207 | ERROR    | app.bot.handlers | Error: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+Traceback (most recent call last):
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_utils/networkloop.py", line 161, in network_retry_loop
+    await do_action()
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_utils/networkloop.py", line 154, in do_action
+    action_cb_task.result()
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_updater.py", line 340, in polling_action_cb
+    updates = await self.bot.get_updates(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_extbot.py", line 672, in get_updates
+    updates = await super().get_updates(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/_bot.py", line 4865, in get_updates
+    await self._post(
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/_bot.py", line 704, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/ext/_extbot.py", line 370, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/_bot.py", line 733, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pi/Serbo_bot/.venv/lib/python3.11/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.Conflict: Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+2026-04-25 10:28:44,029 | WARNING  | app.services.news_fetcher | RSS Feed Fehler (transfermarkt.de): Client error '403 Forbidden' for url 'https://www.transfermarkt.de/rss/news'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403
+2026-04-25 10:28:44,158 | INFO     | app.services.news_fetcher | Club-Feed (mdr.de): 19 Artikel
+2026-04-25 10:28:44,383 | INFO     | app.services.news_fetcher | Club-Feed (dnn.de): 7 Artikel
+2026-04-25 10:28:44,391 | INFO     | app.services.news_fetcher | fetch_club_news(Dynamo Dresden): 83 Artikel (von 431 gesamt)
+2026-04-25 10:28:46,924 | INFO     | app.services.news_ranker | Re-Clustering: 10 → 5 News
+2026-04-25 10:28:46,946 | INFO     | app.services.news_cache | Cache aktualisiert: Dynamo Dresden | 5 Artikel
+2026-04-25 10:28:46,946 | INFO     | app.services.news_cache | Naechster News-Refresh: 09:26 UTC (in 58 min)

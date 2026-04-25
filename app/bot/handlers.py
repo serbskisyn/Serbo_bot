@@ -187,3 +187,7 @@ def register_handlers(application):
     application.add_handler(CommandHandler("news", news_handler))
     application.add_handler(MessageHandler(filters.VOICE, voice_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+
+async def error_handler(update, context):
+    import logging
+    logging.getLogger(__name__).error("Error: %s", context.error, exc_info=context.error)

@@ -33,7 +33,7 @@ NEWS_FAVORITE_CLUBS: list[str] = [
 # Scheduler: Basis-Intervall zwischen Refreshes in Minuten
 NEWS_SCHEDULER_BASE_MINUTES: int = int(os.getenv("NEWS_SCHEDULER_BASE_MINUTES", 45))
 
-# Scheduler: Jitter ± Minuten (zufaellige Abweichung vom Basis-Intervall)
+# Scheduler: Jitter +- Minuten (zufaellige Abweichung vom Basis-Intervall)
 NEWS_SCHEDULER_JITTER_MINUTES: int = int(os.getenv("NEWS_SCHEDULER_JITTER_MINUTES", 15))
 
 # Cache gilt als abgelaufen nach X Stunden (kein Stale-Label, echter Fallback auf Live-Fetch)
@@ -41,6 +41,12 @@ NEWS_CACHE_MAX_AGE_HOURS: int = int(os.getenv("NEWS_CACHE_MAX_AGE_HOURS", 48))
 
 # Ab X Stunden wird das "veraltet"-Label angezeigt (trotzdem aus Cache geliefert)
 NEWS_STALE_LABEL_HOURS: int = int(os.getenv("NEWS_STALE_LABEL_HOURS", 4))
+
+# ── Google Sheets / Dienstplan ────────────────────────────────────────────────
+GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+SCHEDULE_URLAUB_SHEET_ID    = os.getenv("SCHEDULE_URLAUB_SHEET_ID",  "1M9WTVPlP-ivvmW_SsPSzQLIHBDwnGdFyoqgeHR7QUZE")
+SCHEDULE_KRANK_SHEET_ID     = os.getenv("SCHEDULE_KRANK_SHEET_ID",   "")
+SCHEDULE_OUTPUT_SHEET_ID    = os.getenv("SCHEDULE_OUTPUT_SHEET_ID",  "1nMF24sf-HNvgJRMvQeZ3lTSf6qiGTvsHXedWjFpckkQ")
 
 
 def validate_config():

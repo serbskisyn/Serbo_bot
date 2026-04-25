@@ -8,6 +8,7 @@ from app.bot.handlers import (
     news_handler
 )
 from app.services.news_cache import start_background_scheduler
+from app.bot.schedule_dialog import get_schedule_handler
 
 
 async def _post_init(application) -> None:
@@ -35,6 +36,7 @@ def main():
     app.add_handler(CommandHandler("memory", memory_handler))
     app.add_handler(CommandHandler("forget", forget_handler))
     app.add_handler(CommandHandler("news", news_handler))
+    app.add_handler(get_schedule_handler())
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_handler(MessageHandler(filters.VOICE, voice_handler))
     app.add_error_handler(error_handler)

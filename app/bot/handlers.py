@@ -11,6 +11,7 @@ from app.bot.memory import add_direct, add_indirect, get_memory_prompt, clear_me
 from app.bot.whitelist import is_allowed
 from app.agents.runner import run as agent_run
 from app.agents.football_news_agent import fetch_news_for_user
+from app.bot.schedule_dialog import get_schedule_handler
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/memory — Was ich über dich weiß\n"
         f"/forget — Mein Gedächtnis löschen\n"
         f"/news — Aktuelle News deiner Lieblingsclubs\n"
-        f"/news fresh — News sofort neu laden (Live-Fetch)"
+        f"/news fresh — News sofort neu laden (Live-Fetch)\n"
+        f"/dienstplan — Dienstplan erstellen"
     )
 
 
@@ -107,7 +109,6 @@ async def news_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⛔ Kein Zugriff.")
         return
 
-    # Argument-Parsing: /news [fresh]
     args = context.args or []
     force_refresh = any(a.lower() == "fresh" for a in args)
 
@@ -139,8 +140,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if await is_injection_async(user_text):
-        logger.warning("Injection blocked (text) | user=%d | text=%s", user_id, user_text[:60])
-        await update.message.reply_text("⚠️ Deine Nachricht wurde aus Sicherheitsgründen blockiert.")
+        logger.warning("Injection attempt | user=%d", user_id)
+        await update.message.reply_text("⚠️ Ungültige Eingabe erkannt.")
         return
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
@@ -152,34 +153,37 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Sprachnachricht von User %d", user_id)
 
     if not is_allowed(user_id):
-        logger.warning("Unauthorized user | user=%d", user_id)
         await update.message.reply_text("⛔ Kein Zugriff.")
         return
 
     limited, retry_after = is_rate_limited(user_id)
     if limited:
-        logger.warning("Rate limit exceeded | user=%d", user_id)
         await update.message.reply_text(f"⏳ Zu viele Nachrichten. Bitte {retry_after}s warten.")
         return
 
+    voice = update.message.voice
+    voice_file = await context.bot.get_file(voice.file_id)
+    voice_bytes = await voice_file.download_as_bytearray()
+
+    try:
+        text = await transcribe_voice(bytes(voice_bytes))
+    except Exception as e:
+        logger.exception("Transkription fehlgeschlagen")
+        await update.message.reply_text(f"❌ Transkription fehlgeschlagen: {e}")
+        return
+
+    await update.message.reply_text(f"🎤 Transkribiert: _{text}_", parse_mode="Markdown")
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-
-    voice_file = await context.bot.get_file(update.message.voice.file_id)
-    ogg_bytes = await voice_file.download_as_bytearray()
-    transcript = await transcribe_voice(bytes(ogg_bytes))
-
-    if not transcript:
-        await update.message.reply_text("Ich konnte die Sprachnachricht leider nicht verstehen.")
-        return
-
-    if await is_injection_async(transcript):
-        logger.warning("Injection blocked (voice) | user=%d | transcript=%s", user_id, transcript[:60])
-        await update.message.reply_text("⚠️ Deine Nachricht wurde aus Sicherheitsgründen blockiert.")
-        return
-
-    await update.message.reply_text(f"🎤 Ich habe verstanden: _{transcript}_", parse_mode="Markdown")
-    await _process_message(user_id, transcript, update, context)
+    await _process_message(user_id, text, update, context)
 
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    logger.error("Fehler: %s", context.error, exc_info=context.error)
+def register_handlers(application):
+    from telegram.ext import CommandHandler, MessageHandler, filters
+    application.add_handler(get_schedule_handler())
+    application.add_handler(CommandHandler("start", start_handler))
+    application.add_handler(CommandHandler("reset", reset_handler))
+    application.add_handler(CommandHandler("memory", memory_handler))
+    application.add_handler(CommandHandler("forget", forget_handler))
+    application.add_handler(CommandHandler("news", news_handler))
+    application.add_handler(MessageHandler(filters.VOICE, voice_handler))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))

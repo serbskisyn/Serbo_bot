@@ -22,6 +22,11 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
+# Pfad zur credentials.json Datei (Fallback wenn ENV-Variable kaputt)
+_CREDENTIALS_FILE = os.path.join(
+    os.path.dirname(__file__), "..", "..", "credentials.json"
+)
+
 FARBEN_RGB: dict[str, tuple[float, float, float]] = {
     "Früh":        (1.0,   1.0,   1.0),
     "Spät":        (0.886, 0.937, 0.851),
@@ -39,12 +44,35 @@ FARBEN_RGB: dict[str, tuple[float, float, float]] = {
 
 
 def _get_client() -> gspread.Client:
-    json_str = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
-    if not json_str:
-        raise EnvironmentError("GOOGLE_SERVICE_ACCOUNT_JSON nicht gesetzt")
-    info = json.loads(json_str)
-    creds = Credentials.from_service_account_info(info, scopes=SCOPES)
-    return gspread.authorize(creds)
+    """Erstellt einen gspread-Client.
+    Reihenfolge:
+    1. GOOGLE_SERVICE_ACCOUNT_JSON Umgebungsvariable (JSON-String)
+    2. credentials.json Datei im Projektroot
+    """
+    json_str = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+
+    if json_str:
+        try:
+            info = json.loads(json_str)
+            # Sicherstellen dass private_key korrekte Newlines hat
+            if "private_key" in info:
+                info["private_key"] = info["private_key"].replace("\\n", "\n")
+            creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+            return gspread.authorize(creds)
+        except Exception as e:
+            logger.warning("GOOGLE_SERVICE_ACCOUNT_JSON ungueltig (%s), versuche credentials.json", e)
+
+    # Fallback: direkt credentials.json lesen
+    creds_path = os.path.abspath(_CREDENTIALS_FILE)
+    if os.path.exists(creds_path):
+        logger.info("Nutze credentials.json: %s", creds_path)
+        creds = Credentials.from_service_account_file(creds_path, scopes=SCOPES)
+        return gspread.authorize(creds)
+
+    raise EnvironmentError(
+        "Kein Google-Credential gefunden. "
+        "Setze GOOGLE_SERVICE_ACCOUNT_JSON oder lege credentials.json ins Projektroot."
+    )
 
 
 def read_abwesenheiten(spreadsheet_id: str, tab_name: str = "Urlaub_CLI") -> list["Abwesenheit"]:

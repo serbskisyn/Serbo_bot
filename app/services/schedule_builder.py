@@ -169,6 +169,8 @@ class DienstplanGenerator:
         self.plan: dict[str, dict[date, Dienst]] = {
             ma.name: {} for ma in self.ma_liste
         }
+        # offen speichert pro Tag eine LISTE offener Dienste
+        self.offen: dict[date, list[Dienst]] = {}
         self.states: dict[str, PlanungState] = {}
         self.violations: list[str] = []
 
@@ -179,20 +181,42 @@ class DienstplanGenerator:
         self._plan_nachtdienste()
         self._plan_tagdienste()
         self._fill_frei()
+        self._build_offen_plan()
         self._validate()
         return self.plan
 
+    def _build_offen_plan(self):
+        """Schreibt offene Dienste aus self.offen in self.plan['offen'].
+        Pro Tag wird nur der schwerste offene Dienst angezeigt
+        (OFFEN-ND > OFFEN-FD > OFFEN-SD), aber alle werden in violations erfasst.
+        """
+        if not self.offen:
+            return
+        self.plan["offen"] = {}
+        prioritaet = [Dienst.OFFEN_ND, Dienst.OFFEN_FD, Dienst.OFFEN_SD]
+        for tag, dienste in self.offen.items():
+            # Alle offenen Dienste als Violation loggen
+            for d in dienste:
+                self.violations.append(
+                    f"{tag.strftime('%d.%m')}: {d.value} nicht besetzt"
+                )
+            # Wichtigsten Dienst in die Zelle schreiben
+            for p in prioritaet:
+                if p in dienste:
+                    self.plan["offen"][tag] = p
+                    break
+            else:
+                self.plan["offen"][tag] = dienste[0]
+
     def get_report(self) -> str:
         lines = [f"=== Dienstplan {self.monat}/{self.jahr} ===\n"]
-        offen = []
-        for tag in self.tage:
-            day_plan = {ma: self.plan[ma].get(tag) for ma in self.plan}
-            for marker in (Dienst.OFFEN_FD, Dienst.OFFEN_SD, Dienst.OFFEN_ND):
-                if marker in day_plan.values():
-                    offen.append(f"  {tag.strftime('%d.%m')} → {marker.value}")
-        if offen:
-            lines.append(f"⚠️ Offene Dienste ({len(offen)}):")
-            lines.extend(offen)
+        alle_offen = []
+        for tag, dienste in sorted(self.offen.items()):
+            for d in dienste:
+                alle_offen.append(f"  {tag.strftime('%d.%m')} → {d.value}")
+        if alle_offen:
+            lines.append(f"⚠️ Offene Dienste ({len(alle_offen)}):")
+            lines.extend(alle_offen)
         else:
             lines.append("✅ Alle Dienste besetzt")
         lines.append("\n📊 Mitarbeiter-Übersicht:")
@@ -203,9 +227,10 @@ class DienstplanGenerator:
                 f"N:{s.nacht_count:2d} | Ist:{s.ist_stunden:6.1f}h "
                 f"Soll:{ma.soll_stunden:6.1f}h Δ:{s.stunden_delta:+.1f}h"
             )
-        if self.violations:
-            lines.append(f"\n❌ Regelverstöße ({len(self.violations)}):")
-            for v in self.violations[:20]:
+        rule_violations = [v for v in self.violations if "nicht besetzt" not in v]
+        if rule_violations:
+            lines.append(f"\n❌ Regelverstöße ({len(rule_violations)}):")
+            for v in rule_violations[:20]:
                 lines.append(f"  • {v}")
         return "\n".join(lines)
 
@@ -338,6 +363,7 @@ class DienstplanGenerator:
         return score
 
     def _plan_tagdienste(self):
+        offen_map = {Dienst.FRUEH: Dienst.OFFEN_FD, Dienst.SPAET: Dienst.OFFEN_SD}
         for tag in self.tage:
             for dienst in (Dienst.FRUEH, Dienst.SPAET):
                 bedarf = PFLICHT[dienst]
@@ -358,12 +384,13 @@ class DienstplanGenerator:
                     self.states[ma.name].add_dienst(dienst, tag)
                     bereits += 1
 
-                offen_map = {Dienst.FRUEH: Dienst.OFFEN_FD, Dienst.SPAET: Dienst.OFFEN_SD}
-                while bereits < bedarf:
-                    if "offen" not in self.plan:
-                        self.plan["offen"] = {}
-                    self.plan["offen"][tag] = offen_map[dienst]
-                    bereits += 1
+                # Fehlende Dienste korrekt in self.offen sammeln
+                fehlend = bedarf - bereits
+                if fehlend > 0:
+                    if tag not in self.offen:
+                        self.offen[tag] = []
+                    for _ in range(fehlend):
+                        self.offen[tag].append(offen_map[dienst])
 
     def _fill_frei(self):
         for ma in self.ma_liste:
@@ -394,9 +421,16 @@ class DienstplanGenerator:
                     1 for ma in self.ma_liste
                     if self.plan[ma.name].get(tag) == dienst
                 )
-                if ist < anzahl:
+                offen_count = sum(
+                    1 for d in self.offen.get(tag, [])
+                    if d == {Dienst.FRUEH: Dienst.OFFEN_FD,
+                             Dienst.SPAET: Dienst.OFFEN_SD,
+                             Dienst.NACHT: Dienst.OFFEN_ND}.get(dienst)
+                )
+                gesamt = ist + offen_count
+                if gesamt < anzahl:
                     self.violations.append(
-                        f"{tag.strftime('%d.%m')}: {dienst.value} nur {ist}/{anzahl} besetzt"
+                        f"{tag.strftime('%d.%m')}: {dienst.value} nur {gesamt}/{anzahl} besetzt"
                     )
         for ma in self.ma_liste:
             for tag in self.tage:

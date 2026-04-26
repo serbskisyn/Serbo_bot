@@ -27,19 +27,23 @@ _CREDENTIALS_FILE = os.path.join(
     os.path.dirname(__file__), "..", "..", "credentials.json"
 )
 
+# RGB-Farben für jede Schichtart (0.0–1.0)
+# Früh  = Weiß        | Spät   = Hellgrün   | Nacht = Dunkelorange
+# Frei  = Hellgrau    | Urlaub = Grün        | krank = Rot
+# BT    = Rosa        | Team   = Gelb         | OFFEN = Kräftiges Orange
 FARBEN_RGB: dict[str, tuple[float, float, float]] = {
-    "Früh":        (1.0,   1.0,   1.0),
-    "Spät":        (0.886, 0.937, 0.851),
-    "Nacht":       (0.773, 0.353, 0.067),
-    "Frei":        (0.847, 0.847, 0.847),
-    "Urlaub":      (0.573, 0.816, 0.314),
-    "krank":       (1.0,   0.0,   0.0),
-    "BT":          (0.918, 0.820, 0.863),
-    "Team":        (1.0,   0.851, 0.400),
-    "Supervision": (1.0,   0.851, 0.400),
-    "OFFEN-FD":    (1.0,   0.753, 0.0),
-    "OFFEN-SD":    (1.0,   0.753, 0.0),
-    "OFFEN-ND":    (1.0,   0.753, 0.0),
+    "Früh":        (1.000, 1.000, 1.000),   # Weiß
+    "Spät":        (0.698, 0.875, 0.604),   # Hellgrün (kräftiger als vorher)
+    "Nacht":       (0.773, 0.353, 0.067),   # Dunkelorange
+    "Frei":        (0.847, 0.847, 0.847),   # Hellgrau
+    "Urlaub":      (0.573, 0.816, 0.314),   # Grün
+    "krank":       (0.918, 0.196, 0.196),   # Rot (etwas weicher)
+    "BT":          (0.918, 0.820, 0.863),   # Rosa
+    "Team":        (1.000, 0.851, 0.400),   # Gelb
+    "Supervision": (1.000, 0.851, 0.400),   # Gelb
+    "OFFEN-FD":    (1.000, 0.600, 0.000),   # Kräftiges Orange
+    "OFFEN-SD":    (1.000, 0.600, 0.000),   # Kräftiges Orange
+    "OFFEN-ND":    (0.800, 0.200, 0.000),   # Dunkelrot-Orange
 }
 
 
@@ -131,11 +135,13 @@ def write_dienstplan(
         ws = sh.worksheet(tab_name)
         ws.clear()
     except gspread.WorksheetNotFound:
-        ws = sh.add_worksheet(title=tab_name, rows=50, cols=30)
+        ws = sh.add_worksheet(title=tab_name, rows=50, cols=35)
 
+    # Kopfzeile: Namen der Mitarbeiter
     header1 = ["Tag"] + mitarbeiter + ["offen", "Tag"]
     ws.update("A1", [header1])
 
+    # Leerzeile 2, Dienstart-Label in Zeile 3
     dienstart_row = [""] + ["Dienstart"] * len(mitarbeiter) + ["Dienstart", ""]
     ws.update("A3", [dienstart_row])
 
@@ -155,6 +161,7 @@ def write_dienstplan(
 
     ws.update("A4", data_rows)
 
+    # Hintergrundfarben setzen
     requests = []
     ma_col_map = {ma: i + 2 for i, ma in enumerate(mitarbeiter)}
     ma_col_map["offen"] = len(mitarbeiter) + 2
@@ -169,6 +176,11 @@ def write_dienstplan(
             val = d.value if d else "Frei"
             rgb = FARBEN_RGB.get(val, (1.0, 1.0, 1.0))
             requests.append(_bg_request(ws.id, sheet_row - 1, col_idx - 1, *rgb))
+
+        # Wochenende-Zeilen leicht grau hinterlegen (Spalte A und letzte Spalte)
+        if tag.weekday() >= 5:
+            for col in [0, len(mitarbeiter) + 2]:  # Spalte A und offen+1
+                requests.append(_bg_request(ws.id, sheet_row - 1, col, 0.95, 0.95, 0.95))
 
     if requests:
         sh.batch_update({"requests": requests})

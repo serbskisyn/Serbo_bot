@@ -149,8 +149,11 @@ def _parse_date(raw: str) -> date | None:
     return None
 
 
+# Nur FD/SD/ND zählen als planbare Stunden — BT/Team/Supervision/Urlaub/Krank nicht
+_PLANBARE_DIENSTE = {"Früh": 7.5, "Spät": 7.0, "Nacht": 9.0}
+
 def _stunden_fuer(dienst_val: str) -> float:
-    return {"Früh": 7.5, "Spät": 7.0, "Nacht": 9.0}.get(dienst_val, 0.0)
+    return _PLANBARE_DIENSTE.get(dienst_val, 0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -177,20 +180,13 @@ _MONATE_KURZ = ["", "Jan", "Feb", "Mär", "Apr", "Mai", "Jun",
 
 
 def _vormonat_prefixes(erster: date) -> list[str]:
-    """Gibt alle möglichen Präfixe für den Vormonat-Tab zurück.
-
-    Für erster = 2026-06-01  →  Vormonat = Mai 2026
-    Erzeugt z.B.: Mai_2026, Mai 2026, Mai-2026, May_2026, 05_2026, 5_2026 …
-    Zusätzlich werden auch VOLLSTÄNDIGE Tab-Namen (ohne Trennzeichen-Anforderung)
-    wie "Mai_2026" direkt als exaktes Match unterstützt.
-    """
+    """Gibt alle möglichen Präfixe für den Vormonat-Tab zurück."""
     if erster.month == 1:
         pm, py = 12, erster.year - 1
     else:
         pm, py = erster.month - 1, erster.year
 
     varianten = _MONATE_KURZ_VARIANTEN.get(pm, [_MONATE_KURZ[pm]])
-    # Langname ergänzen (z.B. "Mai", "April" …)
     monate_lang_de = ["", "Januar", "Februar", "März", "April", "Mai", "Juni",
                       "Juli", "August", "September", "Oktober", "November", "Dezember"]
     varianten = list(varianten) + [monate_lang_de[pm]]
@@ -223,7 +219,6 @@ def _find_previous_month_tabs(
             p_lower = prefix.lower().strip()
             if not p_lower:
                 continue
-            # Exakter Match ODER Tab-Titel beginnt mit Prefix gefolgt von "-"
             if title_lower == p_lower or title_lower.startswith(p_lower + "-"):
                 matches.append(ws)
                 break
@@ -259,10 +254,7 @@ def read_vormonat_differenz(
     erster_des_monats: date,
     mitarbeiter: list[str],
 ) -> dict[str, float]:
-    """Liest die 'Differenz'-Zeile aus dem Vormonats-Tab.
-
-    Gibt für jeden MA den Carry-over-Wert zurück (0.0 wenn nicht gefunden).
-    """
+    """Liest die 'Differenz'-Zeile aus dem Vormonats-Tab."""
     result = {ma: 0.0 for ma in mitarbeiter}
 
     tabs = _find_previous_month_tabs(sh, erster_des_monats)
@@ -285,7 +277,6 @@ def read_vormonat_differenz(
     if not rows:
         return result
 
-    # Kopfzeile: erste Zeile → MA-Namen (Spalte B onward)
     header = rows[0]
     ma_cols: dict[str, int] = {}
     for col_idx, cell in enumerate(header[1:], start=1):
@@ -297,7 +288,6 @@ def read_vormonat_differenz(
         logger.warning("Tab '%s': Keine MA-Namen in Kopfzeile — verwende 0", ws.title)
         return result
 
-    # Differenz-Zeile suchen (letzte Zeile mit Label "Differenz")
     differenz_row: list[str] | None = None
     for row in reversed(rows):
         if row and row[0].strip().lower() == "differenz":
@@ -367,7 +357,6 @@ def read_vormonat_plan(
             datum_raw = row[0].strip().lower()
             parsed_date: date | None = None
 
-            # Format: "Mo, 01. Mai." oder "Mo, 01. Mai" oder ähnlich
             for sep in [",", " "]:
                 parts = datum_raw.split(sep, 1)
                 if len(parts) == 2:
@@ -405,11 +394,6 @@ def read_mitarbeiter(
     spreadsheet_id: str,
     tab_name: str = "Mitarbeiterübersicht",
 ) -> list["Mitarbeiter"]:
-    """
-    Lädt Mitarbeiter aus dem Sheet.
-    MA mit Stunden = 0 (oder leer) → Springer:
-    Sie erscheinen im Plan (letzte Spalten), bekommen aber keine Schichten.
-    """
     from app.services.schedule_builder import Mitarbeiter
 
     client = _get_client()
@@ -666,9 +650,8 @@ def write_dienstplan(
     """
     Schreibt den Dienstplan ins Google Sheet.
 
-    Springer werden am ENDE der normalen Mitarbeiter-Spalten eingereiht
-    (kein separater Block). In ihren Zellen steht nur Urlaub/Krank,
-    sonst leer. Sie werden NICHT in Soll/Ist/Differenz einbezogen.
+    Springer werden am ENDE der normalen Mitarbeiter-Spalten eingereiht.
+    Sie werden NICHT in Soll/Ist/Differenz einbezogen.
     """
     erster     = tage[0]
     monat_name = _MONATE_LANG[erster.month]
@@ -680,16 +663,18 @@ def write_dienstplan(
     final_name, is_new = _resolve_tab_name(sh, base_name)
 
     springer = springer or []
-    # Reguläre MA zuerst, dann Springer — alle in einer Zeile
     ma_regulaer  = [ma for ma in mitarbeiter if ma not in springer]
-    ma_alle      = ma_regulaer + springer   # Reihenfolge: regulär → springer
+    ma_alle      = ma_regulaer + springer
     n_reg        = len(ma_regulaer)
     n_sp         = len(springer)
     n_alle       = len(ma_alle)
 
-    # Spalten: A=Tag | B…=alle MA | letzte=offen
-    col_offen    = n_alle + 2   # 1-basiert
+    col_offen    = n_alle + 2
     total_cols   = n_alle + 2
+
+    # Korrekte Zeilenzahl:
+    # Zeile 1: Header, Zeilen 2-3: Leer/Zusatz, Zeilen 4..4+n_tage-1: Daten
+    # Dann: Leerzeile + count_labels(7) + Leerzeile + ist + soll + diff = 12 Zeilen
     rows_needed  = 4 + len(tage) + 15
 
     if is_new:
@@ -711,20 +696,17 @@ def write_dienstplan(
         datum_str = f"{wt}, {tag.strftime('%d. %b.')}"
         row       = [datum_str]
 
-        # Reguläre MA
         for ma_name in ma_regulaer:
             d = plan.get(ma_name, {}).get(tag)
             row.append(d.value if d else "Frei")
 
-        # Springer: nur Urlaub/Krank anzeigen, sonst leer
         for sp_name in springer:
             d = plan.get(sp_name, {}).get(tag)
             if d and d.value in ABWESENHEITS_DIENSTE:
                 row.append(d.value)
             else:
-                row.append("")   # leer → manuell befüllbar
+                row.append("")
 
-        # offen
         offen_val = plan.get("offen", {}).get(tag)
         row.append(offen_val.value if offen_val else "")
 
@@ -739,7 +721,20 @@ def write_dienstplan(
     except Exception as e:
         logger.warning("Vormonat-Differenz nicht lesbar: %s — setze 0", e)
 
-    # --- Zusammenfassungs-Block (nur reguläre MA) ---
+    # --- Zusammenfassungs-Block ---
+    # Layout:
+    # summary_start+0:  FREI-Zeile
+    # summary_start+1:  Früh-Zeile
+    # summary_start+2:  Spät-Zeile
+    # summary_start+3:  Nacht-Zeile
+    # summary_start+4:  Teamsitzung
+    # summary_start+5:  BT
+    # summary_start+6:  Urlaub
+    # summary_start+7:  (Leerzeile)
+    # summary_start+8:  Dienstplanstd.
+    # summary_start+9:  Sollstd.
+    # summary_start+10: Differenz
+
     count_labels = ["FREI", "Früh", "Spät", "Nacht", "Teamsitzung", "BT", "Urlaub"]
     dienst_keys  = ["Frei", "Früh", "Spät", "Nacht", "Team", "BT", "Urlaub"]
 
@@ -753,14 +748,14 @@ def write_dienstplan(
                 if (ma_plan.get(tag) or _null_dienst()).value == key
             )
             row.append(count)
-        # Springer-Spalten leer in Zusammenfassung
         for _ in springer:
             row.append("")
         row.append("")   # offen
         summary_count_rows.append(row)
 
-    empty_row = [""] * (total_cols)
+    empty_row = [""] * total_cols
 
+    # Ist-Stunden: NUR FD (7.5h) + SD (7.0h) + ND (9.0h)
     ist_label = f"Dienstplanstd. {monat_name}"
     ist_row   = [ist_label]
     ist_values: dict[str, float] = {}
@@ -769,13 +764,13 @@ def write_dienstplan(
         ist = sum(
             _stunden_fuer(d.value)
             for tag in tage
-            if (d := ma_plan.get(tag)) is not None
+            if (d := ma_plan.get(tag)) is not None and d.value in _PLANBARE_DIENSTE
         )
         ist_values[ma_name] = round(ist, 1)
         ist_row.append(round(ist, 1) if ist > 0 else "")
     for _ in springer:
-        ist_row.append("")   # Springer leer
-    ist_row.append("")       # offen
+        ist_row.append("")
+    ist_row.append("")
 
     soll_label  = f"Sollstd. {monat_name}"
     soll_dict   = ma_soll or {}
@@ -802,21 +797,20 @@ def write_dienstplan(
         diff_row.append("")
     diff_row.append("")
 
-    data_end_row  = 4 + len(tage)
-    summary_start = data_end_row + 2
+    data_end_row  = 4 + len(tage)    # letzte Daten-Zeile (1-basiert)
+    summary_start = data_end_row + 2  # Leerzeile dazwischen
 
+    # Alle Summary-Zeilen in einem Batch schreiben
     all_summary = summary_count_rows + [empty_row, ist_row, soll_row, diff_row]
     ws.update(f"A{summary_start}", all_summary)
 
     # --- Formatierung ---
     requests = []
-    # Spalten-Map: MA-Name → 1-basierter col_idx
     ma_col_map: dict[str, int] = {}
     for i, ma_name in enumerate(ma_alle):
-        ma_col_map[ma_name] = i + 2   # A=1, MA ab B=2
+        ma_col_map[ma_name] = i + 2
     ma_col_map["offen"] = col_offen
 
-    # Wunsch-Notizen vorbereiten
     notiz_map: dict[tuple[int, int], str] = {}
     if wunsch_notizen:
         tage_idx = {t: i for i, t in enumerate(tage)}
@@ -835,11 +829,9 @@ def write_dienstplan(
                     + (" (erfüllt)" if erfuellt else " (nicht erfüllt)")
                 )
 
-    # Tagesdaten einfärben
     for row_idx, tag in enumerate(tage):
         sheet_row = 4 + row_idx
 
-        # Reguläre MA + offen
         for ma_name in list(ma_regulaer) + ["offen"]:
             col_idx = ma_col_map.get(ma_name)
             if col_idx is None:
@@ -852,7 +844,6 @@ def write_dienstplan(
             if notiz:
                 requests.append(_note_request(ws.id, sheet_row - 1, col_idx - 1, notiz))
 
-        # Springer: Farbe nur bei Urlaub/Krank, sonst weißer Hintergrund
         for sp_name in springer:
             col_idx = ma_col_map.get(sp_name)
             if col_idx is None:
@@ -862,19 +853,16 @@ def write_dienstplan(
             rgb = FARBEN_RGB.get(val, _SUMMARY_VALUE_BG)
             requests.append(_bg_request(ws.id, sheet_row - 1, col_idx - 1, *rgb))
 
-        # Wochenende: Tag-Spalte + offen grau
         if tag.weekday() >= 5:
             requests.append(_bg_request(ws.id, sheet_row - 1, 0, 0.90, 0.90, 0.90))
             requests.append(_bg_request(ws.id, sheet_row - 1, col_offen - 1, 0.90, 0.90, 0.90))
 
-    # Springer-Header (Zeile 1) leicht gelb hervorheben
     for sp_name in springer:
         col_idx = ma_col_map.get(sp_name)
         if col_idx is None:
             continue
         requests.append(_bg_request(ws.id, 0, col_idx - 1, *_SPRINGER_HEADER_BG))
 
-    # Zusammenfassung einfärben
     for s_row_offset, (label, key) in enumerate(zip(count_labels, dienst_keys)):
         row_0 = summary_start + s_row_offset - 1
         requests.append(_bg_request(ws.id, row_0, 0, *_SUMMARY_LABEL_BG))
@@ -882,9 +870,16 @@ def write_dienstplan(
         for col_idx in range(1, n_reg + 1):
             requests.append(_bg_request(ws.id, row_0, col_idx, *cell_rgb))
 
-    ist_row_0  = summary_start + len(count_labels) + 1 - 1
-    soll_row_0 = ist_row_0 + 1
-    diff_row_0 = ist_row_0 + 2
+    # Zeilen-Offsets für ist/soll/diff:
+    # summary_start ist 1-basiert, row_0 für Formatierung ist 0-basiert
+    # summary_count_rows = 7 Zeilen (index 0..6)
+    # empty_row           = 1 Zeile (index 7)
+    # ist_row             = index 8
+    # soll_row            = index 9
+    # diff_row            = index 10
+    ist_row_0  = (summary_start - 1) + 8   # 0-basiert
+    soll_row_0 = (summary_start - 1) + 9
+    diff_row_0 = (summary_start - 1) + 10
 
     for col_idx in range(n_reg + 1):
         requests.append(_bg_request(ws.id, ist_row_0,  col_idx, *_SUMMARY_IST_BG))

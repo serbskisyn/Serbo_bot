@@ -119,10 +119,16 @@ async def news_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
-    result = await fetch_news_for_user(user_id, force_refresh=force_refresh)
+    # fetch_news_for_user gibt list[str] zurück — ein Block pro Verein
+    blocks: list[str] = await fetch_news_for_user(user_id, force_refresh=force_refresh)
 
-    for chunk in _split_message(result):
-        await update.message.reply_text(chunk, parse_mode="Markdown", disable_web_page_preview=True)
+    for block in blocks:
+        for chunk in _split_message(block):
+            await update.message.reply_text(
+                chunk,
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
 
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

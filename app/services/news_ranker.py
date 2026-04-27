@@ -10,6 +10,7 @@ SIMILARITY_THRESHOLD = 0.25
 ENTITY_BOOST_WORDS   = 3
 MEDALS = ["🥇", "🥈", "🥉"]
 TOP_N_OUTPUT = 5
+MAX_SOURCES_PER_NEWS = 3  # Maximal 3 Quellen pro Nachricht anzeigen
 
 
 @dataclass
@@ -74,7 +75,7 @@ def _cluster(items: list, get_title) -> list[list[int]]:
 
 
 def rank_news(items: list[NewsItem], top_n: int = 15) -> list[RankedNews]:
-    """Clustert NewsItems nach Titel-Ähnlichkeit und gibt RankedNews mit allen Quellen/URLs zurück."""
+    """Clustert NewsItems nach Titel-Aehnlichkeit und gibt RankedNews mit allen Quellen/URLs zurueck."""
     if not items:
         return []
 
@@ -92,27 +93,30 @@ def rank_news(items: list[NewsItem], top_n: int = 15) -> list[RankedNews]:
     for cluster in clusters:
         cluster_items = [unique[i] for i in cluster]
 
-        # Alle Quellen + URLs des Clusters sammeln (dedupliziert nach URL)
-        seen_urls_cluster: set[str] = set()
+        # Quellen + URLs sammeln (dedupliziert nach URL UND Source-Domain)
+        seen_urls_cluster:   set[str] = set()
+        seen_domains_cluster: set[str] = set()
         all_sources: list[str] = []
         all_urls:    list[str] = []
         for item in cluster_items:
-            if item.url not in seen_urls_cluster:
+            domain = _domain(item.url)
+            if item.url not in seen_urls_cluster and domain not in seen_domains_cluster:
                 seen_urls_cluster.add(item.url)
+                seen_domains_cluster.add(domain)
                 all_sources.append(item.source)
                 all_urls.append(item.url)
 
-        best_title  = max(cluster_items, key=lambda x: len(x.title)).title
-        snippet     = _best_snippet([i.snippet for i in cluster_items])
-        dated       = [i for i in cluster_items if i.published]
-        pub_str     = max(dated, key=lambda x: x.published).published.strftime("%d.%m.%Y %H:%M") if dated else ""
+        best_title = max(cluster_items, key=lambda x: len(x.title)).title
+        snippet    = _best_snippet([i.snippet for i in cluster_items])
+        dated      = [i for i in cluster_items if i.published]
+        pub_str    = max(dated, key=lambda x: x.published).published.strftime("%d.%m.%Y %H:%M") if dated else ""
 
         ranked.append(RankedNews(
             title=best_title,
             snippet=snippet,
-            sources=all_sources,
-            urls=all_urls,
-            score=len(all_urls),  # Score = Anzahl unabhängiger Quellen
+            sources=all_sources[:MAX_SOURCES_PER_NEWS],
+            urls=all_urls[:MAX_SOURCES_PER_NEWS],
+            score=len(all_urls),
             published=pub_str,
         ))
 
@@ -131,13 +135,16 @@ def _re_cluster(items: list[RankedNews]) -> list[RankedNews]:
     for cluster in clusters:
         cluster_items = [items[i] for i in cluster]
 
-        seen_urls: set[str] = set()
+        seen_urls:    set[str] = set()
+        seen_domains: set[str] = set()
         all_sources: list[str] = []
         all_urls:    list[str] = []
         for item in cluster_items:
             for src, url in zip(item.sources, item.urls):
-                if url not in seen_urls:
+                domain = _domain(url)
+                if url not in seen_urls and domain not in seen_domains:
                     seen_urls.add(url)
+                    seen_domains.add(domain)
                     all_sources.append(src)
                     all_urls.append(url)
 
@@ -146,8 +153,8 @@ def _re_cluster(items: list[RankedNews]) -> list[RankedNews]:
         merged.append(RankedNews(
             title=best.title,
             snippet=best.snippet,
-            sources=all_sources,
-            urls=all_urls,
+            sources=all_sources[:MAX_SOURCES_PER_NEWS],
+            urls=all_urls[:MAX_SOURCES_PER_NEWS],
             score=len(all_urls),
             published=max(
                 (i.published for i in cluster_items if i.published),
@@ -186,7 +193,7 @@ async def enrich_ranked_news(ranked: list[RankedNews], club: str) -> list[Ranked
 
 
 def format_news_output(club_name: str, ranked: list[RankedNews]) -> str:
-    """Formatiert die Top-N News für Telegram. Quellen bei mehreren Quellen nummeriert untereinander."""
+    """Formatiert Top-N News fuer Telegram. Max 3 Quellen pro News, sauber nummeriert."""
     if not ranked:
         return f"⚽ *{club_name}* – Keine aktuellen News gefunden (letzte 48h)."
 
@@ -203,19 +210,20 @@ def format_news_output(club_name: str, ranked: list[RankedNews]) -> str:
         if news.published:
             lines.append(f"🕐 {news.published}")
 
-        # Quellen-Ausgabe: eine Quelle = einzelner Link, mehrere = nummeriert untereinander
+        # Nur valide nicht-Google-Redirect URLs anzeigen
         valid_pairs = [
             (url, src) for url, src in zip(news.urls, news.sources)
-            if url and url.startswith("http")
+            if url and url.startswith("http") and "news.google.com" not in url
         ]
+
         if not valid_pairs:
             pass
         elif len(valid_pairs) == 1:
-            url, _ = valid_pairs[0]
-            lines.append(f"[{_domain(url)}]({url})")
+            url, src = valid_pairs[0]
+            lines.append(f"[{src}]({url})")
         else:
-            for idx, (url, _) in enumerate(valid_pairs, start=1):
-                lines.append(f"{idx}. [{_domain(url)}]({url})")
+            for idx, (url, src) in enumerate(valid_pairs, start=1):
+                lines.append(f"{idx}. [{src}]({url})")
 
     return "\n".join(lines)
 

@@ -19,7 +19,7 @@ EXCLUDE_KEYWORDS = [
     "esport", "youth", "jugend", "amateure", "dritte liga", "regionalliga",
 ]
 
-# Club-spezifische Zusatz-Filter: Artikel die diese Keywords enthalten werden verworfen
+# Club-spezifische Zusatz-Filter
 CLUB_EXCLUDE_KEYWORDS: dict[str, list[str]] = {
     "borussia dortmund": [
         "bvb ii", "bvb 2", "dortmund ii", "dortmund 2",
@@ -31,7 +31,7 @@ CLUB_EXCLUDE_KEYWORDS: dict[str, list[str]] = {
     ],
 }
 
-# Allgemeine Fussball-RSS-Feeds (alle Clubs)
+# Allgemeine Fussball-RSS-Feeds
 RSS_FEEDS = [
     ("sportbild.de",    "http://sportbild.bild.de/rss/vw-fussball/vw-fussball-45036878,sort=1,view=rss2.sport.xml"),
     ("bild.de",         "http://www.bild.de/rss-feeds/rss-16725492,feed=sport.bild.html"),
@@ -139,6 +139,11 @@ def _is_homepage_url(url: str) -> bool:
         return False
 
 
+def _is_google_news_redirect(url: str) -> bool:
+    """Erkennt nicht aufgeloeste Google News Redirect-URLs (news.google.com/rss/articles/...)."""
+    return "news.google.com" in url
+
+
 def _parse_date(date_str: str | None) -> datetime | None:
     if not date_str:
         return None
@@ -156,6 +161,16 @@ def _parse_date(date_str: str | None) -> datetime | None:
         except ValueError:
             continue
     return None
+
+
+def _extract_google_source(item_elem) -> str:
+    """Extrahiert den echten Quell-Namen aus dem Google News RSS <source>-Tag."""
+    ns = {"news": "http://www.google.com/schemas/sitemap-news/0.9"}
+    # Versuche <source> direkt
+    source_tag = item_elem.find("source")
+    if source_tag is not None and source_tag.text:
+        return source_tag.text.strip()
+    return "Google News"
 
 
 def _club_keywords(club_name: str) -> list[str]:
@@ -240,6 +255,7 @@ async def _fetch_gnews(client: httpx.AsyncClient, club_name: str, extra_exclude:
                 continue
             if _is_homepage_url(art_url):
                 continue
+            # GNews liefert echte URLs — Google Redirect nicht nötig zu filtern
 
             items.append(NewsItem(title=title, url=art_url, source=source, published=pub, snippet=_truncate_words(snippet)))
     except Exception as e:
@@ -248,7 +264,9 @@ async def _fetch_gnews(client: httpx.AsyncClient, club_name: str, extra_exclude:
 
 
 def _parse_feed(xml_text: str, source_name: str, extra_exclude: list[str] | None = None) -> list[NewsItem]:
+    """Parst RSS-Feed. Fuer Google News RSS wird der echte Source-Name aus <source>-Tag extrahiert."""
     items = []
+    is_google_feed = source_name == "Google News"
     try:
         root    = ET.fromstring(xml_text)
         channel = root.find("channel") or root
@@ -267,7 +285,20 @@ def _parse_feed(xml_text: str, source_name: str, extra_exclude: list[str] | None
             if _is_homepage_url(url):
                 continue
 
-            items.append(NewsItem(title=title, url=url, source=source_name, published=pub, snippet=_truncate_words(snippet)))
+            # Google News Redirect-URLs überspringen — keine aufloesbaren Links
+            if _is_google_news_redirect(url):
+                continue
+
+            # Echten Source-Namen aus Google RSS <source>-Tag holen
+            actual_source = _extract_google_source(item) if is_google_feed else source_name
+
+            items.append(NewsItem(
+                title=title,
+                url=url,
+                source=actual_source,
+                published=pub,
+                snippet=_truncate_words(snippet),
+            ))
     except ET.ParseError as e:
         logger.warning(f"RSS Parse Fehler ({source_name}): {e}")
     return items
@@ -299,9 +330,9 @@ async def fetch_club_news(club_name: str) -> list[NewsItem]:
         all_items.extend(gnews_items)
         logger.info(f"GNews: {len(gnews_items)} Artikel fuer {club_name}")
 
-        # Layer 2: Google News RSS
+        # Layer 2: Google News RSS (max 2 Queries statt 3 — Transfer-Query bringt zu viele Duplikate)
         name_clean = re.sub(r"\(.*?\)", "", club_name).strip()
-        for query in [name_clean, f"{name_clean} Bundesliga", f"{name_clean} transfer"]:
+        for query in [name_clean, f"{name_clean} Bundesliga"]:
             items = await _fetch_rss(client, _google_news_url(query), "Google News", extra_exclude)
             all_items.extend(items)
 
@@ -323,12 +354,15 @@ async def fetch_club_news(club_name: str) -> list[NewsItem]:
         if any(kw in item.title.lower() or kw in item.snippet.lower() for kw in keywords)
     ]
 
-    # URL-Deduplizierung
-    seen: set[str] = set()
+    # URL-Deduplizierung (Titel-basiert als Fallback fuer Artikel ohne echte URL)
+    seen_urls:   set[str] = set()
+    seen_titles: set[str] = set()
     unique = []
     for item in filtered:
-        if item.url not in seen:
-            seen.add(item.url)
+        title_key = re.sub(r"\W+", "", item.title.lower())[:60]
+        if item.url not in seen_urls and title_key not in seen_titles:
+            seen_urls.add(item.url)
+            seen_titles.add(title_key)
             unique.append(item)
 
     logger.info(f"fetch_club_news({club_name}): {len(unique)} Artikel (von {len(all_items)} gesamt)")

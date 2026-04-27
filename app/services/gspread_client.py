@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import traceback
 from datetime import date
 from typing import TYPE_CHECKING
 
@@ -41,14 +42,12 @@ FARBEN_RGB: dict[str, tuple[float, float, float]] = {
     "OFFEN-ND":    (0.800, 0.200, 0.000),
 }
 
-# Monatsnamen → Nummer (für Spalte D im Wunschformular)
 _MONATE_MAP: dict[str, int] = {
     "januar": 1, "februar": 2, "märz": 3, "maerz": 3, "april": 4,
     "mai": 5, "juni": 6, "juli": 7, "august": 8, "september": 9,
     "oktober": 10, "november": 11, "dezember": 12,
 }
 
-# Normierung der Schichtbezeichnungen aus dem Formular
 _SCHICHT_MAP: dict[str, str] = {
     "fd": "Früh",        "frühdienst": "Früh",  "früh": "Früh",
     "frueh": "Früh",    "f": "Früh",
@@ -98,17 +97,53 @@ def _resolve_tab_name(sh: gspread.Spreadsheet, base_name: str) -> tuple[str, boo
 
 
 def _extract_vorname(full_name: str) -> str:
-    """'Jasmin Müller' → 'Jasmin'  |  'Jasmin' → 'Jasmin'"""
     return full_name.strip().split()[0].capitalize() if full_name.strip() else ""
 
+
+# ---------------------------------------------------------------------------
+# Debug-Helfer: zeigt rohe Sheet-Daten im Telegram-Chat
+# ---------------------------------------------------------------------------
+
+def debug_wunsch_sheet(
+    spreadsheet_id: str,
+    tab_name: str = "Form_Responses",
+    max_rows: int = 4,
+) -> str:
+    """
+    Gibt die ersten max_rows Zeilen des Tabs als lesbaren Text zurück.
+    Aufruf via /debugwunsch im Bot.
+    """
+    try:
+        client = _get_client()
+        sh = client.open_by_key(spreadsheet_id)
+        tab_titles = [ws.title for ws in sh.worksheets()]
+        lines = [f"📋 Verfügbare Tabs: {', '.join(tab_titles)}", ""]
+
+        if tab_name not in tab_titles:
+            lines.append(f"❌ Tab '{tab_name}' NICHT gefunden!")
+            return "\n".join(lines)
+
+        ws = sh.worksheet(tab_name)
+        rows = ws.get_all_values()
+        lines.append(f"✅ Tab '{tab_name}' — {len(rows)} Zeilen gesamt")
+        lines.append("")
+        for i, row in enumerate(rows[:max_rows]):
+            lines.append(f"--- Zeile {i} ---")
+            for j, cell in enumerate(row):
+                col_letter = chr(ord('A') + j) if j < 26 else f"COL{j}"
+                lines.append(f"  {col_letter}({j}): '{cell}'")
+        return "\n".join(lines)
+    except Exception:
+        return f"Fehler beim Debug:\n{traceback.format_exc()}"
+
+
+# ---------------------------------------------------------------------------
+# Abwesenheiten
+# ---------------------------------------------------------------------------
 
 def read_abwesenheiten(
     spreadsheet_id: str, tab_name: str = "Urlaub_CLI"
 ) -> list["Abwesenheit"]:
-    """
-    Liest Abwesenheiten aus Google Sheets.
-    Erwartet Spalten: Name | Art (U/F/K) | Datum (YYYY-MM-DD oder DD.MM.YYYY)
-    """
     from datetime import datetime
     from app.services.schedule_builder import Abwesenheit
 
@@ -140,6 +175,10 @@ def read_abwesenheiten(
     return result
 
 
+# ---------------------------------------------------------------------------
+# Wunschschichten
+# ---------------------------------------------------------------------------
+
 def read_wunschschichten(
     spreadsheet_id: str,
     tab_name: str = "Form_Responses",
@@ -147,39 +186,50 @@ def read_wunschschichten(
     jahr: int | None = None,
 ) -> list["Wunschschicht"]:
     """
-    Liest Wunschschichten aus dem Google-Formular-Tab "Form_Responses".
+    Liest Wunschschichten aus dem Google-Formular-Tab.
 
-    Spalten-Layout (0-basiert nach get_all_values):
-      A(0)  = Timestamp
-      B(1)  = Vor- und Nachname  → nur Vorname wird verwendet
-      C(2)  = E-Mail (ignoriert)
-      D(3)  = Monat als Text ("Januar", "Februar" …)  → Monatsfilter
-      E(4)  = Wunschtag 1  als Datum z.B. "22.01.2026" oder reine Zahl
-      F(5)  = Schichtart 1 z.B. "Frühdienst", "Spätdienst", "Frei"
-      G(6)  = Wunschtag 2
-      H(7)  = Schichtart 2
-      I(8)  = Wunschtag 3
-      J(9)  = Schichtart 3
-
-    Wenn monat/jahr übergeben werden, werden nur passende Zeilen eingelesen.
-    Mehrfacheintragungen pro Person: die LETZTE (neueste) Zeile gewinnt.
+    Spalten (0-basiert):
+      A(0) Timestamp | B(1) Name | C(2) E-Mail | D(3) Monat
+      E(4) Tag-1 | F(5) Schicht-1 | G(6) Tag-2 | H(7) Schicht-2 | I(8) Tag-3 | J(9) Schicht-3
     """
     from datetime import datetime
     from app.services.schedule_builder import Wunschschicht
 
     client = _get_client()
     sh = client.open_by_key(spreadsheet_id)
-    ws = sh.worksheet(tab_name)
-    rows = ws.get_all_values()
 
-    # Neueste Einträge pro Name gewinnen – rückwärts iterieren
-    # und nur erste Begegnung (= neueste) pro Person übernehmen
+    # Tab-Suche: exakt → case-insensitive
+    tab_titles = [t.title for t in sh.worksheets()]
+    logger.info("Verfügbare Tabs in Spreadsheet: %s", tab_titles)
+
+    ws = None
+    if tab_name in tab_titles:
+        ws = sh.worksheet(tab_name)
+    else:
+        for title in tab_titles:
+            if title.lower() == tab_name.lower():
+                ws = sh.worksheet(title)
+                logger.info("Tab gefunden als '%s' (case-insensitive)", title)
+                break
+
+    if ws is None:
+        raise ValueError(
+            f"Tab '{tab_name}' nicht gefunden. "
+            f"Vorhandene Tabs: {tab_titles}"
+        )
+
+    rows = ws.get_all_values()
+    logger.info("Tab '%s': %d Zeilen", tab_name, len(rows))
+    if rows:
+        logger.info("Header: %s", rows[0])
+    if len(rows) > 1:
+        logger.info("Erste Datenzeile: %s", rows[1])
+
     seen_names: set[str] = set()
-    # (name_vorname, [(tag_int, dienst_str), ...])
     kandidaten: list[tuple[str, list[tuple[int, str]]]] = []
 
-    for row in reversed(rows[1:]):   # Zeile 1 = Header
-        if len(row) <= 3 or not row[1].strip():
+    for row in reversed(rows[1:]):
+        if len(row) <= 1 or not row[1].strip():
             continue
 
         full_name = row[1].strip()
@@ -187,50 +237,60 @@ def read_wunschschichten(
         if not vorname:
             continue
 
-        # Monatsfilter über Spalte D
-        monat_raw = row[3].strip().lower() if len(row) > 3 else ""
+        # Monatsfilter via Spalte D
+        monat_raw   = row[3].strip().lower() if len(row) > 3 else ""
         zeile_monat = _MONATE_MAP.get(monat_raw)
         if monat is not None and zeile_monat != monat:
+            logger.debug(
+                "'%s': Monat '%s'(%s) != Zielmonat %d – übersprungen",
+                vorname, monat_raw, zeile_monat, monat,
+            )
             continue
 
-        # Neueste gewinnt: ersten Treffer pro Vorname behalten
         if vorname in seen_names:
             continue
         seen_names.add(vorname)
 
-        wunsch_paare_raw = [
+        rohe_paare = [
             (row[4] if len(row) > 4 else "", row[5] if len(row) > 5 else ""),
             (row[6] if len(row) > 6 else "", row[7] if len(row) > 7 else ""),
             (row[8] if len(row) > 8 else "", row[9] if len(row) > 9 else ""),
         ]
 
         paare: list[tuple[int, str]] = []
-        for tag_raw, art_raw in wunsch_paare_raw:
+        for tag_raw, art_raw in rohe_paare:
             tag_raw = tag_raw.strip()
             art_raw = art_raw.strip().lower()
             if not tag_raw:
                 continue
 
-            # Dienstart normieren
+            # Schichtart: exakter Match → Teilmatch
             dienst_str = _SCHICHT_MAP.get(art_raw)
             if dienst_str is None:
-                logger.debug("Unbekannte Schichtart '%s' für %s – übersprungen", art_raw, vorname)
+                for key, val in _SCHICHT_MAP.items():
+                    if len(key) > 1 and key in art_raw:
+                        dienst_str = val
+                        logger.info(
+                            "Teilmatch Schicht '%s' → '%s' für %s",
+                            art_raw, val, vorname,
+                        )
+                        break
+            if dienst_str is None:
+                logger.warning(
+                    "Schichtart '%s' für %s nicht erkennbar – übersprungen",
+                    art_raw, vorname,
+                )
                 continue
 
-            # Tag parsen: volles Datum ("22.01.2026") oder reine Zahl
+            # Tag parsen: reine Zahl ODER volles Datum
             tag_int: int | None = None
             try:
                 tag_int = int(tag_raw)
             except ValueError:
-                for fmt in ("%d.%m.%Y", "%d.%m.%y", "%Y-%m-%d"):
+                for fmt in ("%d.%m.%Y", "%d.%m.%y", "%Y-%m-%d", "%m/%d/%Y"):
                     try:
                         parsed = datetime.strptime(tag_raw, fmt)
-                        # Optionaler Jahres-/Monats-Check
                         if monat is not None and parsed.month != monat:
-                            logger.debug(
-                                "Wunsch %s %s: Datum %s passt nicht zu Monat %d – übersprungen",
-                                vorname, art_raw, tag_raw, monat,
-                            )
                             tag_int = None
                         else:
                             tag_int = parsed.day
@@ -239,26 +299,29 @@ def read_wunschschichten(
                         continue
 
             if tag_int is None:
-                logger.debug("Ungültiger Tag '%s' für %s – übersprungen", tag_raw, vorname)
+                logger.warning(
+                    "Tag '%s' für %s nicht parsebar – übersprungen", tag_raw, vorname
+                )
                 continue
 
             paare.append((tag_int, dienst_str))
+            logger.info("Wunsch: %s Tag=%d Schicht=%s", vorname, tag_int, dienst_str)
 
         if paare:
             kandidaten.append((vorname, paare))
 
-    # In Wunschschicht-Objekte umwandeln
     result: list[Wunschschicht] = []
     for vorname, paare in kandidaten:
         for tag_int, dienst_str in paare:
             result.append(Wunschschicht(name=vorname, tag=tag_int, dienst_str=dienst_str))
 
-    logger.info(
-        "Wunschschichten geladen: %d Einträge aus Tab '%s'",
-        len(result), tab_name,
-    )
+    logger.info("%d Wunschschichten aus Tab '%s' geladen", len(result), tab_name)
     return result
 
+
+# ---------------------------------------------------------------------------
+# Dienstplan schreiben
+# ---------------------------------------------------------------------------
 
 def write_dienstplan(
     spreadsheet_id: str,
@@ -268,37 +331,23 @@ def write_dienstplan(
     tab_name:       str | None = None,
     wunsch_notizen: dict[str, list[tuple[date, str, bool]]] | None = None,
 ) -> str:
-    """
-    Schreibt den Dienstplan in Google Sheets.
-
-    wunsch_notizen: ma_name → [(datum, dienst_str, erfuellt), ...]
-      Wird als Zell-Notiz in die jeweilige Mitarbeiterspalte geschrieben:
-      ✅ Wunsch: Spätdienst (erfüllt)  oder
-      ⚠️ Wunsch: Spätdienst (nicht erfüllt)
-    """
     monate_de = ["", "Jan", "Feb", "Mär", "Apr", "Mai", "Jun",
                  "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
-    erster = tage[0]
+    erster    = tage[0]
     base_name = tab_name if tab_name else f"{monate_de[erster.month]}_{erster.year}"
 
     client = _get_client()
-    sh = client.open_by_key(spreadsheet_id)
+    sh     = client.open_by_key(spreadsheet_id)
 
     final_name, is_new = _resolve_tab_name(sh, base_name)
 
     if is_new:
         ws = sh.add_worksheet(title=final_name, rows=50, cols=35)
-        logger.info("Neues Tabellenblatt angelegt: '%s'", final_name)
+        logger.info("Neues Tab angelegt: '%s'", final_name)
     else:
         ws = sh.worksheet(final_name)
         ws.clear()
-        logger.info("Vorhandenes Tabellenblatt gecleart: '%s'", final_name)
-
-    if final_name != base_name:
-        logger.info(
-            "Tab '%s' existierte bereits → neuer Plan als '%s' gespeichert",
-            base_name, final_name,
-        )
+        logger.info("Tab gecleart: '%s'", final_name)
 
     header1 = ["Tag"] + mitarbeiter + ["offen", "Tag"]
     ws.update("A1", [header1])
@@ -308,9 +357,9 @@ def write_dienstplan(
     wochentage_de = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
     data_rows = []
     for tag in tage:
-        wt = wochentage_de[tag.weekday()]
+        wt        = wochentage_de[tag.weekday()]
         datum_str = f"{wt}, {tag.strftime('%d. %b.')}"
-        row = [datum_str]
+        row       = [datum_str]
         for ma_name in mitarbeiter:
             d = plan.get(ma_name, {}).get(tag)
             row.append(d.value if d else "Frei")
@@ -321,12 +370,11 @@ def write_dienstplan(
 
     ws.update("A4", data_rows)
 
-    # ── Farben + Notizen ──────────────────────────────────────────────
-    requests = []
+    # Farben + Notizen
+    requests   = []
     ma_col_map = {ma: i + 2 for i, ma in enumerate(mitarbeiter)}
     ma_col_map["offen"] = len(mitarbeiter) + 2
 
-    # Notizen-Index aufbauen: (row_idx, col_idx) → notiz_text
     notiz_map: dict[tuple[int, int], str] = {}
     if wunsch_notizen:
         tage_idx = {t: i for i, t in enumerate(tage)}
@@ -338,7 +386,7 @@ def write_dienstplan(
                 row_offset = tage_idx.get(datum)
                 if row_offset is None:
                     continue
-                sheet_row = 4 + row_offset  # 1-basiert
+                sheet_row = 4 + row_offset
                 symbol = "✅" if erfuellt else "⚠️"
                 notiz_map[(sheet_row, col_idx)] = (
                     f"{symbol} Wunsch: {dienst_str}"
@@ -351,23 +399,18 @@ def write_dienstplan(
             col_idx = ma_col_map.get(ma_name)
             if col_idx is None:
                 continue
-            d = plan.get(ma_name, {}).get(tag)
+            d   = plan.get(ma_name, {}).get(tag)
             val = d.value if d else "Frei"
             rgb = FARBEN_RGB.get(val, (1.0, 1.0, 1.0))
             requests.append(_bg_request(ws.id, sheet_row - 1, col_idx - 1, *rgb))
 
-            # Notiz eintragen (falls vorhanden)
             notiz = notiz_map.get((sheet_row, col_idx))
             if notiz:
-                requests.append(
-                    _note_request(ws.id, sheet_row - 1, col_idx - 1, notiz)
-                )
+                requests.append(_note_request(ws.id, sheet_row - 1, col_idx - 1, notiz))
 
         if tag.weekday() >= 5:
             for col in [0, len(mitarbeiter) + 2]:
-                requests.append(
-                    _bg_request(ws.id, sheet_row - 1, col, 0.95, 0.95, 0.95)
-                )
+                requests.append(_bg_request(ws.id, sheet_row - 1, col, 0.95, 0.95, 0.95))
 
     if requests:
         sh.batch_update({"requests": requests})
@@ -376,17 +419,13 @@ def write_dienstplan(
     return final_name
 
 
-def _bg_request(
-    sheet_id: int, row: int, col: int, r: float, g: float, b: float
-) -> dict:
+def _bg_request(sheet_id: int, row: int, col: int, r: float, g: float, b: float) -> dict:
     return {
         "updateCells": {
             "range": {
                 "sheetId": sheet_id,
-                "startRowIndex": row,
-                "endRowIndex": row + 1,
-                "startColumnIndex": col,
-                "endColumnIndex": col + 1,
+                "startRowIndex": row, "endRowIndex": row + 1,
+                "startColumnIndex": col, "endColumnIndex": col + 1,
             },
             "rows": [{"values": [{"userEnteredFormat": {
                 "backgroundColor": {"red": r, "green": g, "blue": b}
@@ -397,15 +436,12 @@ def _bg_request(
 
 
 def _note_request(sheet_id: int, row: int, col: int, note: str) -> dict:
-    """Setzt eine Zell-Notiz (nicht Kommentar) via batchUpdate."""
     return {
         "updateCells": {
             "range": {
                 "sheetId": sheet_id,
-                "startRowIndex": row,
-                "endRowIndex": row + 1,
-                "startColumnIndex": col,
-                "endColumnIndex": col + 1,
+                "startRowIndex": row, "endRowIndex": row + 1,
+                "startColumnIndex": col, "endColumnIndex": col + 1,
             },
             "rows": [{"values": [{"note": note}]}],
             "fields": "note",

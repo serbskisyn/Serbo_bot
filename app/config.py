@@ -19,7 +19,7 @@ ALLOWED_USER_IDS: set[int] = set(
 RATE_LIMIT_MAX_REQUESTS: int = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", 10))
 RATE_LIMIT_WINDOW_SECONDS: int = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", 60))
 
-# ── News Cache ────────────────────────────────────────────────────────────────
+# ── News Cache ────────────────────────────────────────────────────────────────────────────────
 NEWS_CACHE_DB_PATH: str = os.getenv("NEWS_CACHE_DB_PATH", "app/data/news_cache.db")
 
 _raw_favorites = os.getenv("NEWS_FAVORITE_CLUBS", "Borussia Dortmund,Dynamo Dresden")
@@ -32,7 +32,22 @@ NEWS_SCHEDULER_JITTER_MINUTES: int = int(os.getenv("NEWS_SCHEDULER_JITTER_MINUTE
 NEWS_CACHE_MAX_AGE_HOURS: int = int(os.getenv("NEWS_CACHE_MAX_AGE_HOURS", 48))
 NEWS_STALE_LABEL_HOURS: int = int(os.getenv("NEWS_STALE_LABEL_HOURS", 4))
 
-# ── Google Sheets / Dienstplan ────────────────────────────────────────────────
+# ── Daily News Push ──────────────────────────────────────────────────────────────────────────
+NEWS_DAILY_PUSH_HOUR:   int = int(os.getenv("NEWS_DAILY_PUSH_HOUR",   6))
+NEWS_DAILY_PUSH_MINUTE: int = int(os.getenv("NEWS_DAILY_PUSH_MINUTE", 30))
+
+# Kommaseparierte Liste von Telegram-User-IDs die den täglichen Push erhalten
+# Standard: gleiche IDs wie ALLOWED_USER_IDS (alle autorisierten User)
+_push_ids_raw = os.getenv("NEWS_DAILY_PUSH_USER_IDS", "")
+if _push_ids_raw.strip():
+    NEWS_DAILY_PUSH_USER_IDS: list[int] = [
+        int(x) for x in _push_ids_raw.split(",") if x.strip()
+    ]
+else:
+    # Fallback: alle ALLOWED_USER_IDS bekommen den Push
+    NEWS_DAILY_PUSH_USER_IDS: list[int] = list(ALLOWED_USER_IDS)
+
+# ── Google Sheets / Dienstplan ───────────────────────────────────────────────────────────────────
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 
 # Dienstplan-Sheet (Tabs: Urlaub_CLI, 2026, Info)

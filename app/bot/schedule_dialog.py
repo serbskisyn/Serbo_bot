@@ -21,6 +21,7 @@ from app.services.schedule_builder import (
 )
 from app.config import (
     SCHEDULE_URLAUB_SHEET_ID,
+    SCHEDULE_WUNSCH_SHEET_ID,
     SCHEDULE_OUTPUT_SHEET_ID,
 )
 
@@ -159,18 +160,8 @@ async def handle_kranktage(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 def _build_wunsch_notizen(
     generator: DienstplanGenerator,
 ) -> dict[str, list[tuple[date, str, bool]]]:
-    """
-    Erstellt den Notizen-Dict für write_dienstplan().
-
-    ma_name → [(datum, dienst_str, erfuellt), ...]
-    erfuellt=True  wenn der Plan an diesem Tag genau diese Schicht zeigt
-    erfuellt=False wenn eine Violation existiert
-    """
     from app.services.schedule_builder import Dienst
-
     notizen: dict[str, list[tuple[date, str, bool]]] = {}
-    violations_text = " ".join(generator.violations)
-
     for ma_name, wuensche in generator._wunsch_index.items():
         for wdatum, wdienst in wuensche:
             geplant = generator.plan.get(ma_name, {}).get(wdatum)
@@ -205,8 +196,8 @@ async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         from app.services.gspread_client import read_wunschschichten
         wunschschichten = read_wunschschichten(
-            spreadsheet_id=SCHEDULE_URLAUB_SHEET_ID,
-            tab_name="Form_Responses",
+            spreadsheet_id=SCHEDULE_WUNSCH_SHEET_ID,
+            tab_name="Formularantworten 1",
             monat=monat,
             jahr=jahr,
         )
@@ -275,10 +266,7 @@ async def handle_bestaetigung(update: Update, context: ContextTypes.DEFAULT_TYPE
         from app.services.gspread_client import write_dienstplan
         gen  = context.user_data["gen"]
         plan = context.user_data["plan"]
-
-        # Wunsch-Notizen aufbauen
         wunsch_notizen = _build_wunsch_notizen(gen)
-
         tab = write_dienstplan(
             spreadsheet_id=SCHEDULE_OUTPUT_SHEET_ID,
             plan=plan,

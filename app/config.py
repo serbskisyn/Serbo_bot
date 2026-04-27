@@ -20,33 +20,35 @@ RATE_LIMIT_MAX_REQUESTS: int = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", 10))
 RATE_LIMIT_WINDOW_SECONDS: int = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", 60))
 
 # ── News Cache ────────────────────────────────────────────────────────────────
-
-# SQLite-Datei fuer den News-Cache
 NEWS_CACHE_DB_PATH: str = os.getenv("NEWS_CACHE_DB_PATH", "app/data/news_cache.db")
 
-# Clubs die IMMER im Hintergrund gecacht werden (kommagetrennt in .env)
 _raw_favorites = os.getenv("NEWS_FAVORITE_CLUBS", "Borussia Dortmund,Dynamo Dresden")
 NEWS_FAVORITE_CLUBS: list[str] = [
     c.strip() for c in _raw_favorites.split(",") if c.strip()
 ]
 
-# Scheduler: Basis-Intervall zwischen Refreshes in Minuten
 NEWS_SCHEDULER_BASE_MINUTES: int = int(os.getenv("NEWS_SCHEDULER_BASE_MINUTES", 45))
-
-# Scheduler: Jitter +- Minuten (zufaellige Abweichung vom Basis-Intervall)
 NEWS_SCHEDULER_JITTER_MINUTES: int = int(os.getenv("NEWS_SCHEDULER_JITTER_MINUTES", 15))
-
-# Cache gilt als abgelaufen nach X Stunden (kein Stale-Label, echter Fallback auf Live-Fetch)
 NEWS_CACHE_MAX_AGE_HOURS: int = int(os.getenv("NEWS_CACHE_MAX_AGE_HOURS", 48))
-
-# Ab X Stunden wird das "veraltet"-Label angezeigt (trotzdem aus Cache geliefert)
 NEWS_STALE_LABEL_HOURS: int = int(os.getenv("NEWS_STALE_LABEL_HOURS", 4))
 
 # ── Google Sheets / Dienstplan ────────────────────────────────────────────────
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
-SCHEDULE_URLAUB_SHEET_ID    = os.getenv("SCHEDULE_URLAUB_SHEET_ID",  "1M9WTVPlP-ivvmW_SsPSzQLIHBDwnGdFyoqgeHR7QUZE")
-SCHEDULE_KRANK_SHEET_ID     = os.getenv("SCHEDULE_KRANK_SHEET_ID",   "")
-SCHEDULE_OUTPUT_SHEET_ID    = os.getenv("SCHEDULE_OUTPUT_SHEET_ID",  "1nMF24sf-HNvgJRMvQeZ3lTSf6qiGTvsHXedWjFpckkQ")
+
+# Dienstplan-Sheet (Urlaub_CLI, 2026, Info)
+SCHEDULE_URLAUB_SHEET_ID = os.getenv(
+    "SCHEDULE_URLAUB_SHEET_ID", "1M9WTVPlP-ivvmW_SsPSzQLIHBDwnGdFyoqgeHR7QUZE"
+)
+
+# Wunsch-Sheet (Formularantworten 1)
+SCHEDULE_WUNSCH_SHEET_ID = os.getenv(
+    "SCHEDULE_WUNSCH_SHEET_ID", "1a1IcfdnfyU-MdLjzCajC2LH5thbHw5WTN9Q1O1kInt8"
+)
+
+SCHEDULE_KRANK_SHEET_ID  = os.getenv("SCHEDULE_KRANK_SHEET_ID", "")
+SCHEDULE_OUTPUT_SHEET_ID = os.getenv(
+    "SCHEDULE_OUTPUT_SHEET_ID", "1nMF24sf-HNvgJRMvQeZ3lTSf6qiGTvsHXedWjFpckkQ"
+)
 
 
 def validate_config():

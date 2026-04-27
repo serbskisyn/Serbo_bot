@@ -8,25 +8,20 @@ import logging
 from telegram import Update
 from telegram.ext import CommandHandler, ContextTypes
 
-from app.config import SCHEDULE_URLAUB_SHEET_ID
+from app.config import SCHEDULE_WUNSCH_SHEET_ID
 
 logger = logging.getLogger(__name__)
 
 
 async def cmd_debugwunsch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Zeigt alle verfügbaren Tabs im Wunsch-Sheet und die Roh-Daten
-    der ersten 3 Zeilen des erkannten Tabs.
-    """
-    await update.message.reply_text("🔍 Lese Sheet-Struktur …")
+    await update.message.reply_text("🔍 Lese Wunsch-Sheet-Struktur …")
     try:
         from app.services.gspread_client import debug_wunsch_sheet
         result = debug_wunsch_sheet(
-            spreadsheet_id=SCHEDULE_URLAUB_SHEET_ID,
-            tab_name="Form_Responses",
+            spreadsheet_id=SCHEDULE_WUNSCH_SHEET_ID,
+            tab_name="Formularantworten 1",
             max_rows=3,
         )
-        # In Blöcke aufteilen falls zu lang
         for chunk in _chunk(result, 3800):
             await update.message.reply_text(f"```\n{chunk}\n```", parse_mode="Markdown")
     except Exception as e:

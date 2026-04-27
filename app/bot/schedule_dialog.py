@@ -43,7 +43,7 @@ MITARBEITER_FALLBACK: dict[str, float] = {
     "Svitlana":  7.0,
     "Elvira":    7.0,
     "Romy":      6.0,
-    "Annika":    7.0,  # 35h / 5
+    "Annika":    7.0,
 }
 
 MONATE_DE = {
@@ -181,7 +181,7 @@ async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     await update.message.reply_text("⏳ Lade Mitarbeiter, Urlaubsdaten, Krankenstand und Wunschschichten …")
 
-    # ── Mitarbeiter aus Sheet laden ───────────────────────────────────
+    # ── Mitarbeiter aus Sheet laden ───────────────────────────────────────────
     ma_liste: list[Mitarbeiter] = []
     try:
         from app.services.gspread_client import read_mitarbeiter
@@ -204,7 +204,23 @@ async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     abwesenheiten: list[Abwesenheit] = list(kranktage)
 
-    # ── Urlaub ──────────────────────────────────────────────────────
+    # ── Vormonats-Plan laden (für _init_aus_vormonat + Zusammenfassung) ───────
+    vormonat_plan: dict = {}
+    erster_des_monats = date(jahr, monat, 1)
+    try:
+        from app.services.gspread_client import read_vormonat_plan
+        vormonat_plan = read_vormonat_plan(SCHEDULE_OUTPUT_SHEET_ID, erster_des_monats)
+        if vormonat_plan:
+            await update.message.reply_text(
+                f"🗂️ Vormonats-Plan geladen ({len(vormonat_plan)} MA)."
+            )
+        else:
+            await update.message.reply_text("ℹ️ Kein Vormonats-Tab gefunden — Plan ohne Vormonat.")
+    except Exception as e:
+        logger.warning("Vormonats-Plan nicht ladbar: %s", e)
+        await update.message.reply_text(f"⚠️ Vormonats-Plan nicht ladbar: {e}")
+
+    # ── Urlaub ──────────────────────────────────────────────────
     try:
         from app.services.gspread_client import read_abwesenheiten
         ab_urlaub = read_abwesenheiten(SCHEDULE_URLAUB_SHEET_ID, "Urlaub_CLI")
@@ -214,7 +230,7 @@ async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.warning("Urlaub laden fehlgeschlagen: %s", e)
         await update.message.reply_text(f"⚠️ Urlaubsdaten nicht ladbar: {e}")
 
-    # ── Krankenstand aus Sheet ───────────────────────────────────────
+    # ── Krankenstand aus Sheet ──────────────────────────────────────────
     if SCHEDULE_KRANK_SHEET_ID:
         try:
             from app.services.gspread_client import read_krankenstand
@@ -232,7 +248,7 @@ async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE
             logger.warning("Krankenstand laden fehlgeschlagen: %s", e)
             await update.message.reply_text(f"⚠️ Krankenstand nicht ladbar: {e}")
 
-    # ── Wunschschichten ────────────────────────────────────────────────
+    # ── Wunschschichten ──────────────────────────────────────────────
     wunschschichten: list[Wunschschicht] = []
     try:
         from app.services.gspread_client import read_wunschschichten
@@ -244,7 +260,6 @@ async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE
             bekannte_namen=bekannte_namen,
         )
         if wunschschichten:
-            # Eindeutige Personen mit Wünschen
             personen = list({w.name for w in wunschschichten})
             await update.message.reply_text(
                 f"🙋 {len(wunschschichten)} Wunschschichten von "
@@ -256,13 +271,14 @@ async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.warning("Wunschschichten laden fehlgeschlagen: %s", e)
         await update.message.reply_text(f"⚠️ Wunschschichten nicht ladbar: {e}")
 
-    # ── Plan generieren ────────────────────────────────────────────────
+    # ── Plan generieren ───────────────────────────────────────────────
     try:
         gen = DienstplanGenerator(
             mitarbeiter_liste=ma_liste,
             abwesenheiten=abwesenheiten,
             jahr=jahr,
             monat=monat,
+            vormonat_plan=vormonat_plan,
             wunschschichten=wunschschichten,
         )
         plan   = gen.generate()
@@ -295,12 +311,20 @@ async def handle_bestaetigung(update: Update, context: ContextTypes.DEFAULT_TYPE
         gen  = context.user_data["gen"]
         plan = context.user_data["plan"]
         wunsch_notizen = _build_wunsch_notizen(gen)
+
+        # Soll-Stunden aus Generator-States bauen
+        ma_soll = {
+            ma.name: gen.states[ma.name].ma.soll_stunden
+            for ma in gen.ma_liste
+        }
+
         tab = write_dienstplan(
             spreadsheet_id=SCHEDULE_OUTPUT_SHEET_ID,
             plan=plan,
             mitarbeiter=[ma.name for ma in gen.ma_liste],
             tage=gen.tage,
             wunsch_notizen=wunsch_notizen,
+            ma_soll=ma_soll,
         )
         await update.message.reply_text(
             f"✅ Dienstplan in Tab *{tab}* geschrieben!\n"

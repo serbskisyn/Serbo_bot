@@ -1,10 +1,9 @@
 name: Tests
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  schedule:
+    - cron: '0 0 * * *'  # täglich um 00:00 UTC
+  workflow_dispatch:      # manueller Start weiterhin möglich
 
 jobs:
   test:

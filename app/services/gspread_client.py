@@ -13,7 +13,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 if TYPE_CHECKING:
-    from app.services.schedule_builder import Abwesenheit, Dienst
+    from app.services.schedule_builder import Abwesenheit, Dienst, Wunschschicht
 
 logger = logging.getLogger(__name__)
 
@@ -22,36 +22,28 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-# Pfad zur credentials.json Datei (Fallback wenn ENV-Variable kaputt)
 _CREDENTIALS_FILE = os.path.join(
     os.path.dirname(__file__), "..", "..", "credentials.json"
 )
 
-# RGB-Farben für jede Schichtart (0.0–1.0)
 FARBEN_RGB: dict[str, tuple[float, float, float]] = {
-    "Früh":        (1.000, 1.000, 1.000),   # Weiß
-    "Spät":        (0.698, 0.875, 0.604),   # Hellgrün
-    "Nacht":       (0.773, 0.353, 0.067),   # Dunkelorange
-    "Frei":        (0.847, 0.847, 0.847),   # Hellgrau
-    "Urlaub":      (0.573, 0.816, 0.314),   # Grün
-    "krank":       (0.918, 0.196, 0.196),   # Rot
-    "BT":          (0.918, 0.820, 0.863),   # Rosa
-    "Team":        (1.000, 0.851, 0.400),   # Gelb
-    "Supervision": (1.000, 0.851, 0.400),   # Gelb
-    "OFFEN-FD":    (1.000, 0.600, 0.000),   # Kräftiges Orange
-    "OFFEN-SD":    (1.000, 0.600, 0.000),   # Kräftiges Orange
-    "OFFEN-ND":    (0.800, 0.200, 0.000),   # Dunkelrot-Orange
+    "Früh":        (1.000, 1.000, 1.000),
+    "Spät":        (0.698, 0.875, 0.604),
+    "Nacht":       (0.773, 0.353, 0.067),
+    "Frei":        (0.847, 0.847, 0.847),
+    "Urlaub":      (0.573, 0.816, 0.314),
+    "krank":       (0.918, 0.196, 0.196),
+    "BT":          (0.918, 0.820, 0.863),
+    "Team":        (1.000, 0.851, 0.400),
+    "Supervision": (1.000, 0.851, 0.400),
+    "OFFEN-FD":    (1.000, 0.600, 0.000),
+    "OFFEN-SD":    (1.000, 0.600, 0.000),
+    "OFFEN-ND":    (0.800, 0.200, 0.000),
 }
 
 
 def _get_client() -> gspread.Client:
-    """Erstellt einen gspread-Client.
-    Reihenfolge:
-    1. GOOGLE_SERVICE_ACCOUNT_JSON Umgebungsvariable (JSON-String)
-    2. credentials.json Datei im Projektroot
-    """
     json_str = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
-
     if json_str:
         try:
             info = json.loads(json_str)
@@ -75,23 +67,9 @@ def _get_client() -> gspread.Client:
 
 
 def _resolve_tab_name(sh: gspread.Spreadsheet, base_name: str) -> tuple[str, bool]:
-    """Gibt den finalen Tab-Namen zurück und ob er neu angelegt werden muss.
-
-    Logik:
-    - Existiert base_name noch nicht  → (base_name, neu=True)
-    - Existiert base_name bereits     → versuche base_name-1, base_name-2, …
-      bis ein freier Name gefunden wird
-
-    Beispiel:
-      Mai_2026 existiert       → Mai_2026-1
-      Mai_2026-1 existiert     → Mai_2026-2
-      Mai_2026-2 existiert     → Mai_2026-3  usw.
-    """
     vorhandene = {ws.title for ws in sh.worksheets()}
-
     if base_name not in vorhandene:
         return base_name, True
-
     counter = 1
     while True:
         candidate = f"{base_name}-{counter}"
@@ -136,6 +114,97 @@ def read_abwesenheiten(spreadsheet_id: str, tab_name: str = "Urlaub_CLI") -> lis
     return result
 
 
+def read_wunschschichten(
+    spreadsheet_id: str,
+    tab_name: str = "Wunschschichten",
+) -> list["Wunschschicht"]:
+    """
+    Liest Wunschschichten aus Google Sheets.
+
+    Spalten-Layout (1-basiert):
+      B  = Name des Mitarbeiters
+      E  = Wunschtag 1  (Zahl: Tag des Monats, z.B. "5")
+      F  = Schichtart 1 ("FD", "SD", "ND" oder "Früh", "Spät", "Nacht")
+      G  = Wunschtag 2
+      H  = Schichtart 2
+      I  = Wunschtag 3
+      J  = Schichtart 3
+
+    Leere Zellen werden übersprungen.
+    Gibt eine Liste von Wunschschicht-Objekten zurück.
+    """
+    from datetime import datetime
+    from app.services.schedule_builder import Wunschschicht
+
+    # Normierung: verschiedene Schreibweisen → interner Dienst-String
+    SCHICHT_MAP = {
+        "fd": "Früh", "früh": "Früh", "frueh": "Früh", "f": "Früh",
+        "sd": "Spät", "spät": "Spät", "spaet": "Spät", "s": "Spät",
+        "nd": "Nacht", "nacht": "Nacht", "n": "Nacht",
+    }
+
+    client = _get_client()
+    sh = client.open_by_key(spreadsheet_id)
+    ws = sh.worksheet(tab_name)
+    rows = ws.get_all_values()
+
+    result: list[Wunschschicht] = []
+
+    # Spalten-Indizes (0-basiert): B=1, E=4, F=5, G=6, H=7, I=8, J=9
+    COL_NAME  = 1
+    WUNSCH_PAARE = [(4, 5), (6, 7), (8, 9)]  # (tag_col, art_col)
+
+    for row_num, row in enumerate(rows[1:], start=2):  # Zeile 1 = Header
+        if len(row) <= COL_NAME:
+            continue
+        name = row[COL_NAME].strip()
+        if not name:
+            continue
+
+        for tag_col, art_col in WUNSCH_PAARE:
+            if len(row) <= art_col:
+                continue
+            tag_raw = row[tag_col].strip()
+            art_raw = row[art_col].strip().lower()
+            if not tag_raw or not art_raw:
+                continue
+
+            # Tag parsen: entweder reine Zahl ("5") oder Datum ("05.05.2026")
+            tag_int: int | None = None
+            try:
+                tag_int = int(tag_raw)
+            except ValueError:
+                for fmt in ("%d.%m.%Y", "%d.%m.%y", "%Y-%m-%d"):
+                    try:
+                        tag_int = datetime.strptime(tag_raw, fmt).day
+                        break
+                    except ValueError:
+                        continue
+
+            if tag_int is None:
+                logger.warning(
+                    "Wunschschicht Zeile %d: Ungültiger Tag '%s' für %s – übersprungen",
+                    row_num, tag_raw, name,
+                )
+                continue
+
+            dienst_str = SCHICHT_MAP.get(art_raw)
+            if dienst_str is None:
+                logger.warning(
+                    "Wunschschicht Zeile %d: Unbekannte Schichtart '%s' für %s – übersprungen",
+                    row_num, art_raw, name,
+                )
+                continue
+
+            result.append(Wunschschicht(name=name, tag=tag_int, dienst_str=dienst_str))
+
+    logger.info(
+        "Wunschschichten geladen: %d Einträge aus Tab '%s'",
+        len(result), tab_name,
+    )
+    return result
+
+
 def write_dienstplan(
     spreadsheet_id: str,
     plan:           dict[str, dict[date, "Dienst"]],
@@ -146,20 +215,17 @@ def write_dienstplan(
     monate_de = ["", "Jan", "Feb", "Mär", "Apr", "Mai", "Jun",
                  "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
     erster = tage[0]
-
     base_name = tab_name if tab_name else f"{monate_de[erster.month]}_{erster.year}"
 
     client = _get_client()
     sh = client.open_by_key(spreadsheet_id)
 
-    # Finalen Tab-Namen ermitteln: neues Blatt wenn Monat bereits existiert
     final_name, is_new = _resolve_tab_name(sh, base_name)
 
     if is_new:
         ws = sh.add_worksheet(title=final_name, rows=50, cols=35)
         logger.info("Neues Tabellenblatt angelegt: '%s'", final_name)
     else:
-        # Sollte durch _resolve_tab_name nie eintreten, Fallback-Sicherheit
         ws = sh.worksheet(final_name)
         ws.clear()
         logger.info("Vorhandenes Tabellenblatt gecleart: '%s'", final_name)
@@ -170,10 +236,8 @@ def write_dienstplan(
             base_name, final_name,
         )
 
-    # Kopfzeile
     header1 = ["Tag"] + mitarbeiter + ["offen", "Tag"]
     ws.update("A1", [header1])
-
     dienstart_row = [""] + ["Dienstart"] * len(mitarbeiter) + ["Dienstart", ""]
     ws.update("A3", [dienstart_row])
 
@@ -193,7 +257,6 @@ def write_dienstplan(
 
     ws.update("A4", data_rows)
 
-    # Hintergrundfarben setzen
     requests = []
     ma_col_map = {ma: i + 2 for i, ma in enumerate(mitarbeiter)}
     ma_col_map["offen"] = len(mitarbeiter) + 2

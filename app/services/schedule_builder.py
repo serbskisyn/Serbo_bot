@@ -5,11 +5,16 @@ Ziel: Jeder Tag wird mit je 2x Früh (FD), 2x Spät (SD), 2x Nacht (ND) besetzt.
 Frei/Urlaub/Krank werden berücksichtigt. Unbesetzte Dienste werden als
 OFFEN-FD / OFFEN-SD / OFFEN-ND ausgewiesen.
 
+Wunschschichten: Jeder MA kann bis zu 3 Wünsche (Tag + Schichtart) eintragen.
+Wünsche werden mit höchster Priorität eingeplant, sofern keine harte Regel
+(Gesperrt, Spät→Früh, max. Konsekutiv) verletzt wird. Kann ein Wunsch nicht
+erfüllt werden, wird er als Violation ausgewiesen.
+
 Regeln:
 - Max. 5 aufeinanderfolgende Arbeitstage
 - Kein Früh direkt nach Spät (Vortag)
 - Max. 3 gleiche Schichten in Folge (Früh oder Spät)
-- Nach Nachtblock: mind. 2 Freitag-Puffer
+- Nach Nachtblock: mind. 2 Freitag-Puffer (soft, überschreibbar)
 - Mindestens ein freies Wochenende pro Monat
 """
 from __future__ import annotations
@@ -41,6 +46,7 @@ class Dienst(str, Enum):
     OFFEN_SD    = "OFFEN-SD"
     OFFEN_ND    = "OFFEN-ND"
 
+
 SCHICHT_STUNDEN: dict[Dienst, float] = {
     Dienst.FRUEH: 7.5,
     Dienst.SPAET: 7.0,
@@ -71,6 +77,7 @@ FEIERTAGE_BERLIN: dict[tuple[int, int], str] = {
     (12, 25): "1. Weihnachtstag",
     (12, 26): "2. Weihnachtstag",
 }
+
 
 def get_feiertage(jahr: int, monat: int) -> list[date]:
     result = []
@@ -109,6 +116,29 @@ class Abwesenheit:
 
 
 @dataclass
+class Wunschschicht:
+    """
+    Wunsch eines Mitarbeiters für einen bestimmten Tag und eine Schichtart.
+
+    tag:        Tag des Monats als Integer (z.B. 5 = 5. des Monats)
+    dienst_str: "Früh", "Spät" oder "Nacht"
+    """
+    name:       str
+    tag:        int          # Tag des Monats (1–31)
+    dienst_str: str          # "Früh" | "Spät" | "Nacht"
+
+    def to_dienst(self) -> Optional["Dienst"]:
+        mapping = {"Früh": Dienst.FRUEH, "Spät": Dienst.SPAET, "Nacht": Dienst.NACHT}
+        return mapping.get(self.dienst_str)
+
+    def to_date(self, jahr: int, monat: int) -> Optional[date]:
+        try:
+            return date(jahr, monat, self.tag)
+        except ValueError:
+            return None
+
+
+@dataclass
 class PlanungState:
     ma:                 Mitarbeiter
     ist_stunden:        float = 0.0
@@ -116,15 +146,11 @@ class PlanungState:
     frueh_count:        int   = 0
     spaet_count:        int   = 0
     nacht_count:        int   = 0
-    # BUG-FIX: konsekutiv_arbeits wird jetzt bei jedem Dienst-Lookup
-    # aus dem tatsächlichen Plan neu berechnet (siehe _konsekutiv)
-    # Der Counter hier ist nur noch für Vormonat-Initialisierung.
-    konsekutiv_arbeits: int   = 0
+    konsekutiv_arbeits: int   = 0   # nur für Vormonat-Init
     letzter_dienst:     Optional[Dienst] = None
     wunschfrei:         list[date] = field(default_factory=list)
 
     def add_schicht(self, d: Dienst):
-        """Zählt nur echte Arbeitsdienste."""
         if d == Dienst.FRUEH:
             self.frueh_count += 1
             self.ist_stunden += SCHICHT_STUNDEN[Dienst.FRUEH]
@@ -167,12 +193,14 @@ class DienstplanGenerator:
         jahr:              int,
         monat:             int,
         vormonat_plan:     dict[str, dict[date, Dienst]] | None = None,
+        wunschschichten:   list[Wunschschicht] | None = None,
     ):
-        self.ma_liste      = mitarbeiter_liste
-        self.abwesenheiten = abwesenheiten
-        self.jahr          = jahr
-        self.monat         = monat
-        self.vormonat_plan = vormonat_plan or {}
+        self.ma_liste        = mitarbeiter_liste
+        self.abwesenheiten   = abwesenheiten
+        self.jahr            = jahr
+        self.monat           = monat
+        self.vormonat_plan   = vormonat_plan or {}
+        self.wunschschichten = wunschschichten or []
 
         _, letzter_tag = calendar.monthrange(jahr, monat)
         self.tage = [date(jahr, monat, d) for d in range(1, letzter_tag + 1)]
@@ -190,23 +218,23 @@ class DienstplanGenerator:
         self.states: dict[str, PlanungState] = {}
         self.violations: list[str] = []
 
+        # Index: ma_name → list[(tag_date, dienst)]
+        self._wunsch_index: dict[str, list[tuple[date, Dienst]]] = {}
+
     # ------------------------------------------------------------------
     # Hilfsfunktionen
     # ------------------------------------------------------------------
 
     def _konsekutiv(self, ma_name: str, bis_exkl: date) -> int:
         """
-        Berechnet aufeinanderfolgende Arbeitstage rückwärts aus dem Plan.
-        BUG-FIX: statt einen fehleranfälligen Counter mitzuführen,
-        lesen wir direkt aus self.plan – damit ist der Wert immer korrekt.
+        Aufeinanderfolgende Arbeitstage rückwärts aus dem Plan lesen.
+        Immer exakt, da direkt aus self.plan gelesen.
         """
         count = 0
-        # Vormonat-Initialisierung
         vormonat_konsekutiv = self.states[ma_name].konsekutiv_arbeits
         check = bis_exkl - timedelta(days=1)
         while True:
             if check < self.tage[0]:
-                # Im Vormonat weiterlesen (vereinfacht: nutze vormonat_konsekutiv)
                 count += vormonat_konsekutiv
                 break
             d = self.plan[ma_name].get(check)
@@ -221,11 +249,9 @@ class DienstplanGenerator:
         return self.plan[ma_name].get(tag) in self.GESPERRT_DIENSTE
 
     def _slot_frei(self, ma_name: str, tag: date) -> bool:
-        """True wenn der Tag weder gesperrt noch bereits vergeben ist."""
         return self.plan[ma_name].get(tag) is None
 
     def _kann_arbeiten(self, ma_name: str, tag: date) -> bool:
-        """Basischeck: nicht gesperrt, kein Eintrag, max 5 konsekutiv."""
         if not self._slot_frei(ma_name, tag):
             return False
         if self._ist_gesperrt(ma_name, tag):
@@ -237,11 +263,9 @@ class DienstplanGenerator:
     def _kann_frueh(self, ma_name: str, tag: date) -> bool:
         if not self._kann_arbeiten(ma_name, tag):
             return False
-        # Kein Früh direkt nach Spät
         vortag = tag - timedelta(days=1)
         if self.plan[ma_name].get(vortag) == Dienst.SPAET:
             return False
-        # Max 3 gleiche in Folge
         if self._in_folge(ma_name, tag, Dienst.FRUEH) >= 3:
             return False
         return True
@@ -254,12 +278,18 @@ class DienstplanGenerator:
         return True
 
     def _kann_nacht(self, ma_name: str, tag: date) -> bool:
-        if not self._kann_arbeiten(ma_name, tag):
-            return False
-        return True
+        return self._kann_arbeiten(ma_name, tag)
+
+    def _kann_dienst(self, ma_name: str, tag: date, dienst: Dienst) -> bool:
+        if dienst == Dienst.FRUEH:
+            return self._kann_frueh(ma_name, tag)
+        if dienst == Dienst.SPAET:
+            return self._kann_spaet(ma_name, tag)
+        if dienst == Dienst.NACHT:
+            return self._kann_nacht(ma_name, tag)
+        return False
 
     def _in_folge(self, ma_name: str, tag: date, dienst: Dienst) -> int:
-        """Wie viele aufeinanderfolgende *gleiche* Dienste liegen direkt vor tag."""
         count = 0
         check = tag - timedelta(days=1)
         while check >= self.tage[0]:
@@ -271,30 +301,117 @@ class DienstplanGenerator:
         return count
 
     def _setze_dienst(self, ma_name: str, tag: date, dienst: Dienst):
-        """Trägt einen Dienst ein und aktualisiert den State."""
         self.plan[ma_name][tag] = dienst
         if dienst in self.ARBEITSDIENSTE:
             self.states[ma_name].add_schicht(dienst)
 
-    # ------------------------------------------------------------------
-    # Score-Funktionen (niedriger Score = bevorzugt)
-    # ------------------------------------------------------------------
-
     def _score(self, ma_name: str, dienst: Dienst) -> float:
         s = self.states[ma_name]
         score = 0.0
-        # Wer weniger Stunden hat, soll bevorzugt werden
-        score -= s.stunden_delta * 0.5          # hohes Delta (Unterst.) → niedrigerer Score
-        # Wer diesen Diensttyp schon oft hat, wird deprioritiert
+        score -= s.stunden_delta * 0.5
         if dienst == Dienst.FRUEH:
             score += s.frueh_count * 2.0
         elif dienst == Dienst.SPAET:
             score += s.spaet_count * 2.0
         elif dienst == Dienst.NACHT:
             score += s.nacht_count * 3.0
-        # Viele konsekutive Tage → lieber jemand anderen
         score += self._konsekutiv(ma_name, date.today()) * 1.0
         return score
+
+    # ------------------------------------------------------------------
+    # Wunsch-Index aufbauen
+    # ------------------------------------------------------------------
+
+    def _build_wunsch_index(self):
+        """
+        Erstellt self._wunsch_index: ma_name → [(datum, dienst), …]
+        Ungültige Daten (z.B. 31.02) oder unbekannte MA werden als
+        Violation geloggt und übersprungen.
+        """
+        ma_namen = {ma.name for ma in self.ma_liste}
+        for w in self.wunschschichten:
+            if w.name not in ma_namen:
+                self.violations.append(
+                    f"Wunsch ignoriert: Unbekannter MA '{w.name}' "
+                    f"(Tag {w.tag}, {w.dienst_str})"
+                )
+                continue
+            wdatum = w.to_date(self.jahr, self.monat)
+            if wdatum is None:
+                self.violations.append(
+                    f"Wunsch ignoriert: {w.name} – Tag {w.tag} existiert nicht "
+                    f"in {self.monat}/{self.jahr}"
+                )
+                continue
+            wdienst = w.to_dienst()
+            if wdienst is None:
+                self.violations.append(
+                    f"Wunsch ignoriert: {w.name} – unbekannte Schichtart '{w.dienst_str}'"
+                )
+                continue
+            self._wunsch_index.setdefault(w.name, []).append((wdatum, wdienst))
+
+        total = sum(len(v) for v in self._wunsch_index.values())
+        logger.info("Wunsch-Index aufgebaut: %d Wünsche für %d MA", total, len(self._wunsch_index))
+
+    # ------------------------------------------------------------------
+    # Wünsche einplanen (vor regulärer Planung)
+    # ------------------------------------------------------------------
+
+    def _plan_wuensche(self):
+        """
+        Trägt Wunschschichten mit höchster Priorität ein.
+
+        Prüft dabei alle harten Regeln (_kann_dienst). Schlägt ein Wunsch fehl,
+        wird er als Violation ausgewiesen – der Tag bleibt frei für die
+        reguläre Planung.
+
+        Kann ein Wunsch zwar eingetragen werden, aber der Bedarf für diesen
+        Dienst ist bereits gedeckt, wird der Wunsch trotzdem erfüllt
+        (Überbesetzung ist kein Fehler, der Bedarf wird dann um 1 erhöht).
+        """
+        for ma_name, wuensche in self._wunsch_index.items():
+            for wdatum, wdienst in wuensche:
+                if wdatum not in self.tage:
+                    continue
+
+                # Harte Regel: MA ist gesperrt (Urlaub/Krank/Frei)
+                if self._ist_gesperrt(ma_name, wdatum):
+                    self.violations.append(
+                        f"⚠️ Wunsch nicht erfüllt: {ma_name} {wdatum.strftime('%d.%m')} "
+                        f"{wdienst.value} – Tag ist gesperrt (Urlaub/Krank/Frei)"
+                    )
+                    continue
+
+                # Harte Regel: Slot bereits belegt (anderer Dienst)
+                existing = self.plan[ma_name].get(wdatum)
+                if existing is not None and existing != Dienst.FREI:
+                    self.violations.append(
+                        f"⚠️ Wunsch nicht erfüllt: {ma_name} {wdatum.strftime('%d.%m')} "
+                        f"{wdienst.value} – bereits als {existing.value} eingeplant"
+                    )
+                    continue
+
+                # Slot ist Frei (z.B. Nacht-Puffer) → temporär freigeben
+                puffer_war_gesetzt = existing == Dienst.FREI
+                if puffer_war_gesetzt:
+                    del self.plan[ma_name][wdatum]
+
+                if not self._kann_dienst(ma_name, wdatum, wdienst):
+                    # Puffer wiederherstellen
+                    if puffer_war_gesetzt:
+                        self.plan[ma_name][wdatum] = Dienst.FREI
+                    self.violations.append(
+                        f"⚠️ Wunsch nicht erfüllt: {ma_name} {wdatum.strftime('%d.%m')} "
+                        f"{wdienst.value} – Regelkonflikt (Konsekutiv/Spät→Früh/3er-Regel)"
+                    )
+                    continue
+
+                self._setze_dienst(ma_name, wdatum, wdienst)
+                logger.info(
+                    "Wunsch erfüllt: %s %s %s",
+                    ma_name, wdatum.strftime("%d.%m"), wdienst.value,
+                )
 
     # ------------------------------------------------------------------
     # Planungsschritte
@@ -304,7 +421,9 @@ class DienstplanGenerator:
         self._init_states()
         self._set_abwesenheiten()
         self._init_aus_vormonat()
-        self._plan_alle_dienste()      # FD + SD + ND in einem Pass
+        self._build_wunsch_index()    # Wunsch-Index aufbauen
+        self._plan_wuensche()         # Wünsche zuerst eintragen
+        self._plan_alle_dienste()     # Reguläre Planung füllt Rest auf
         self._fill_frei()
         self._build_offen_plan()
         self._validate()
@@ -324,7 +443,6 @@ class DienstplanGenerator:
                     self.plan[ab.name][ab.datum] = dienst
 
     def _init_aus_vormonat(self):
-        """Liest die letzten Tage des Vormonats um konsekutive Zählung korrekt zu starten."""
         if not self.vormonat_plan:
             return
         erster = self.tage[0]
@@ -333,7 +451,7 @@ class DienstplanGenerator:
                 continue
             s = self.states[ma_name]
             konsekutiv = 0
-            for i in range(1, 8):  # max 7 Tage zurückschauen
+            for i in range(1, 8):
                 vortag = erster - timedelta(days=i)
                 d = tage_plan.get(vortag)
                 if d in self.ARBEITSDIENSTE:
@@ -341,36 +459,18 @@ class DienstplanGenerator:
                 else:
                     break
             s.konsekutiv_arbeits = konsekutiv
-            # letzter Dienst für Spät→Früh-Check
             vortag = erster - timedelta(days=1)
             s.letzter_dienst = tage_plan.get(vortag)
 
     def _plan_alle_dienste(self):
-        """
-        Kernlogik: iteriert über jeden Tag und belegt FD, SD, ND.
-
-        BUG-FIX 1: Nacht-Frei-Puffer darf den konsekutiv-Counter nicht
-        erhöhen (Frei = kein Arbeitstag) und muss überschreibbar bleiben
-        wenn später ein anderer Dienst für denselben Tag geplant wird.
-
-        BUG-FIX 2: Score-Funktion deprioritiert korrekt: wer weniger
-        Stunden hat (stunden_delta hoch) soll mehr Dienste bekommen →
-        niedrigerer Score.
-
-        BUG-FIX 3: Nacht-Frei wird als SOFT-Puffer eingetragen – kann
-        von FD/SD überschrieben werden wenn kein anderer Kandidat verfügbar.
-        """
         offen_map = {
             Dienst.FRUEH:  Dienst.OFFEN_FD,
             Dienst.SPAET:  Dienst.OFFEN_SD,
             Dienst.NACHT:  Dienst.OFFEN_ND,
         }
-
-        # Nacht-Puffer: ma_name → set of dates die als weicher Puffer markiert sind
         nacht_puffer: dict[str, set[date]] = {ma.name: set() for ma in self.ma_liste}
 
         for tag in self.tage:
-            # ---- Nachtdienste zuerst (Blöcke zunächst ignorieren, tageweise belegen) ----
             for dienst, kann_fn, bedarf in [
                 (Dienst.NACHT, self._kann_nacht, PFLICHT[Dienst.NACHT]),
                 (Dienst.FRUEH, self._kann_frueh, PFLICHT[Dienst.FRUEH]),
@@ -380,23 +480,18 @@ class DienstplanGenerator:
                     1 for ma in self.ma_liste
                     if self.plan[ma.name].get(tag) == dienst
                 )
-
                 if bereits >= bedarf:
                     continue
 
-                # Kandidaten ermitteln
                 kandidaten = []
                 for ma in self.ma_liste:
-                    # Weicher Puffer darf für FD/SD überschrieben werden
                     if (dienst in (Dienst.FRUEH, Dienst.SPAET)
                             and tag in nacht_puffer[ma.name]
                             and self.plan[ma.name].get(tag) == Dienst.FREI):
-                        # Slot temporär freigeben für Kandidaten-Prüfung
                         del self.plan[ma.name][tag]
                         if kann_fn(ma.name, tag):
                             kandidaten.append(ma)
                         else:
-                            # Puffer wiederherstellen
                             self.plan[ma.name][tag] = Dienst.FREI
                     elif kann_fn(ma.name, tag):
                         kandidaten.append(ma)
@@ -406,16 +501,13 @@ class DienstplanGenerator:
                 for ma in kandidaten:
                     if bereits >= bedarf:
                         break
-                    # Wenn Puffer-Frei überschrieben wird, Stunden-Counter nicht doppeln
                     war_puffer = tag in nacht_puffer[ma.name]
                     if war_puffer and self.plan[ma.name].get(tag) == Dienst.FREI:
-                        del self.plan[ma.name][tag]  # Puffer wegräumen
+                        del self.plan[ma.name][tag]
                         nacht_puffer[ma.name].discard(tag)
-
                     self._setze_dienst(ma.name, tag, dienst)
                     bereits += 1
 
-                # Nach Nacht: 2-Tage Soft-Puffer eintragen
                 if dienst == Dienst.NACHT:
                     for ma in self.ma_liste:
                         if self.plan[ma.name].get(tag) == Dienst.NACHT:
@@ -427,7 +519,6 @@ class DienstplanGenerator:
                                     self.plan[ma.name][puff_tag] = Dienst.FREI
                                     nacht_puffer[ma.name].add(puff_tag)
 
-                # Fehlende Dienste als OFFEN markieren
                 fehlend = bedarf - bereits
                 if fehlend > 0:
                     if tag not in self.offen:
@@ -436,13 +527,11 @@ class DienstplanGenerator:
                         self.offen[tag].append(offen_map[dienst])
 
     def _fill_frei(self):
-        """Füllt alle noch leeren Slots mit Frei."""
         for ma in self.ma_liste:
             for tag in self.tage:
                 if self.plan[ma.name].get(tag) is None:
                     self.plan[ma.name][tag] = Dienst.FREI
 
-        # Prüfe freies Wochenende
         for ma in self.ma_liste:
             hat_frei_we = False
             for tag in self.tage:
@@ -459,7 +548,6 @@ class DienstplanGenerator:
                 )
 
     def _build_offen_plan(self):
-        """Schreibt offene Dienste in self.plan['offen'] (ein Eintrag pro Tag)."""
         if not self.offen:
             return
         self.plan["offen"] = {}
@@ -473,7 +561,6 @@ class DienstplanGenerator:
                 self.plan["offen"][tag] = dienste[0]
 
     def _validate(self):
-        """Prüft alle Regeln und schreibt Violations."""
         offen_map_rev = {
             Dienst.FRUEH: Dienst.OFFEN_FD,
             Dienst.SPAET: Dienst.OFFEN_SD,
@@ -512,6 +599,28 @@ class DienstplanGenerator:
     def get_report(self) -> str:
         lines = [f"=== Dienstplan {self.monat}/{self.jahr} ==="]
 
+        # Wünsche-Zusammenfassung
+        erfuellt = [
+            w for w in self.wunschschichten
+            if not any(
+                w.name in v and str(w.tag).zfill(2) in v and "Wunsch nicht erfüllt" in v
+                for v in self.violations
+            )
+        ]
+        nicht_erfuellt = [v for v in self.violations if "Wunsch nicht erfüllt" in v]
+
+        total_wuensche = len([
+            x for lst in self._wunsch_index.values() for x in lst
+        ])
+        if total_wuensche > 0:
+            lines.append(
+                f"\n🙋 Wunschschichten: {total_wuensche - len(nicht_erfuellt)}/{total_wuensche} erfüllt"
+            )
+        if nicht_erfuellt:
+            lines.append(f"  Nicht erfüllte Wünsche:")
+            for v in nicht_erfuellt:
+                lines.append(f"  {v}")
+
         # Offene Dienste
         alle_offen = []
         for tag, dienste in sorted(self.offen.items()):
@@ -536,9 +645,13 @@ class DienstplanGenerator:
                 f"Δ:{delta_sign}{s.stunden_delta:.1f}h"
             )
 
-        # Regelverletzungen (ohne offene Dienste)
-        rule_violations = [v for v in self.violations
-                           if "nicht besetzt" not in v and "nur " not in v]
+        # Regelviols (ohne Wünsche und offene Dienste)
+        rule_violations = [
+            v for v in self.violations
+            if "nicht besetzt" not in v
+            and "nur " not in v
+            and "Wunsch" not in v
+        ]
         if rule_violations:
             lines.append(f"\n❌ Regelverstöße ({len(rule_violations)}):")
             for v in rule_violations[:30]:

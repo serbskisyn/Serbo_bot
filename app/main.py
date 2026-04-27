@@ -9,10 +9,10 @@ from app.bot.handlers import (
 )
 from app.services.news_cache import start_background_scheduler
 from app.bot.schedule_dialog import get_schedule_handler
+from app.bot.debug_handler import get_debug_handler
 
 
 async def _post_init(application) -> None:
-    """Wird von PTB nach dem Start des Event Loops aufgerufen."""
     logger = logging.getLogger(__name__)
     logger.info("News-Cache Background-Scheduler wird gestartet...")
     start_background_scheduler()
@@ -31,12 +31,13 @@ def main():
         .build()
     )
 
-    app.add_handler(CommandHandler("start", start_handler))
-    app.add_handler(CommandHandler("reset", reset_handler))
+    app.add_handler(get_schedule_handler())
+    app.add_handler(get_debug_handler())           # /debugwunsch
+    app.add_handler(CommandHandler("start",  start_handler))
+    app.add_handler(CommandHandler("reset",  reset_handler))
     app.add_handler(CommandHandler("memory", memory_handler))
     app.add_handler(CommandHandler("forget", forget_handler))
-    app.add_handler(CommandHandler("news", news_handler))
-    app.add_handler(get_schedule_handler())
+    app.add_handler(CommandHandler("news",   news_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_handler(MessageHandler(filters.VOICE, voice_handler))
     app.add_error_handler(error_handler)

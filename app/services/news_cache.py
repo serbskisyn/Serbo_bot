@@ -4,9 +4,6 @@ news_cache.py
 SQLite-basierter News-Cache mit Background-Scheduler.
 Fetcht Nachrichten im Hintergrund in unregelmaessigen Intervallen
 — unabhaengig von User-Anfragen. User bekommen immer gecachte Version.
-
-Systemtest / initialer Refresh laeuft nicht mehr beim Start,
-sondern einmal taeglich um 00:00 Uhr (Europe/Berlin).
 """
 
 import asyncio
@@ -28,10 +25,6 @@ from app.services.news_fetcher import fetch_club_news
 from app.services.news_ranker import rank_news, enrich_ranked_news
 
 logger = logging.getLogger(__name__)
-
-# Mitternachts-Refresh (lokale Zeit, 24h-Zyklus)
-_MIDNIGHT_REFRESH_HOUR = 0
-_MIDNIGHT_REFRESH_MINUTE = 0
 
 
 # ── DB Setup ────────────────────────────────────────────────────────────────
@@ -99,6 +92,7 @@ def _save_to_cache(club_name: str, enriched_items: list) -> None:
         conn.execute("DELETE FROM news_cache WHERE club_name = ?", (club_name,))
 
         for item in enriched_items:
+            # RankedNews: sources=list, urls=list — erste URL + Quellen als kommagetrennt
             if hasattr(item, "urls") and item.urls:
                 primary_url = item.urls[0]
                 source_str  = ", ".join(item.sources) if hasattr(item, "sources") else ""
@@ -205,70 +199,47 @@ async def refresh_club_cache(club_name: str) -> bool:
         return False
 
 
-async def refresh_all_clubs() -> None:
-    """Refresht alle Favoriten-Clubs nacheinander (mit kleinem Versatz)."""
-    logger.info("Starte vollstaendigen Cache-Refresh fuer alle Clubs: %s", NEWS_FAVORITE_CLUBS)
-    for i, club in enumerate(NEWS_FAVORITE_CLUBS):
-        if i > 0:
-            delay = random.uniform(30, 90)
-            logger.info("Warte %.0fs vor naechstem Club (%s)", delay, club)
-            await asyncio.sleep(delay)
-        await refresh_club_cache(club)
-    logger.info("Vollstaendiger Cache-Refresh abgeschlossen.")
-
-
-def _seconds_until_midnight() -> float:
-    """
-    Berechnet Sekunden bis zur naechsten Mitternacht (lokale Zeit des Servers).
-    Laeuft der Bot schon nach Mitternacht, wartet er bis zur naechsten.
-    """
-    now = datetime.now()  # lokale Serverzeit
-    next_midnight = now.replace(
-        hour=_MIDNIGHT_REFRESH_HOUR,
-        minute=_MIDNIGHT_REFRESH_MINUTE,
-        second=0,
-        microsecond=0,
-    )
-    if next_midnight <= now:
-        next_midnight += timedelta(days=1)
-    delta = (next_midnight - now).total_seconds()
-    logger.info(
-        "Naechster Mitternachts-Refresh: %s (in %.0f min / %.1f h)",
-        next_midnight.strftime("%Y-%m-%d %H:%M"),
-        delta / 60,
-        delta / 3600,
-    )
-    return delta
-
-
 # ── Background Scheduler ──────────────────────────────────────────────────────
 
 async def _scheduler_loop() -> None:
-    """
-    Laeuft als asyncio.Task.
-    - Kein Startup-Refresh mehr beim Botstart.
-    - Refresht alle Clubs einmal taeglich um Mitternacht (lokale Serverzeit).
-    - Nach dem ersten Mitternachts-Lauf: exakt 24h bis zum naechsten.
-    """
+    """Laeuft als asyncio.Task — refresht Favoriten-Clubs in unregelmaessigen Intervallen."""
     logger.info(
-        "News-Scheduler gestartet (Mitternachts-Modus) | Clubs: %s",
-        NEWS_FAVORITE_CLUBS,
+        "News-Scheduler gestartet | Clubs: %s | Basis: %dmin | Jitter: ±%dmin",
+        NEWS_FAVORITE_CLUBS, NEWS_SCHEDULER_BASE_MINUTES, NEWS_SCHEDULER_JITTER_MINUTES
     )
 
-    # Warte bis zur naechsten Mitternacht
-    await asyncio.sleep(_seconds_until_midnight())
+    # Beim Start: alle Favoriten initial laden (mit Versatz zwischen Clubs)
+    for i, club in enumerate(NEWS_FAVORITE_CLUBS):
+        if i > 0:
+            startup_delay = random.uniform(30, 90)
+            logger.info("Startup-Delay %ds fuer %s", int(startup_delay), club)
+            await asyncio.sleep(startup_delay)
+        await refresh_club_cache(club)
 
-    # Dann jeden Tag um Mitternacht refreshen
+    # Danach: periodisch alle Favoriten refreshen
     while True:
-        logger.info("Mitternachts-Refresh startet...")
-        await refresh_all_clubs()
+        jitter_seconds = random.randint(
+            -NEWS_SCHEDULER_JITTER_MINUTES * 60,
+            NEWS_SCHEDULER_JITTER_MINUTES * 60
+        )
+        wait_seconds = NEWS_SCHEDULER_BASE_MINUTES * 60 + jitter_seconds
+        next_run = datetime.now(timezone.utc) + timedelta(seconds=wait_seconds)
+        logger.info(
+            "Naechster News-Refresh: %s (in %.0f min)",
+            next_run.strftime("%H:%M UTC"),
+            wait_seconds / 60
+        )
+        await asyncio.sleep(wait_seconds)
 
-        # Exakt 24h bis zum naechsten Lauf warten
-        await asyncio.sleep(24 * 3600)
+        for i, club in enumerate(NEWS_FAVORITE_CLUBS):
+            if i > 0:
+                inter_club_delay = random.uniform(30, 120)
+                logger.info("Inter-Club-Delay %.0fs vor %s", inter_club_delay, club)
+                await asyncio.sleep(inter_club_delay)
+            await refresh_club_cache(club)
 
 
 def start_background_scheduler() -> asyncio.Task:
     """Startet den Background-Scheduler als asyncio.Task. In main.py aufrufen."""
     init_cache_db()
-    logger.info("Background-Scheduler initialisiert (kein Startup-Refresh).")
     return asyncio.create_task(_scheduler_loop())

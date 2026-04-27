@@ -163,11 +163,55 @@ def _stunden_fuer(dienst_val: str) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Vormonats-Tab ermitteln
+# Vormonats-Tab ermitteln — robuste Varianten-Erkennung
 # ---------------------------------------------------------------------------
 
+# Kurze Monatsnamen in mehreren Schreibweisen (Umlaute + ASCII-Varianten)
+_MONATE_KURZ_VARIANTEN: dict[int, list[str]] = {
+    1:  ["Jan"],
+    2:  ["Feb"],
+    3:  ["Mär", "Mar", "Mrz"],
+    4:  ["Apr"],
+    5:  ["Mai", "May"],
+    6:  ["Jun"],
+    7:  ["Jul"],
+    8:  ["Aug"],
+    9:  ["Sep"],
+    10: ["Okt", "Oct"],
+    11: ["Nov"],
+    12: ["Dez", "Dec"],
+}
+
+# Primäres Kürzel (für neue Tabs)
 _MONATE_KURZ = ["", "Jan", "Feb", "Mär", "Apr", "Mai", "Jun",
                 "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
+
+
+def _vormonat_prefixes(erster: date) -> list[str]:
+    """
+    Gibt alle möglichen Präfix-Varianten für den Vormonats-Tab zurück.
+    Z.B. für Juni 2025 → ['Mai_2025', 'May_2025', 'Mai 2025', 'May 2025',
+                           'Mai-2025', 'May-2025', '05_2025', '05-2025', '5_2025']
+    """
+    if erster.month == 1:
+        pm, py = 12, erster.year - 1
+    else:
+        pm, py = erster.month - 1, erster.year
+
+    varianten = _MONATE_KURZ_VARIANTEN.get(pm, [_MONATE_KURZ[pm]])
+    separators = ["_", " ", "-"]
+    prefixes: list[str] = []
+
+    for kuerzel in varianten:
+        for sep in separators:
+            prefixes.append(f"{kuerzel}{sep}{py}")
+
+    # Numerische Varianten: 05_2025, 5_2025
+    for sep in separators:
+        prefixes.append(f"{pm:02d}{sep}{py}")
+        prefixes.append(f"{pm}{sep}{py}")
+
+    return prefixes
 
 
 def _find_previous_month_tabs(
@@ -176,29 +220,41 @@ def _find_previous_month_tabs(
 ) -> list[gspread.Worksheet]:
     """
     Gibt alle Worksheet-Objekte zurück, die dem Vormonat entsprechen.
-    Erkennt Muster wie 'Mär_2025', 'Mär_2025-1', 'Mär_2025-2' usw.
-    Gibt die Tabs nach Titel-Suffix sortiert zurück (höchste Nummer = letzter).
+    Erkennt alle Schreibweisen: 'Mär_2025', 'Mar_2025', 'Mär 2025',
+    'Mai-2025', '05_2025', 'Mär_2025-1', 'Mär_2025-2' usw.
+    Sortiert nach Versions-Suffix (höchste Nummer = letzter).
     """
-    if erster.month == 1:
-        prev_month, prev_year = 12, erster.year - 1
-    else:
-        prev_month, prev_year = erster.month - 1, erster.year
+    prefixes = _vormonat_prefixes(erster)
+    all_ws   = sh.worksheets()
+    matches: list[gspread.Worksheet] = []
 
-    prefix = f"{_MONATE_KURZ[prev_month]}_{prev_year}"
-    matches = [
-        ws for ws in sh.worksheets()
-        if ws.title == prefix or ws.title.startswith(prefix + "-")
-    ]
+    for ws in all_ws:
+        title_lower = ws.title.lower()
+        for prefix in prefixes:
+            p_lower = prefix.lower()
+            # Exakter Match oder Match mit Versions-Suffix (-1, -2, …)
+            if title_lower == p_lower or title_lower.startswith(p_lower + "-"):
+                matches.append(ws)
+                break   # nächstes Worksheet
 
     def _sort_key(ws: gspread.Worksheet) -> int:
-        if ws.title == prefix:
-            return 0
-        try:
-            return int(ws.title.split("-")[-1])
-        except ValueError:
-            return 0
+        title = ws.title
+        for prefix in prefixes:
+            if title.lower() == prefix.lower():
+                return 0
+            if title.lower().startswith(prefix.lower() + "-"):
+                try:
+                    return int(title.split("-")[-1])
+                except ValueError:
+                    return 0
+        return 0
 
     matches.sort(key=_sort_key)
+    logger.info(
+        "Vormonat-Tabs für %s: %s",
+        erster,
+        [ws.title for ws in matches] or "keiner gefunden",
+    )
     return matches
 
 
@@ -214,43 +270,80 @@ def read_vormonat_differenz(
     """
     Liest die 'Differenz'-Zeile aus dem letzten Vormonats-Tab.
     Gibt dict[ma_name → differenz_stunden] zurück.
-    Fehlende Werte werden als 0.0 zurückgegeben.
+
+    Garantierter Fallback:
+      - Kein Tab gefunden              → alle 0.0
+      - Tab leer                       → alle 0.0
+      - MA-Name nicht in Kopfzeile     → 0.0 für diesen MA
+      - Zellwert nicht parsebar        → 0.0 für diesen MA
     """
+    result = {ma: 0.0 for ma in mitarbeiter}
+
     tabs = _find_previous_month_tabs(sh, erster_des_monats)
     if not tabs:
-        return {ma: 0.0 for ma in mitarbeiter}
+        logger.info(
+            "Kein Vormonats-Tab gefunden für %s — Differenz wird mit 0 initialisiert.",
+            erster_des_monats,
+        )
+        return result
 
-    ws   = tabs[-1]
-    rows = ws.get_all_values()
+    ws = tabs[-1]
+    logger.info("Lese Vormonats-Differenz aus Tab '%s'", ws.title)
+
+    try:
+        rows = ws.get_all_values()
+    except Exception as e:
+        logger.warning("Fehler beim Lesen von Tab '%s': %s — verwende 0", ws.title, e)
+        return result
+
     if not rows:
-        return {ma: 0.0 for ma in mitarbeiter}
+        logger.info("Tab '%s' ist leer — Differenz wird mit 0 initialisiert.", ws.title)
+        return result
 
     # Kopfzeile: MA-Namen ab Spalte B (Index 1)
     header = rows[0]
-    ma_cols: dict[str, int] = {}  # ma_name → 0-basierter Spaltenindex
+    ma_cols: dict[str, int] = {}
     for col_idx, cell in enumerate(header[1:], start=1):
         name = cell.strip()
         if name and name.lower() not in ("offen", "tag", ""):
             ma_cols[name] = col_idx
 
-    result = {ma: 0.0 for ma in mitarbeiter}
+    if not ma_cols:
+        logger.warning("Tab '%s': Keine MA-Namen in Kopfzeile — verwende 0", ws.title)
+        return result
 
-    # 'Differenz'-Zeile suchen
+    # 'Differenz'-Zeile suchen (von unten, erste Übereinstimmung)
+    differenz_row: list[str] | None = None
     for row in reversed(rows):
-        if not row:
-            continue
-        label = row[0].strip().lower()
-        if label == "differenz":
-            for ma_name in mitarbeiter:
-                col_idx = ma_cols.get(ma_name)
-                if col_idx is None:
-                    continue
-                raw = row[col_idx].strip() if col_idx < len(row) else ""
-                try:
-                    result[ma_name] = float(raw.replace(",", "."))
-                except ValueError:
-                    pass
+        if row and row[0].strip().lower() == "differenz":
+            differenz_row = row
             break
+
+    if differenz_row is None:
+        logger.warning(
+            "Tab '%s': Keine 'Differenz'-Zeile gefunden — verwende 0", ws.title
+        )
+        return result
+
+    # Werte je MA auslesen
+    for ma_name in mitarbeiter:
+        col_idx = ma_cols.get(ma_name)
+        if col_idx is None:
+            logger.info(
+                "MA '%s' nicht in Vormonat-Tab '%s' — Carry-over = 0",
+                ma_name, ws.title,
+            )
+            continue   # bleibt 0.0
+        raw = differenz_row[col_idx].strip() if col_idx < len(differenz_row) else ""
+        if not raw:
+            continue   # bleibt 0.0
+        try:
+            result[ma_name] = float(raw.replace(",", "."))
+        except ValueError:
+            logger.warning(
+                "Tab '%s', MA '%s': Wert '%s' nicht parsebar — verwende 0",
+                ws.title, ma_name, raw,
+            )
 
     logger.info("Vormonat-Differenz gelesen aus Tab '%s': %s", ws.title, result)
     return result
@@ -282,7 +375,7 @@ def read_vormonat_plan(
             logger.info("Kein Vormonats-Tab gefunden für %s", erster_des_monats)
             return {}
 
-        ws = tabs[-1]  # letzter (= aktuellster) Vormonats-Tab
+        ws = tabs[-1]
         logger.info("Vormonats-Tab: '%s'", ws.title)
         rows = ws.get_all_values()
         if not rows:
@@ -290,7 +383,7 @@ def read_vormonat_plan(
 
         # Kopfzeile: ["Tag", MA1, MA2, ..., "offen", "Tag"]
         header = rows[0]
-        ma_names = header[1:]  # Spalten ab Index 1
+        ma_names = header[1:]
         while ma_names and ma_names[-1].lower() in ("", "tag", "offen"):
             ma_names = ma_names[:-1]
         if ma_names and ma_names[-1].lower() == "offen":
@@ -599,14 +692,13 @@ def write_dienstplan(
     Die Labels 'Dienstplanstd.' und 'Sollstd.' enthalten den
     variablen Monatsnamen (z.B. 'Dienstplanstd. Mai').
     Die Differenz-Zeile berücksichtigt die Differenz aus dem
-    letzten Vormonats-Tab (Carry-over).
+    letzten Vormonats-Tab (Carry-over). Wird kein Vormonats-Tab
+    gefunden, wird 0 eingesetzt — die Zeile erscheint immer.
     """
     erster     = tage[0]
     monat_name = _MONATE_LANG[erster.month]   # z.B. 'Apr.' / 'Mai'
 
-    monate_kurz = ["", "Jan", "Feb", "Mär", "Apr", "Mai", "Jun",
-                   "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
-    base_name = tab_name if tab_name else f"{monate_kurz[erster.month]}_{erster.year}"
+    base_name = tab_name if tab_name else f"{_MONATE_KURZ[erster.month]}_{erster.year}"
 
     client = _get_client()
     sh     = client.open_by_key(spreadsheet_id)
@@ -641,21 +733,21 @@ def write_dienstplan(
     ws.update("A4", data_rows)
 
     # ---------------------------------------------------------------------------
-    # Vormonat-Differenz (Carry-over) lesen
+    # Vormonat-Differenz (Carry-over) lesen — immer mit 0-Fallback
     # ---------------------------------------------------------------------------
-    vormonat_diff: dict[str, float] = {}
+    vormonat_diff: dict[str, float] = {ma: 0.0 for ma in mitarbeiter}
     try:
         vormonat_diff = read_vormonat_differenz(sh, erster, mitarbeiter)
     except Exception as e:
-        logger.warning("Vormonat-Differenz nicht lesbar: %s", e)
-        vormonat_diff = {ma: 0.0 for ma in mitarbeiter}
+        logger.warning(
+            "Vormonat-Differenz konnte nicht gelesen werden: %s — setze 0 für alle MA.", e
+        )
 
     # ---------------------------------------------------------------------------
     # Zusammenfassungs-Block berechnen
     # ---------------------------------------------------------------------------
     n_cols = len(mitarbeiter) + 2  # MA-Spalten + offen + Tag
 
-    # Zähl-Kategorien — FIX: nur direkter Wertvergleich, kein doppelter Check
     count_labels = ["FREI", "Früh", "Spät", "Nacht", "Teamsitzung", "BT", "Urlaub"]
     dienst_keys  = ["Frei", "Früh", "Spät", "Nacht", "Team", "BT", "Urlaub"]
 
@@ -705,16 +797,17 @@ def write_dienstplan(
     soll_row.append("Sollstd.") # rechtes Label
 
     # Differenz = Ist − Soll + Carry-over aus Vormonat
+    # Erscheint immer — ohne Vormonat wird 0 eingesetzt
     diff_row = ["Differenz"]
     diff_values: dict[str, float | str] = {}
     for ma_name in mitarbeiter:
         ist_val   = ist_values.get(ma_name, 0.0)
         soll_val  = soll_values.get(ma_name, 0.0)
-        carry     = vormonat_diff.get(ma_name, 0.0)
+        carry     = vormonat_diff.get(ma_name, 0.0)  # 0.0 wenn kein Vormonat
         if soll_val != 0.0 or ist_val != 0.0:
             diff = round(ist_val - soll_val + carry, 1)
         else:
-            diff = ""
+            diff = 0.0   # Zeile immer befüllen, auch wenn Ist+Soll = 0
         diff_values[ma_name] = diff
         diff_row.append(diff)
     diff_row.append("")           # offen
@@ -775,21 +868,19 @@ def write_dienstplan(
     for s_row_offset, (label, key) in enumerate(zip(count_labels, dienst_keys)):
         row_0 = summary_start + s_row_offset - 1  # 0-basiert
 
-        # Label-Zellen links und rechts
         requests.append(_bg_request(ws.id, row_0, 0, *_SUMMARY_LABEL_BG))
         requests.append(_bg_request(ws.id, row_0, len(mitarbeiter) + 2, *_SUMMARY_LABEL_BG))
 
-        # Dienstfarbe für Zahlenzellen
         cell_rgb = FARBEN_RGB.get(key, _SUMMARY_VALUE_BG)
         for col_idx in range(1, len(mitarbeiter) + 2):
             requests.append(_bg_request(ws.id, row_0, col_idx, *cell_rgb))
 
     # Ist-/Soll-/Differenz-Zeilen einfärben
-    ist_row_0  = summary_start + len(count_labels) + 1 - 1   # +1 für Leerzeile, -1 für 0-basis
+    ist_row_0  = summary_start + len(count_labels) + 1 - 1
     soll_row_0 = ist_row_0 + 1
     diff_row_0 = ist_row_0 + 2
 
-    for col_idx in range(len(mitarbeiter) + 3):  # inkl. rechtes Label
+    for col_idx in range(len(mitarbeiter) + 3):
         requests.append(_bg_request(ws.id, ist_row_0,  col_idx, *_SUMMARY_IST_BG))
         requests.append(_bg_request(ws.id, soll_row_0, col_idx, *_SUMMARY_SOLL_BG))
 
@@ -797,7 +888,7 @@ def write_dienstplan(
     requests.append(_bg_request(ws.id, diff_row_0, 0, *_SUMMARY_LABEL_BG))
     requests.append(_bg_request(ws.id, diff_row_0, len(mitarbeiter) + 2, *_SUMMARY_LABEL_BG))
     for i, ma_name in enumerate(mitarbeiter):
-        diff_val = diff_values.get(ma_name, "")
+        diff_val = diff_values.get(ma_name, 0.0)
         if isinstance(diff_val, (int, float)):
             rgb = _SUMMARY_POS_BG if diff_val >= 0 else _SUMMARY_NEG_BG
         else:

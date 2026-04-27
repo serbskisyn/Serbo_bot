@@ -27,19 +27,28 @@ _CREDENTIALS_FILE = os.path.join(
     os.path.dirname(__file__), "..", "..", "credentials.json"
 )
 
+def _hex(h: str) -> tuple[float, float, float]:
+    """Hex-String (#rrggbb) → (r, g, b) als float 0..1"""
+    h = h.lstrip("#")
+    return tuple(int(h[i:i+2], 16) / 255 for i in (0, 2, 4))  # type: ignore
+
+# ---------------------------------------------------------------------------
+# Farbcodierung — exakte Hex-Werte aus dem Original-Sheet
+# ---------------------------------------------------------------------------
 FARBEN_RGB: dict[str, tuple[float, float, float]] = {
-    "Früh":        (1.000, 1.000, 1.000),
-    "Spät":        (0.698, 0.875, 0.604),
-    "Nacht":       (0.773, 0.353, 0.067),
-    "Frei":        (0.847, 0.847, 0.847),
-    "Urlaub":      (0.573, 0.816, 0.314),
-    "krank":       (0.918, 0.196, 0.196),
-    "BT":          (0.918, 0.820, 0.863),
-    "Team":        (1.000, 0.851, 0.400),
-    "Supervision": (1.000, 0.851, 0.400),
-    "OFFEN-FD":    (1.000, 0.600, 0.000),
-    "OFFEN-SD":    (1.000, 0.600, 0.000),
-    "OFFEN-ND":    (0.800, 0.200, 0.000),
+    "Früh":        _hex("#75a0e5"),
+    "Spät":        _hex("#ff9bd5"),
+    "Nacht":       _hex("#dd7247"),
+    "Frei":        _hex("#d8d8d8"),
+    "Urlaub":      _hex("#8cc068"),
+    "krank":       _hex("#ffffff"),
+    "K":           _hex("#ffffff"),   # interner Art-Key für Krankenstand
+    "BT":          _hex("#ead1dc"),
+    "Team":        _hex("#ffd965"),
+    "Supervision": _hex("#ffd965"),
+    "OFFEN-FD":    _hex("#75a0e5"),
+    "OFFEN-SD":    _hex("#ff9bd5"),
+    "OFFEN-ND":    _hex("#dd7247"),
 }
 
 _MONATE_MAP: dict[str, int] = {
@@ -132,21 +141,12 @@ def _parse_date(raw: str) -> date | None:
 
 # ---------------------------------------------------------------------------
 # Mitarbeiter aus Sheet laden (Tab: Mitarbeiterübersicht)
-# Spalten: A = Name (ab A2), B = Wochenstunden (ab B2)
 # ---------------------------------------------------------------------------
 
 def read_mitarbeiter(
     spreadsheet_id: str,
     tab_name: str = "Mitarbeiterübersicht",
 ) -> list["Mitarbeiter"]:
-    """
-    Liest Mitarbeiterliste aus dem Output-Sheet.
-    A2:A  → Vorname (oder Vollname, nur Vorname wird genutzt)
-    B2:B  → Wochenstunden (z.B. 35 oder 7.0)
-
-    Wochenstunden werden in Tagesstunden umgerechnet: std / 5
-    (35h / 5 = 7.0 Tagesstunden)
-    """
     from app.services.schedule_builder import Mitarbeiter
 
     client = _get_client()
@@ -155,22 +155,18 @@ def read_mitarbeiter(
     rows   = ws.get_all_values()
 
     result: list[Mitarbeiter] = []
-    for row in rows[1:]:   # Header überspringen
+    for row in rows[1:]:
         if not row or not row[0].strip():
             continue
-        name_raw = row[0].strip()
-        vorname  = _extract_vorname(name_raw)
+        vorname = _extract_vorname(row[0].strip())
         if not vorname:
             continue
-
         std_raw = row[1].strip() if len(row) > 1 else ""
         try:
             wochenstunden = float(std_raw.replace(",", "."))
         except ValueError:
-            logger.warning("Stundenwert für '%s' nicht lesbar: '%s' — übersprungen", vorname, std_raw)
+            logger.warning("Stundenwert für '%s' nicht lesbar: '%s'", vorname, std_raw)
             continue
-
-        # Wochenstunden → Tagesstunden (5-Tage-Woche)
         tagesstunden = round(wochenstunden / 5, 1)
         result.append(Mitarbeiter(name=vorname, tagesstunden=tagesstunden))
         logger.info("Mitarbeiter geladen: %s (%.1fh/Tag)", vorname, tagesstunden)
@@ -295,15 +291,6 @@ def read_wunschschichten(
     jahr: int | None = None,
     bekannte_namen: set[str] | None = None,
 ) -> list["Wunschschicht"]:
-    """
-    Liest Wunschschichten aus dem Google-Formular-Tab.
-
-    Dedup-Logik: Pro Person + Monat wird nur die jüngste Submission genommen
-    (rückwärts iterieren + seen_names pro Monat).
-
-    bekannte_namen: Wenn angegeben, werden nur Personen berücksichtigt,
-    die im Mitarbeiter-Config bekannt sind (Warnlog für unbekannte).
-    """
     from datetime import datetime
     from app.services.schedule_builder import Wunschschicht
 
@@ -327,30 +314,22 @@ def read_wunschschichten(
         if not vorname:
             continue
 
-        # Monat aus Spalte D — unterstützt "Juni", "juni", "Juni 2026" etc.
-        monat_raw  = row[3].strip().lower() if len(row) > 3 else ""
-        # Nur das erste Wort nehmen ("juni 2026" → "juni")
-        monat_wort = monat_raw.split()[0] if monat_raw else ""
+        monat_raw   = row[3].strip().lower() if len(row) > 3 else ""
+        monat_wort  = monat_raw.split()[0] if monat_raw else ""
         zeile_monat = _MONATE_MAP.get(monat_wort)
 
         if monat is not None and zeile_monat != monat:
             continue
 
-        # Dedup: pro Person + Monat nur jüngster Eintrag
         dedup_key = f"{vorname}_{zeile_monat}"
         if dedup_key in seen_names:
             continue
         seen_names.add(dedup_key)
 
-        # Unbekannte Mitarbeiter warnen (aber trotzdem laden)
         if bekannte_namen and vorname not in bekannte_namen:
-            logger.warning(
-                "Wunsch von '%s' (%s): nicht in Mitarbeiterliste — wird ignoriert",
-                vorname, full_name
-            )
+            logger.warning("Wunsch von '%s' nicht in Mitarbeiterliste — ignoriert", vorname)
             continue
 
-        # Spaltenpaare: (Tag, Schichtart) x3
         rohe_paare = [
             (row[4] if len(row) > 4 else "", row[5] if len(row) > 5 else ""),
             (row[6] if len(row) > 6 else "", row[7] if len(row) > 7 else ""),
@@ -363,7 +342,6 @@ def read_wunschschichten(
             if not tag_raw:
                 continue
 
-            # Schichtart mappen
             dienst_str = _SCHICHT_MAP.get(art_raw)
             if dienst_str is None:
                 for key, val in _SCHICHT_MAP.items():
@@ -374,7 +352,6 @@ def read_wunschschichten(
                 logger.warning("Schichtart '%s' für %s unbekannt", art_raw, vorname)
                 continue
 
-            # Tag parsen: Integer oder volles Datum
             tag_int: int | None = None
             try:
                 tag_int = int(tag_raw)
@@ -478,7 +455,7 @@ def write_dienstplan(
                 continue
             d   = plan.get(ma_name, {}).get(tag)
             val = d.value if d else "Frei"
-            rgb = FARBEN_RGB.get(val, (1.0, 1.0, 1.0))
+            rgb = FARBEN_RGB.get(val) or FARBEN_RGB.get("Frei")
             requests.append(_bg_request(ws.id, sheet_row - 1, col_idx - 1, *rgb))
             notiz = notiz_map.get((sheet_row, col_idx))
             if notiz:
@@ -486,7 +463,7 @@ def write_dienstplan(
 
         if tag.weekday() >= 5:
             for col in [0, len(mitarbeiter) + 2]:
-                requests.append(_bg_request(ws.id, sheet_row - 1, col, 0.95, 0.95, 0.95))
+                requests.append(_bg_request(ws.id, sheet_row - 1, col, 0.90, 0.90, 0.90))
 
     if requests:
         sh.batch_update({"requests": requests})

@@ -14,7 +14,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 if TYPE_CHECKING:
-    from app.services.schedule_builder import Abwesenheit, Dienst, Wunschschicht
+    from app.services.schedule_builder import Abwesenheit, Dienst, Mitarbeiter, Wunschschicht
 
 logger = logging.getLogger(__name__)
 
@@ -84,23 +84,18 @@ def _get_client() -> gspread.Client:
 
 
 def _find_wunsch_worksheet(sh: gspread.Spreadsheet, tab_name: str) -> gspread.Worksheet:
-    all_ws   = sh.worksheets()
-    titles   = [ws.title for ws in all_ws]
+    all_ws    = sh.worksheets()
+    titles    = [ws.title for ws in all_ws]
     title_map = {ws.title: ws for ws in all_ws}
 
     if tab_name in title_map:
-        logger.info("Tab exakt gefunden: '%s'", tab_name)
         return title_map[tab_name]
-
     for title, ws in title_map.items():
         if title.lower() == tab_name.lower():
-            logger.info("Tab case-insensitiv gefunden: '%s'", title)
             return ws
-
     for kw in _WUNSCH_TAB_KEYWORDS:
         for title, ws in title_map.items():
             if kw in title.lower():
-                logger.info("Tab via Keyword '%s' gefunden: '%s'", kw, title)
                 return ws
 
     raise ValueError(
@@ -136,6 +131,55 @@ def _parse_date(raw: str) -> date | None:
 
 
 # ---------------------------------------------------------------------------
+# Mitarbeiter aus Sheet laden (Tab: Mitarbeiterübersicht)
+# Spalten: A = Name (ab A2), B = Wochenstunden (ab B2)
+# ---------------------------------------------------------------------------
+
+def read_mitarbeiter(
+    spreadsheet_id: str,
+    tab_name: str = "Mitarbeiterübersicht",
+) -> list["Mitarbeiter"]:
+    """
+    Liest Mitarbeiterliste aus dem Output-Sheet.
+    A2:A  → Vorname (oder Vollname, nur Vorname wird genutzt)
+    B2:B  → Wochenstunden (z.B. 35 oder 7.0)
+
+    Wochenstunden werden in Tagesstunden umgerechnet: std / 5
+    (35h / 5 = 7.0 Tagesstunden)
+    """
+    from app.services.schedule_builder import Mitarbeiter
+
+    client = _get_client()
+    sh     = client.open_by_key(spreadsheet_id)
+    ws     = sh.worksheet(tab_name)
+    rows   = ws.get_all_values()
+
+    result: list[Mitarbeiter] = []
+    for row in rows[1:]:   # Header überspringen
+        if not row or not row[0].strip():
+            continue
+        name_raw = row[0].strip()
+        vorname  = _extract_vorname(name_raw)
+        if not vorname:
+            continue
+
+        std_raw = row[1].strip() if len(row) > 1 else ""
+        try:
+            wochenstunden = float(std_raw.replace(",", "."))
+        except ValueError:
+            logger.warning("Stundenwert für '%s' nicht lesbar: '%s' — übersprungen", vorname, std_raw)
+            continue
+
+        # Wochenstunden → Tagesstunden (5-Tage-Woche)
+        tagesstunden = round(wochenstunden / 5, 1)
+        result.append(Mitarbeiter(name=vorname, tagesstunden=tagesstunden))
+        logger.info("Mitarbeiter geladen: %s (%.1fh/Tag)", vorname, tagesstunden)
+
+    logger.info("Mitarbeiterliste: %d Personen aus Tab '%s'", len(result), tab_name)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Debug
 # ---------------------------------------------------------------------------
 
@@ -147,9 +191,9 @@ def debug_wunsch_sheet(
     try:
         client = _get_client()
         sh = client.open_by_key(spreadsheet_id)
-        all_ws  = sh.worksheets()
-        titles  = [ws.title for ws in all_ws]
-        lines   = [
+        all_ws = sh.worksheets()
+        titles = [ws.title for ws in all_ws]
+        lines  = [
             f"📋 Spreadsheet-ID: ...{spreadsheet_id[-6:]}",
             f"📂 Alle Tabs ({len(titles)}): {', '.join(titles)}",
             "",
@@ -193,9 +237,9 @@ def read_abwesenheiten(
     for row in rows[1:]:
         if len(row) < 3 or not row[0].strip():
             continue
-        name     = row[0].strip()
-        art      = row[1].strip().upper()
-        datum    = _parse_date(row[2])
+        name  = row[0].strip()
+        art   = row[1].strip().upper()
+        datum = _parse_date(row[2])
         if datum is None:
             logger.warning("Unbekanntes Datumsformat: %s", row[2])
             continue
@@ -212,14 +256,6 @@ def read_abwesenheiten(
 def read_krankenstand(
     spreadsheet_id: str, tab_name: str = "Krankenstand"
 ) -> list["Abwesenheit"]:
-    """
-    Liest den Krankenstand aus einem Sheet mit den Spalten:
-      A: Name (Vorname reicht, Nachname wird ignoriert)
-      B: Beginn  (dd.mm.yyyy)
-      C: Ende    (dd.mm.yyyy)
-
-    Gibt eine Abwesenheit pro Krankheitstag (Art='K') zurück.
-    """
     from app.services.schedule_builder import Abwesenheit
 
     client = _get_client()
@@ -228,24 +264,23 @@ def read_krankenstand(
     rows   = ws.get_all_values()
 
     result: list[Abwesenheit] = []
-    for row in rows[1:]:          # Header überspringen
+    for row in rows[1:]:
         if len(row) < 3 or not row[0].strip():
             continue
-        vorname = _extract_vorname(row[0])   # nur Vorname
+        vorname = _extract_vorname(row[0])
         beginn  = _parse_date(row[1])
         ende    = _parse_date(row[2])
         if not vorname or beginn is None or ende is None:
-            logger.warning("Krankenstand-Zeile übersprungen (Parse-Fehler): %s", row)
+            logger.warning("Krankenstand-Zeile übersprungen: %s", row)
             continue
         if ende < beginn:
-            logger.warning("Krankenstand Ende < Beginn übersprungen: %s", row)
             continue
         current = beginn
         while current <= ende:
             result.append(Abwesenheit(name=vorname, art="K", datum=current))
             current += timedelta(days=1)
 
-    logger.info("Krankenstand geladen: %d Tage aus '%s'", len(result), tab_name)
+    logger.info("Krankenstand geladen: %d Tage", len(result))
     return result
 
 
@@ -258,7 +293,17 @@ def read_wunschschichten(
     tab_name: str = "Form_Responses",
     monat: int | None = None,
     jahr: int | None = None,
+    bekannte_namen: set[str] | None = None,
 ) -> list["Wunschschicht"]:
+    """
+    Liest Wunschschichten aus dem Google-Formular-Tab.
+
+    Dedup-Logik: Pro Person + Monat wird nur die jüngste Submission genommen
+    (rückwärts iterieren + seen_names pro Monat).
+
+    bekannte_namen: Wenn angegeben, werden nur Personen berücksichtigt,
+    die im Mitarbeiter-Config bekannt sind (Warnlog für unbekannte).
+    """
     from datetime import datetime
     from app.services.schedule_builder import Wunschschicht
 
@@ -269,13 +314,9 @@ def read_wunschschichten(
 
     rows = ws.get_all_values()
     logger.info("Tab '%s': %d Zeilen", ws.title, len(rows))
-    if rows:
-        logger.info("Header: %s", rows[0])
-    if len(rows) > 1:
-        logger.info("Erste Datenzeile (roh): %s", rows[1])
 
     seen_names: set[str] = set()
-    kandidaten: list[tuple[str, list[tuple[int, str]]]] = []
+    result: list[Wunschschicht] = []
 
     for row in reversed(rows[1:]):
         if len(row) <= 1 or not row[1].strip():
@@ -286,28 +327,43 @@ def read_wunschschichten(
         if not vorname:
             continue
 
-        monat_raw   = row[3].strip().lower() if len(row) > 3 else ""
-        zeile_monat = _MONATE_MAP.get(monat_raw)
+        # Monat aus Spalte D — unterstützt "Juni", "juni", "Juni 2026" etc.
+        monat_raw  = row[3].strip().lower() if len(row) > 3 else ""
+        # Nur das erste Wort nehmen ("juni 2026" → "juni")
+        monat_wort = monat_raw.split()[0] if monat_raw else ""
+        zeile_monat = _MONATE_MAP.get(monat_wort)
+
         if monat is not None and zeile_monat != monat:
             continue
 
-        if vorname in seen_names:
+        # Dedup: pro Person + Monat nur jüngster Eintrag
+        dedup_key = f"{vorname}_{zeile_monat}"
+        if dedup_key in seen_names:
             continue
-        seen_names.add(vorname)
+        seen_names.add(dedup_key)
 
+        # Unbekannte Mitarbeiter warnen (aber trotzdem laden)
+        if bekannte_namen and vorname not in bekannte_namen:
+            logger.warning(
+                "Wunsch von '%s' (%s): nicht in Mitarbeiterliste — wird ignoriert",
+                vorname, full_name
+            )
+            continue
+
+        # Spaltenpaare: (Tag, Schichtart) x3
         rohe_paare = [
             (row[4] if len(row) > 4 else "", row[5] if len(row) > 5 else ""),
             (row[6] if len(row) > 6 else "", row[7] if len(row) > 7 else ""),
             (row[8] if len(row) > 8 else "", row[9] if len(row) > 9 else ""),
         ]
 
-        paare: list[tuple[int, str]] = []
         for tag_raw, art_raw in rohe_paare:
             tag_raw = tag_raw.strip()
             art_raw = art_raw.strip().lower()
             if not tag_raw:
                 continue
 
+            # Schichtart mappen
             dienst_str = _SCHICHT_MAP.get(art_raw)
             if dienst_str is None:
                 for key, val in _SCHICHT_MAP.items():
@@ -318,14 +374,16 @@ def read_wunschschichten(
                 logger.warning("Schichtart '%s' für %s unbekannt", art_raw, vorname)
                 continue
 
+            # Tag parsen: Integer oder volles Datum
             tag_int: int | None = None
             try:
                 tag_int = int(tag_raw)
             except ValueError:
-                for fmt in ("%d.%m.%Y", "%d.%m.%y", "%Y-%m-%d", "%m/%d/%Y"):
+                for fmt in ("%d.%m.%Y", "%d.%m.%y", "%Y-%m-%d"):
                     try:
                         parsed = datetime.strptime(tag_raw, fmt)
-                        tag_int = parsed.day if (monat is None or parsed.month == monat) else None
+                        if monat is None or parsed.month == monat:
+                            tag_int = parsed.day
                         break
                     except ValueError:
                         continue
@@ -334,16 +392,8 @@ def read_wunschschichten(
                 logger.warning("Tag '%s' für %s nicht parsebar", tag_raw, vorname)
                 continue
 
-            paare.append((tag_int, dienst_str))
-            logger.info("Wunsch: %s Tag=%d Schicht=%s", vorname, tag_int, dienst_str)
-
-        if paare:
-            kandidaten.append((vorname, paare))
-
-    result: list[Wunschschicht] = []
-    for vorname, paare in kandidaten:
-        for tag_int, dienst_str in paare:
             result.append(Wunschschicht(name=vorname, tag=tag_int, dienst_str=dienst_str))
+            logger.info("Wunsch: %s Tag=%d Schicht=%s", vorname, tag_int, dienst_str)
 
     logger.info("%d Wunschschichten geladen (Tab: '%s')", len(result), ws.title)
     return result

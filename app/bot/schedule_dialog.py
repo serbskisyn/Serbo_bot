@@ -30,7 +30,8 @@ logger = logging.getLogger(__name__)
 
 MONAT, KRANKTAGE, BESTAETIGUNG = range(3)
 
-MITARBEITER_CONFIG: dict[str, float] = {
+# Fallback falls Sheet nicht ladbar
+MITARBEITER_FALLBACK: dict[str, float] = {
     "Heike":     7.0,
     "Silke":     8.0,
     "Ariane":    7.0,
@@ -42,6 +43,7 @@ MITARBEITER_CONFIG: dict[str, float] = {
     "Svitlana":  7.0,
     "Elvira":    7.0,
     "Romy":      6.0,
+    "Annika":    7.0,  # 35h / 5
 }
 
 MONATE_DE = {
@@ -177,7 +179,28 @@ async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE
     jahr      = context.user_data["jahr"]
     kranktage: list[Abwesenheit] = context.user_data.get("kranktage", [])
 
-    await update.message.reply_text("⏳ Lade Urlaubsdaten, Krankenstand und Wunschschichten …")
+    await update.message.reply_text("⏳ Lade Mitarbeiter, Urlaubsdaten, Krankenstand und Wunschschichten …")
+
+    # ── Mitarbeiter aus Sheet laden ───────────────────────────────────
+    ma_liste: list[Mitarbeiter] = []
+    try:
+        from app.services.gspread_client import read_mitarbeiter
+        ma_liste = read_mitarbeiter(SCHEDULE_OUTPUT_SHEET_ID, "Mitarbeiterübersicht")
+        namen_str = ", ".join(ma.name for ma in ma_liste)
+        await update.message.reply_text(
+            f"👥 {len(ma_liste)} Mitarbeiter geladen: {namen_str}"
+        )
+    except Exception as e:
+        logger.warning("Mitarbeiterliste nicht ladbar (%s) — Fallback aktiv", e)
+        await update.message.reply_text(
+            f"⚠️ Mitarbeiterliste nicht ladbar: {e}\nNutze Fallback-Liste."
+        )
+        ma_liste = [
+            Mitarbeiter(name=name, tagesstunden=std)
+            for name, std in MITARBEITER_FALLBACK.items()
+        ]
+
+    bekannte_namen = {ma.name for ma in ma_liste}
 
     abwesenheiten: list[Abwesenheit] = list(kranktage)
 
@@ -189,7 +212,7 @@ async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.info("Urlaub geladen: %d Einträge", len(ab_urlaub))
     except Exception as e:
         logger.warning("Urlaub laden fehlgeschlagen: %s", e)
-        await update.message.reply_text(f"⚠️ Urlaubsdaten nicht ladbar: {e}\nPlan ohne Urlaub.")
+        await update.message.reply_text(f"⚠️ Urlaubsdaten nicht ladbar: {e}")
 
     # ── Krankenstand aus Sheet ───────────────────────────────────────
     if SCHEDULE_KRANK_SHEET_ID:
@@ -207,9 +230,7 @@ async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await update.message.reply_text("ℹ️ Kein Krankenstand im Sheet eingetragen.")
         except Exception as e:
             logger.warning("Krankenstand laden fehlgeschlagen: %s", e)
-            await update.message.reply_text(
-                f"⚠️ Krankenstand nicht ladbar: {e}\nPlan ohne Sheet-Krankdaten."
-            )
+            await update.message.reply_text(f"⚠️ Krankenstand nicht ladbar: {e}")
 
     # ── Wunschschichten ────────────────────────────────────────────────
     wunschschichten: list[Wunschschicht] = []
@@ -220,25 +241,22 @@ async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE
             tab_name="Formularantworten 1",
             monat=monat,
             jahr=jahr,
+            bekannte_namen=bekannte_namen,
         )
         if wunschschichten:
+            # Eindeutige Personen mit Wünschen
+            personen = list({w.name for w in wunschschichten})
             await update.message.reply_text(
-                f"🙋 {len(wunschschichten)} Wunschschichten für diesen Monat geladen."
+                f"🙋 {len(wunschschichten)} Wunschschichten von "
+                f"{len(personen)} Personen geladen: {', '.join(personen)}"
             )
         else:
             await update.message.reply_text("ℹ️ Keine Wunschschichten für diesen Monat gefunden.")
     except Exception as e:
         logger.warning("Wunschschichten laden fehlgeschlagen: %s", e)
-        await update.message.reply_text(
-            f"⚠️ Wunschschichten nicht ladbar: {e}\nPlan ohne Wünsche."
-        )
+        await update.message.reply_text(f"⚠️ Wunschschichten nicht ladbar: {e}")
 
     # ── Plan generieren ────────────────────────────────────────────────
-    ma_liste = [
-        Mitarbeiter(name=name, tagesstunden=std)
-        for name, std in MITARBEITER_CONFIG.items()
-    ]
-
     try:
         gen = DienstplanGenerator(
             mitarbeiter_liste=ma_liste,

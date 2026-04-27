@@ -57,6 +57,9 @@ _SCHICHT_MAP: dict[str, str] = {
     "frei": "Frei",
 }
 
+# Keywords für automatische Tab-Erkennung (Wunschformular)
+_WUNSCH_TAB_KEYWORDS = ["form", "wunsch", "response", "antwort"]
+
 
 def _get_client() -> gspread.Client:
     json_str = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
@@ -68,19 +71,52 @@ def _get_client() -> gspread.Client:
             creds = Credentials.from_service_account_info(info, scopes=SCOPES)
             return gspread.authorize(creds)
         except Exception as e:
-            logger.warning(
-                "GOOGLE_SERVICE_ACCOUNT_JSON ungueltig (%s), versuche credentials.json", e
-            )
+            logger.warning("GOOGLE_SERVICE_ACCOUNT_JSON ungueltig (%s), versuche credentials.json", e)
 
     creds_path = os.path.abspath(_CREDENTIALS_FILE)
     if os.path.exists(creds_path):
-        logger.info("Nutze credentials.json: %s", creds_path)
         creds = Credentials.from_service_account_file(creds_path, scopes=SCOPES)
         return gspread.authorize(creds)
 
     raise EnvironmentError(
         "Kein Google-Credential gefunden. "
         "Setze GOOGLE_SERVICE_ACCOUNT_JSON oder lege credentials.json ins Projektroot."
+    )
+
+
+def _find_wunsch_worksheet(sh: gspread.Spreadsheet, tab_name: str) -> gspread.Worksheet:
+    """
+    Sucht das Wunsch-Tab in dieser Reihenfolge:
+    1. Exakter Name
+    2. Case-insensitiver Match
+    3. Tab dessen Name ein Keyword enthält (form/wunsch/response)
+    4. Falls nichts gefunden: ValueError mit Liste aller Tabs
+    """
+    all_ws = sh.worksheets()
+    titles = [ws.title for ws in all_ws]
+    title_map = {ws.title: ws for ws in all_ws}
+
+    # 1. Exakt
+    if tab_name in title_map:
+        logger.info("Wunsch-Tab exakt gefunden: '%s'", tab_name)
+        return title_map[tab_name]
+
+    # 2. Case-insensitiv
+    for title, ws in title_map.items():
+        if title.lower() == tab_name.lower():
+            logger.info("Wunsch-Tab case-insensitiv gefunden: '%s'", title)
+            return ws
+
+    # 3. Keyword-Suche
+    for kw in _WUNSCH_TAB_KEYWORDS:
+        for title, ws in title_map.items():
+            if kw in title.lower():
+                logger.info("Wunsch-Tab via Keyword '%s' gefunden: '%s'", kw, title)
+                return ws
+
+    raise ValueError(
+        f"Kein passendes Wunsch-Tab gefunden (gesucht: '{tab_name}'). "
+        f"Vorhandene Tabs: {titles}"
     )
 
 
@@ -101,37 +137,40 @@ def _extract_vorname(full_name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Debug-Helfer: zeigt rohe Sheet-Daten im Telegram-Chat
+# Debug-Befehl: zeigt alle Tabs + Rohdaten der ersten Zeilen
 # ---------------------------------------------------------------------------
 
 def debug_wunsch_sheet(
     spreadsheet_id: str,
     tab_name: str = "Form_Responses",
-    max_rows: int = 4,
+    max_rows: int = 3,
 ) -> str:
-    """
-    Gibt die ersten max_rows Zeilen des Tabs als lesbaren Text zurück.
-    Aufruf via /debugwunsch im Bot.
-    """
     try:
         client = _get_client()
         sh = client.open_by_key(spreadsheet_id)
-        tab_titles = [ws.title for ws in sh.worksheets()]
-        lines = [f"📋 Verfügbare Tabs: {', '.join(tab_titles)}", ""]
+        all_ws  = sh.worksheets()
+        titles  = [ws.title for ws in all_ws]
+        lines   = [f"📋 Spreadsheet-ID: ...{spreadsheet_id[-6:]}",
+                   f"📂 Alle Tabs ({len(titles)}): {', '.join(titles)}",
+                   ""]
 
-        if tab_name not in tab_titles:
-            lines.append(f"❌ Tab '{tab_name}' NICHT gefunden!")
+        # Bestes Tab finden
+        try:
+            ws = _find_wunsch_worksheet(sh, tab_name)
+            lines.append(f"✅ Genutzter Tab: '{ws.title}'")
+        except ValueError as e:
+            lines.append(f"❌ {e}")
             return "\n".join(lines)
 
-        ws = sh.worksheet(tab_name)
         rows = ws.get_all_values()
-        lines.append(f"✅ Tab '{tab_name}' — {len(rows)} Zeilen gesamt")
+        lines.append(f"📊 {len(rows)} Zeilen im Tab")
         lines.append("")
-        for i, row in enumerate(rows[:max_rows]):
-            lines.append(f"--- Zeile {i} ---")
-            for j, cell in enumerate(row):
-                col_letter = chr(ord('A') + j) if j < 26 else f"COL{j}"
-                lines.append(f"  {col_letter}({j}): '{cell}'")
+        for i, row in enumerate(rows[:max_rows + 1]):
+            prefix = "HEADER" if i == 0 else f"Zeile {i}"
+            lines.append(f"--- {prefix} ---")
+            for j, cell in enumerate(row[:10]):  # max 10 Spalten
+                col = chr(ord('A') + j)
+                lines.append(f"  {col}({j}): '{cell}'")
         return "\n".join(lines)
     except Exception:
         return f"Fehler beim Debug:\n{traceback.format_exc()}"
@@ -187,43 +226,29 @@ def read_wunschschichten(
 ) -> list["Wunschschicht"]:
     """
     Liest Wunschschichten aus dem Google-Formular-Tab.
+    Tab-Suche: exakt → case-insensitiv → Keyword (form/wunsch/response)
 
     Spalten (0-basiert):
       A(0) Timestamp | B(1) Name | C(2) E-Mail | D(3) Monat
-      E(4) Tag-1 | F(5) Schicht-1 | G(6) Tag-2 | H(7) Schicht-2 | I(8) Tag-3 | J(9) Schicht-3
+      E(4) Tag-1 | F(5) Schicht-1 | G(6) Tag-2 | H(7) Schicht-2
+      I(8) Tag-3 | J(9) Schicht-3
     """
     from datetime import datetime
     from app.services.schedule_builder import Wunschschicht
 
     client = _get_client()
-    sh = client.open_by_key(spreadsheet_id)
+    sh     = client.open_by_key(spreadsheet_id)
 
-    # Tab-Suche: exakt → case-insensitive
-    tab_titles = [t.title for t in sh.worksheets()]
-    logger.info("Verfügbare Tabs in Spreadsheet: %s", tab_titles)
-
-    ws = None
-    if tab_name in tab_titles:
-        ws = sh.worksheet(tab_name)
-    else:
-        for title in tab_titles:
-            if title.lower() == tab_name.lower():
-                ws = sh.worksheet(title)
-                logger.info("Tab gefunden als '%s' (case-insensitive)", title)
-                break
-
-    if ws is None:
-        raise ValueError(
-            f"Tab '{tab_name}' nicht gefunden. "
-            f"Vorhandene Tabs: {tab_titles}"
-        )
+    # Tab automatisch finden
+    ws = _find_wunsch_worksheet(sh, tab_name)
+    logger.info("Lese Wunsch-Tab: '%s'", ws.title)
 
     rows = ws.get_all_values()
-    logger.info("Tab '%s': %d Zeilen", tab_name, len(rows))
+    logger.info("Tab '%s': %d Zeilen", ws.title, len(rows))
     if rows:
         logger.info("Header: %s", rows[0])
     if len(rows) > 1:
-        logger.info("Erste Datenzeile: %s", rows[1])
+        logger.info("Erste Datenzeile (roh): %s", rows[1])
 
     seen_names: set[str] = set()
     kandidaten: list[tuple[str, list[tuple[int, str]]]] = []
@@ -242,12 +267,13 @@ def read_wunschschichten(
         zeile_monat = _MONATE_MAP.get(monat_raw)
         if monat is not None and zeile_monat != monat:
             logger.debug(
-                "'%s': Monat '%s'(%s) != Zielmonat %d – übersprungen",
-                vorname, monat_raw, zeile_monat, monat,
+                "'%s': Monat '%s' != Zielmonat %d – übersprungen",
+                vorname, monat_raw, monat,
             )
             continue
 
         if vorname in seen_names:
+            logger.debug("'%s' bereits verarbeitet (neueste gewinnt)", vorname)
             continue
         seen_names.add(vorname)
 
@@ -270,16 +296,9 @@ def read_wunschschichten(
                 for key, val in _SCHICHT_MAP.items():
                     if len(key) > 1 and key in art_raw:
                         dienst_str = val
-                        logger.info(
-                            "Teilmatch Schicht '%s' → '%s' für %s",
-                            art_raw, val, vorname,
-                        )
                         break
             if dienst_str is None:
-                logger.warning(
-                    "Schichtart '%s' für %s nicht erkennbar – übersprungen",
-                    art_raw, vorname,
-                )
+                logger.warning("Schichtart '%s' für %s unbekannt", art_raw, vorname)
                 continue
 
             # Tag parsen: reine Zahl ODER volles Datum
@@ -290,18 +309,13 @@ def read_wunschschichten(
                 for fmt in ("%d.%m.%Y", "%d.%m.%y", "%Y-%m-%d", "%m/%d/%Y"):
                     try:
                         parsed = datetime.strptime(tag_raw, fmt)
-                        if monat is not None and parsed.month != monat:
-                            tag_int = None
-                        else:
-                            tag_int = parsed.day
+                        tag_int = parsed.day if (monat is None or parsed.month == monat) else None
                         break
                     except ValueError:
                         continue
 
             if tag_int is None:
-                logger.warning(
-                    "Tag '%s' für %s nicht parsebar – übersprungen", tag_raw, vorname
-                )
+                logger.warning("Tag '%s' für %s nicht parsebar", tag_raw, vorname)
                 continue
 
             paare.append((tag_int, dienst_str))
@@ -315,7 +329,7 @@ def read_wunschschichten(
         for tag_int, dienst_str in paare:
             result.append(Wunschschicht(name=vorname, tag=tag_int, dienst_str=dienst_str))
 
-    logger.info("%d Wunschschichten aus Tab '%s' geladen", len(result), tab_name)
+    logger.info("%d Wunschschichten geladen (Tab: '%s')", len(result), ws.title)
     return result
 
 
@@ -343,11 +357,9 @@ def write_dienstplan(
 
     if is_new:
         ws = sh.add_worksheet(title=final_name, rows=50, cols=35)
-        logger.info("Neues Tab angelegt: '%s'", final_name)
     else:
         ws = sh.worksheet(final_name)
         ws.clear()
-        logger.info("Tab gecleart: '%s'", final_name)
 
     header1 = ["Tag"] + mitarbeiter + ["offen", "Tag"]
     ws.update("A1", [header1])
@@ -370,7 +382,6 @@ def write_dienstplan(
 
     ws.update("A4", data_rows)
 
-    # Farben + Notizen
     requests   = []
     ma_col_map = {ma: i + 2 for i, ma in enumerate(mitarbeiter)}
     ma_col_map["offen"] = len(mitarbeiter) + 2
@@ -403,7 +414,6 @@ def write_dienstplan(
             val = d.value if d else "Frei"
             rgb = FARBEN_RGB.get(val, (1.0, 1.0, 1.0))
             requests.append(_bg_request(ws.id, sheet_row - 1, col_idx - 1, *rgb))
-
             notiz = notiz_map.get((sheet_row, col_idx))
             if notiz:
                 requests.append(_note_request(ws.id, sheet_row - 1, col_idx - 1, notiz))

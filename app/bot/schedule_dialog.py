@@ -1,5 +1,5 @@
 """
-schedule_dialog.py — Telegram ConversationHandler fuer /dienstplan
+schedule_dialog.py — Telegram ConversationHandler für /dienstplan
 """
 from __future__ import annotations
 
@@ -10,10 +10,15 @@ from datetime import date, datetime, timedelta
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     CommandHandler, MessageHandler, ConversationHandler,
-    ContextTypes, filters
+    ContextTypes, filters,
 )
 
-from app.services.schedule_builder import DienstplanGenerator, Mitarbeiter, Abwesenheit
+from app.services.schedule_builder import (
+    DienstplanGenerator,
+    Mitarbeiter,
+    Abwesenheit,
+    Wunschschicht,
+)
 from app.config import (
     SCHEDULE_URLAUB_SHEET_ID,
     SCHEDULE_OUTPUT_SHEET_ID,
@@ -100,7 +105,7 @@ async def cmd_dienstplan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "📅 *Dienstplan-Generator*\n\n"
         "Für welchen Monat soll der Plan erstellt werden?\n"
         "Beispiel: `Mai 2026` oder `05/2026`",
-        parse_mode="Markdown"
+        parse_mode="Markdown",
     )
     return MONAT
 
@@ -110,7 +115,7 @@ async def handle_monat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     if not result:
         await update.message.reply_text(
             "❌ Format nicht erkannt. Bitte eingeben wie: `Mai 2026` oder `5/2026`",
-            parse_mode="Markdown"
+            parse_mode="Markdown",
         )
         return MONAT
     monat, jahr = result
@@ -124,7 +129,7 @@ async def handle_monat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         "Format: `Name Von-Bis` z.B. `Maria 03.05-07.05`\n"
         "Mehrere: je eine Zeile oder Komma getrennt.\n\n"
         "Ohne Krankmeldungen: `/fertig`",
-        parse_mode="Markdown"
+        parse_mode="Markdown",
     )
     context.user_data["kranktage"] = []
     return KRANKTAGE
@@ -138,7 +143,7 @@ async def handle_kranktage(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not kranktage:
         await update.message.reply_text(
             "❌ Format nicht erkannt.\nBeispiel: `Maria 03.05-07.05` oder `/fertig`",
-            parse_mode="Markdown"
+            parse_mode="Markdown",
         )
         return KRANKTAGE
     context.user_data["kranktage"].extend(kranktage)
@@ -146,18 +151,19 @@ async def handle_kranktage(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text(
         f"✅ {len(kranktage)} Kranktage für {', '.join(namen)} gespeichert.\n"
         "Weitere Krankmeldungen oder `/fertig`.",
-        parse_mode="Markdown"
+        parse_mode="Markdown",
     )
     return KRANKTAGE
 
 
 async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    monat    = context.user_data["monat"]
-    jahr     = context.user_data["jahr"]
+    monat     = context.user_data["monat"]
+    jahr      = context.user_data["jahr"]
     kranktage: list[Abwesenheit] = context.user_data.get("kranktage", [])
 
-    await update.message.reply_text("⏳ Lade Urlaubsdaten und erstelle Plan...")
+    await update.message.reply_text("⏳ Lade Urlaubsdaten und Wunschschichten …")
 
+    # ── Abwesenheiten ────────────────────────────────────────────────
     abwesenheiten: list[Abwesenheit] = list(kranktage)
     try:
         from app.services.gspread_client import read_abwesenheiten
@@ -169,38 +175,70 @@ async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"⚠️ Urlaubsdaten nicht ladbar: {e}\nPlan ohne Urlaub."
         )
 
+    # ── Wunschschichten ──────────────────────────────────────────────
+    wunschschichten: list[Wunschschicht] = []
+    try:
+        from app.services.gspread_client import read_wunschschichten
+        wunschschichten = read_wunschschichten(
+            SCHEDULE_URLAUB_SHEET_ID, "Wunschschichten"
+        )
+        if wunschschichten:
+            await update.message.reply_text(
+                f"🙋 {len(wunschschichten)} Wunschschichten geladen."
+            )
+    except Exception as e:
+        logger.warning("Wunschschichten laden fehlgeschlagen: %s", e)
+        await update.message.reply_text(
+            f"⚠️ Wunschschichten nicht ladbar: {e}\nPlan ohne Wünsche."
+        )
+
+    # ── Plan generieren ──────────────────────────────────────────────
     ma_liste = [
         Mitarbeiter(name=name, tagesstunden=std)
         for name, std in MITARBEITER_CONFIG.items()
     ]
 
     try:
-        gen    = DienstplanGenerator(ma_liste, abwesenheiten, jahr, monat)
+        gen  = DienstplanGenerator(
+            mitarbeiter_liste=ma_liste,
+            abwesenheiten=abwesenheiten,
+            jahr=jahr,
+            monat=monat,
+            wunschschichten=wunschschichten,
+        )
         plan   = gen.generate()
         report = gen.get_report()
         for chunk in _chunk_text(report, 4000):
-            await update.message.reply_text(f"```\n{chunk}\n```", parse_mode="Markdown")
+            await update.message.reply_text(
+                f"```\n{chunk}\n```", parse_mode="Markdown"
+            )
         context.user_data["gen"]  = gen
         context.user_data["plan"] = plan
     except Exception as e:
         logger.exception("Generierung fehlgeschlagen")
-        await update.message.reply_text(f"❌ Fehler: {e}")
+        await update.message.reply_text(f"❌ Fehler bei der Planerstellung: {e}")
         return ConversationHandler.END
 
     keyboard = [["✅ In Google Sheets übertragen", "❌ Abbrechen"]]
     await update.message.reply_text(
         "Plan erstellt. In Google Sheets übertragen?",
-        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard, one_time_keyboard=True, resize_keyboard=True
+        ),
     )
     return BESTAETIGUNG
 
 
 async def handle_bestaetigung(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if "Abbrechen" in update.message.text:
-        await update.message.reply_text("Plan verworfen.", reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text(
+            "Plan verworfen.", reply_markup=ReplyKeyboardRemove()
+        )
         return ConversationHandler.END
 
-    await update.message.reply_text("⏳ Schreibe in Google Sheets...", reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text(
+        "⏳ Schreibe in Google Sheets …", reply_markup=ReplyKeyboardRemove()
+    )
     try:
         from app.services.gspread_client import write_dienstplan
         gen  = context.user_data["gen"]
@@ -214,7 +252,7 @@ async def handle_bestaetigung(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(
             f"✅ Dienstplan in Tab *{tab}* geschrieben!\n"
             f"https://docs.google.com/spreadsheets/d/{SCHEDULE_OUTPUT_SHEET_ID}",
-            parse_mode="Markdown"
+            parse_mode="Markdown",
         )
     except Exception as e:
         logger.exception("Sheets schreiben fehlgeschlagen")
@@ -223,7 +261,9 @@ async def handle_bestaetigung(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def cmd_abbrechen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("Abgebrochen.", reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text(
+        "Abgebrochen.", reply_markup=ReplyKeyboardRemove()
+    )
     return ConversationHandler.END
 
 
@@ -244,12 +284,16 @@ def get_schedule_handler() -> ConversationHandler:
     return ConversationHandler(
         entry_points=[CommandHandler("dienstplan", cmd_dienstplan)],
         states={
-            MONAT:        [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_monat)],
-            KRANKTAGE:    [
+            MONAT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_monat),
+            ],
+            KRANKTAGE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_kranktage),
                 CommandHandler("fertig", handle_kranktage),
             ],
-            BESTAETIGUNG: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_bestaetigung)],
+            BESTAETIGUNG: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_bestaetigung),
+            ],
         },
         fallbacks=[CommandHandler("abbrechen", cmd_abbrechen)],
         name="dienstplan_dialog",

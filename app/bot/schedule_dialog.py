@@ -156,6 +156,31 @@ async def handle_kranktage(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return KRANKTAGE
 
 
+def _build_wunsch_notizen(
+    generator: DienstplanGenerator,
+) -> dict[str, list[tuple[date, str, bool]]]:
+    """
+    Erstellt den Notizen-Dict für write_dienstplan().
+
+    ma_name → [(datum, dienst_str, erfuellt), ...]
+    erfuellt=True  wenn der Plan an diesem Tag genau diese Schicht zeigt
+    erfuellt=False wenn eine Violation existiert
+    """
+    from app.services.schedule_builder import Dienst
+
+    notizen: dict[str, list[tuple[date, str, bool]]] = {}
+    violations_text = " ".join(generator.violations)
+
+    for ma_name, wuensche in generator._wunsch_index.items():
+        for wdatum, wdienst in wuensche:
+            geplant = generator.plan.get(ma_name, {}).get(wdatum)
+            erfuellt = (geplant == wdienst)
+            notizen.setdefault(ma_name, []).append(
+                (wdatum, wdienst.value, erfuellt)
+            )
+    return notizen
+
+
 async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     monat     = context.user_data["monat"]
     jahr      = context.user_data["jahr"]
@@ -163,7 +188,7 @@ async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     await update.message.reply_text("⏳ Lade Urlaubsdaten und Wunschschichten …")
 
-    # ── Abwesenheiten ────────────────────────────────────────────────
+    # ── Abwesenheiten ──────────────────────────────────────────────────
     abwesenheiten: list[Abwesenheit] = list(kranktage)
     try:
         from app.services.gspread_client import read_abwesenheiten
@@ -175,16 +200,23 @@ async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"⚠️ Urlaubsdaten nicht ladbar: {e}\nPlan ohne Urlaub."
         )
 
-    # ── Wunschschichten ──────────────────────────────────────────────
+    # ── Wunschschichten ────────────────────────────────────────────────
     wunschschichten: list[Wunschschicht] = []
     try:
         from app.services.gspread_client import read_wunschschichten
         wunschschichten = read_wunschschichten(
-            SCHEDULE_URLAUB_SHEET_ID, "Wunschschichten"
+            spreadsheet_id=SCHEDULE_URLAUB_SHEET_ID,
+            tab_name="Form_Responses",
+            monat=monat,
+            jahr=jahr,
         )
         if wunschschichten:
             await update.message.reply_text(
-                f"🙋 {len(wunschschichten)} Wunschschichten geladen."
+                f"🙋 {len(wunschschichten)} Wunschschichten für diesen Monat geladen."
+            )
+        else:
+            await update.message.reply_text(
+                "ℹ️ Keine Wunschschichten für diesen Monat gefunden."
             )
     except Exception as e:
         logger.warning("Wunschschichten laden fehlgeschlagen: %s", e)
@@ -192,14 +224,14 @@ async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"⚠️ Wunschschichten nicht ladbar: {e}\nPlan ohne Wünsche."
         )
 
-    # ── Plan generieren ──────────────────────────────────────────────
+    # ── Plan generieren ────────────────────────────────────────────────
     ma_liste = [
         Mitarbeiter(name=name, tagesstunden=std)
         for name, std in MITARBEITER_CONFIG.items()
     ]
 
     try:
-        gen  = DienstplanGenerator(
+        gen = DienstplanGenerator(
             mitarbeiter_liste=ma_liste,
             abwesenheiten=abwesenheiten,
             jahr=jahr,
@@ -243,11 +275,16 @@ async def handle_bestaetigung(update: Update, context: ContextTypes.DEFAULT_TYPE
         from app.services.gspread_client import write_dienstplan
         gen  = context.user_data["gen"]
         plan = context.user_data["plan"]
-        tab  = write_dienstplan(
+
+        # Wunsch-Notizen aufbauen
+        wunsch_notizen = _build_wunsch_notizen(gen)
+
+        tab = write_dienstplan(
             spreadsheet_id=SCHEDULE_OUTPUT_SHEET_ID,
             plan=plan,
             mitarbeiter=[ma.name for ma in gen.ma_liste],
             tage=gen.tage,
+            wunsch_notizen=wunsch_notizen,
         )
         await update.message.reply_text(
             f"✅ Dienstplan in Tab *{tab}* geschrieben!\n"

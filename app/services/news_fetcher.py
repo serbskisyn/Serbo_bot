@@ -12,11 +12,24 @@ logger = logging.getLogger(__name__)
 MAX_AGE_HOURS = 48
 SNIPPET_MAX_WORDS = 300
 
+# Globale Ausschluss-Keywords (alle Clubs)
 EXCLUDE_KEYWORDS = [
     " ii ", " u23", " u21", " u19", " u17", " reserve", " reserv",
     "frauen", "women", "female", "damen", "handball", "basketball",
     "esport", "youth", "jugend", "amateure", "dritte liga", "regionalliga",
 ]
+
+# Club-spezifische Zusatz-Filter: Artikel die diese Keywords enthalten werden verworfen
+CLUB_EXCLUDE_KEYWORDS: dict[str, list[str]] = {
+    "borussia dortmund": [
+        "bvb ii", "bvb 2", "dortmund ii", "dortmund 2",
+        "u23", "u21", "u19", "u17", "nachwuchs", "jugend",
+        "handball", "basketball", "esport", "e-sport",
+        "borussia dortmund ii", "bvb-ii",
+        "frauen", "women", "damen",
+        "3. liga", "dritte liga", "regionalliga",
+    ],
+}
 
 # Allgemeine Fussball-RSS-Feeds (alle Clubs)
 RSS_FEEDS = [
@@ -31,11 +44,14 @@ RSS_FEEDS = [
     ("transfermarkt.de","https://www.transfermarkt.de/rss/news"),
 ]
 
-# Club-spezifische Feeds (nur fuer jeweiligen Club abgerufen)
+# Club-spezifische Feeds
 CLUB_FEEDS: dict[str, list[str]] = {
     "dynamo dresden": [
         "https://www.mdr.de/sport/index-rss.xml",
         "https://www.dnn.de/arc/outboundfeeds/rss/tags_slug/dynamo-dresden/",
+    ],
+    "borussia dortmund": [
+        "https://www.transfermarkt.de/borussia-dortmund/rss/verein/16",
     ],
     "fc bayern münchen": [
         "https://www.transfermarkt.de/fc-bayern-munchen/rss/verein/27",
@@ -98,9 +114,21 @@ def _is_recent(pub: datetime | None) -> bool:
     return pub >= cutoff
 
 
-def _is_excluded(text: str) -> bool:
+def _is_excluded(text: str, extra_keywords: list[str] | None = None) -> bool:
     low = text.lower()
-    return any(kw in low for kw in EXCLUDE_KEYWORDS)
+    if any(kw in low for kw in EXCLUDE_KEYWORDS):
+        return True
+    if extra_keywords and any(kw in low for kw in extra_keywords):
+        return True
+    return False
+
+
+def _get_club_exclude_keywords(club_name: str) -> list[str]:
+    name_clean = re.sub(r"\(.*?\)", "", club_name).lower().strip()
+    for key, kws in CLUB_EXCLUDE_KEYWORDS.items():
+        if key in name_clean or name_clean in key:
+            return kws
+    return []
 
 
 def _is_homepage_url(url: str) -> bool:
@@ -184,11 +212,9 @@ def _gnews_from() -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-async def _fetch_gnews(client: httpx.AsyncClient, club_name: str) -> list[NewsItem]:
-    """GNews API — nur noch 1 Query (Clubname) statt 3, um 429-Fehler zu reduzieren."""
+async def _fetch_gnews(client: httpx.AsyncClient, club_name: str, extra_exclude: list[str]) -> list[NewsItem]:
     name_clean = re.sub(r"\(.*?\)", "", club_name).strip()
     items = []
-
     try:
         url = (
             f"https://gnews.io/api/v4/search"
@@ -210,26 +236,18 @@ async def _fetch_gnews(client: httpx.AsyncClient, club_name: str) -> list[NewsIt
 
             if not title or not art_url:
                 continue
-            if _is_excluded(title + " " + snippet):
+            if _is_excluded(title + " " + snippet, extra_exclude):
                 continue
             if _is_homepage_url(art_url):
                 continue
 
-            logger.info(f"GNews URL: {art_url}")
-            items.append(NewsItem(
-                title=title,
-                url=art_url,
-                source=source,
-                published=pub,
-                snippet=_truncate_words(snippet),
-            ))
+            items.append(NewsItem(title=title, url=art_url, source=source, published=pub, snippet=_truncate_words(snippet)))
     except Exception as e:
         logger.warning(f"GNews Fehler ({club_name}): {e}")
-
     return items
 
 
-def _parse_feed(xml_text: str, source_name: str) -> list[NewsItem]:
+def _parse_feed(xml_text: str, source_name: str, extra_exclude: list[str] | None = None) -> list[NewsItem]:
     items = []
     try:
         root    = ET.fromstring(xml_text)
@@ -244,18 +262,12 @@ def _parse_feed(xml_text: str, source_name: str) -> list[NewsItem]:
                 continue
             if not _is_recent(pub):
                 continue
-            if _is_excluded(title + " " + snippet):
+            if _is_excluded(title + " " + snippet, extra_exclude):
                 continue
             if _is_homepage_url(url):
                 continue
 
-            items.append(NewsItem(
-                title=title,
-                url=url,
-                source=source_name,
-                published=pub,
-                snippet=_truncate_words(snippet),
-            ))
+            items.append(NewsItem(title=title, url=url, source=source_name, published=pub, snippet=_truncate_words(snippet)))
     except ET.ParseError as e:
         logger.warning(f"RSS Parse Fehler ({source_name}): {e}")
     return items
@@ -265,11 +277,11 @@ def _google_news_url(query: str) -> str:
     return f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=de&gl=DE&ceid=DE:de"
 
 
-async def _fetch_rss(client: httpx.AsyncClient, url: str, source: str) -> list[NewsItem]:
+async def _fetch_rss(client: httpx.AsyncClient, url: str, source: str, extra_exclude: list[str] | None = None) -> list[NewsItem]:
     try:
         r = await client.get(url, timeout=10.0, follow_redirects=True)
         r.raise_for_status()
-        return _parse_feed(r.text, source)
+        return _parse_feed(r.text, source, extra_exclude)
     except Exception as e:
         logger.warning(f"RSS Feed Fehler ({source}): {e}")
         return []
@@ -278,29 +290,30 @@ async def _fetch_rss(client: httpx.AsyncClient, url: str, source: str) -> list[N
 async def fetch_club_news(club_name: str) -> list[NewsItem]:
     all_items: list[NewsItem] = []
     keywords = _club_keywords(club_name)
+    extra_exclude = _get_club_exclude_keywords(club_name)
 
     async with httpx.AsyncClient(headers={"User-Agent": "Mozilla/5.0"}) as client:
 
-        # Layer 1: GNews API (1 Query)
-        gnews_items = await _fetch_gnews(client, club_name)
+        # Layer 1: GNews API
+        gnews_items = await _fetch_gnews(client, club_name, extra_exclude)
         all_items.extend(gnews_items)
         logger.info(f"GNews: {len(gnews_items)} Artikel fuer {club_name}")
 
         # Layer 2: Google News RSS
         name_clean = re.sub(r"\(.*?\)", "", club_name).strip()
         for query in [name_clean, f"{name_clean} Bundesliga", f"{name_clean} transfer"]:
-            items = await _fetch_rss(client, _google_news_url(query), "Google News")
+            items = await _fetch_rss(client, _google_news_url(query), "Google News", extra_exclude)
             all_items.extend(items)
 
         # Layer 3: Allgemeine RSS Feeds
         for source, url in RSS_FEEDS:
-            items = await _fetch_rss(client, url, source)
+            items = await _fetch_rss(client, url, source, extra_exclude)
             all_items.extend(items)
 
         # Layer 4: Club-spezifische Feeds
         for url in _get_club_feeds(club_name):
             domain = url.split("/")[2].replace("www.", "")
-            items  = await _fetch_rss(client, url, domain)
+            items  = await _fetch_rss(client, url, domain, extra_exclude)
             all_items.extend(items)
             logger.info(f"Club-Feed ({domain}): {len(items)} Artikel")
 

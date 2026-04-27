@@ -1,24 +1,24 @@
 import re
 import logging
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from app.services.news_fetcher import NewsItem
 
 logger = logging.getLogger(__name__)
 
-SIMILARITY_THRESHOLD = 0.20      # gesenkt von 0.35
-ENTITY_BOOST_WORDS   = 3         # min. gemeinsame Entitäten für Cluster-Merge
+SIMILARITY_THRESHOLD = 0.25
+ENTITY_BOOST_WORDS   = 3
 MEDALS = ["🥇", "🥈", "🥉"]
-TOP_N_OUTPUT = 5                  # max. News pro Verein in der Ausgabe
+TOP_N_OUTPUT = 5
 
 
 @dataclass
 class RankedNews:
     title:     str
     snippet:   str
-    sources:   list[str]
-    urls:      list[str]
-    score:     int
+    sources:   list[str] = field(default_factory=list)
+    urls:      list[str] = field(default_factory=list)
+    score:     int = 0
     published: str = ""
 
 
@@ -45,18 +45,13 @@ def _shared_tokens(a: set, b: set) -> int:
 
 
 def _best_snippet(snippets: list[str]) -> str:
-    clean = [s for s in snippets if s]
+    clean = [s for s in snippets if s and len(s.split()) >= 5]
     if not clean:
         return ""
     return max(clean, key=lambda s: len(s.split()))
 
 
 def _cluster(items: list, get_title) -> list[list[int]]:
-    """
-    Clustering via Jaccard auf Titeln.
-    Zwei Artikel werden auch geclustert wenn sie mind. ENTITY_BOOST_WORDS
-    gemeinsame Tokens haben (fängt Sancho/Transfer-Artikel etc.)
-    """
     token_sets = [_normalize(get_title(i)) for i in items]
     clusters:  list[list[int]] = []
     assigned = [False] * len(items)
@@ -69,8 +64,8 @@ def _cluster(items: list, get_title) -> list[list[int]]:
         for j in range(i + 1, len(items)):
             if assigned[j]:
                 continue
-            jaccard  = _jaccard(token_sets[i], token_sets[j])
-            shared   = _shared_tokens(token_sets[i], token_sets[j])
+            jaccard = _jaccard(token_sets[i], token_sets[j])
+            shared  = _shared_tokens(token_sets[i], token_sets[j])
             if jaccard >= SIMILARITY_THRESHOLD or shared >= ENTITY_BOOST_WORDS:
                 cluster.append(j)
                 assigned[j] = True
@@ -78,10 +73,12 @@ def _cluster(items: list, get_title) -> list[list[int]]:
     return clusters
 
 
-def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
+def rank_news(items: list[NewsItem], top_n: int = 15) -> list[RankedNews]:
+    """Clustert NewsItems nach Titel-Ähnlichkeit und gibt RankedNews mit allen Quellen/URLs zurück."""
     if not items:
         return []
 
+    # URL-Deduplizierung
     seen_urls: set[str] = set()
     unique: list[NewsItem] = []
     for item in items:
@@ -94,23 +91,28 @@ def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
     ranked: list[RankedNews] = []
     for cluster in clusters:
         cluster_items = [unique[i] for i in cluster]
-        best_title    = max(cluster_items, key=lambda x: len(x.title)).title
 
-        source_map: dict[str, str] = {}
+        # Alle Quellen + URLs des Clusters sammeln (dedupliziert nach URL)
+        seen_urls_cluster: set[str] = set()
+        all_sources: list[str] = []
+        all_urls:    list[str] = []
         for item in cluster_items:
-            if item.source not in source_map:
-                source_map[item.source] = item.url
+            if item.url not in seen_urls_cluster:
+                seen_urls_cluster.add(item.url)
+                all_sources.append(item.source)
+                all_urls.append(item.url)
 
-        snippet = _best_snippet([i.snippet for i in cluster_items])
-        dated   = [i for i in cluster_items if i.published]
-        pub_str = max(dated, key=lambda x: x.published).published.strftime("%d.%m.%Y %H:%M") if dated else ""
+        best_title  = max(cluster_items, key=lambda x: len(x.title)).title
+        snippet     = _best_snippet([i.snippet for i in cluster_items])
+        dated       = [i for i in cluster_items if i.published]
+        pub_str     = max(dated, key=lambda x: x.published).published.strftime("%d.%m.%Y %H:%M") if dated else ""
 
         ranked.append(RankedNews(
             title=best_title,
             snippet=snippet,
-            sources=list(source_map.keys()),
-            urls=list(source_map.values()),
-            score=len(source_map),
+            sources=all_sources,
+            urls=all_urls,
+            score=len(all_urls),  # Score = Anzahl unabhängiger Quellen
             published=pub_str,
         ))
 
@@ -119,7 +121,7 @@ def rank_news(items: list[NewsItem], top_n: int = 10) -> list[RankedNews]:
 
 
 def _re_cluster(items: list[RankedNews]) -> list[RankedNews]:
-    """Zweites Clustering nach LLM-Enrichment auf deutschen Titeln."""
+    """Zweites Clustering nach LLM-Enrichment."""
     if not items:
         return []
 
@@ -129,13 +131,13 @@ def _re_cluster(items: list[RankedNews]) -> list[RankedNews]:
     for cluster in clusters:
         cluster_items = [items[i] for i in cluster]
 
-        seen_sources: set[str] = set()
-        all_sources:  list[str] = []
-        all_urls:     list[str] = []
+        seen_urls: set[str] = set()
+        all_sources: list[str] = []
+        all_urls:    list[str] = []
         for item in cluster_items:
             for src, url in zip(item.sources, item.urls):
-                if src not in seen_sources:
-                    seen_sources.add(src)
+                if url not in seen_urls:
+                    seen_urls.add(url)
                     all_sources.append(src)
                     all_urls.append(url)
 
@@ -146,7 +148,7 @@ def _re_cluster(items: list[RankedNews]) -> list[RankedNews]:
             snippet=best.snippet,
             sources=all_sources,
             urls=all_urls,
-            score=len(all_sources),
+            score=len(all_urls),
             published=max(
                 (i.published for i in cluster_items if i.published),
                 default=""
@@ -162,7 +164,7 @@ async def enrich_ranked_news(ranked: list[RankedNews], club: str) -> list[Ranked
 
     async def _enrich_one(item: RankedNews) -> RankedNews | None:
         enriched = await enrich_news_item(
-            url=item.urls[0],
+            url=item.urls[0] if item.urls else "",
             title=item.title,
             snippet=item.snippet,
             club=club,
@@ -171,7 +173,8 @@ async def enrich_ranked_news(ranked: list[RankedNews], club: str) -> list[Ranked
             return None
         item.title   = enriched["headline"]
         item.snippet = enriched["snippet"]
-        item.urls[0] = enriched["url"]
+        if item.urls:
+            item.urls[0] = enriched["url"]
         return item
 
     results  = await asyncio.gather(*[_enrich_one(r) for r in ranked])
@@ -183,16 +186,15 @@ async def enrich_ranked_news(ranked: list[RankedNews], club: str) -> list[Ranked
 
 
 def format_news_output(club_name: str, ranked: list[RankedNews]) -> str:
-    """Formatiert die Top-N News eines Vereins für Telegram-Ausgabe."""
+    """Formatiert die Top-N News für Telegram. Quellen bei mehreren Quellen nummeriert untereinander."""
     if not ranked:
         return f"⚽ *{club_name}* – Keine aktuellen News gefunden (letzte 48h)."
 
-    top = ranked[:TOP_N_OUTPUT]
+    top   = ranked[:TOP_N_OUTPUT]
     lines = [f"⚽ *{club_name}* – Top {len(top)} News\n{'─' * 28}"]
 
     for i, news in enumerate(top):
         medal = MEDALS[i] if i < 3 else f"{i + 1}."
-
         lines.append(f"\n{medal} *{news.title}*")
 
         if news.snippet:
@@ -201,11 +203,18 @@ def format_news_output(club_name: str, ranked: list[RankedNews]) -> str:
         if news.published:
             lines.append(f"🕐 {news.published}")
 
-        # Quellen nummeriert untereinander
-        if len(news.urls) == 1:
-            lines.append(f"[{_domain(news.urls[0])}]({news.urls[0]})")
+        # Quellen-Ausgabe: eine Quelle = einzelner Link, mehrere = nummeriert untereinander
+        valid_pairs = [
+            (url, src) for url, src in zip(news.urls, news.sources)
+            if url and url.startswith("http")
+        ]
+        if not valid_pairs:
+            pass
+        elif len(valid_pairs) == 1:
+            url, _ = valid_pairs[0]
+            lines.append(f"[{_domain(url)}]({url})")
         else:
-            for idx, url in enumerate(news.urls, start=1):
+            for idx, (url, _) in enumerate(valid_pairs, start=1):
                 lines.append(f"{idx}. [{_domain(url)}]({url})")
 
     return "\n".join(lines)

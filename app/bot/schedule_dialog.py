@@ -200,6 +200,15 @@ async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE
             for name, std in MITARBEITER_FALLBACK.items()
         ]
 
+    # Springer-Namen ermitteln (tagesstunden == 0)
+    springer_namen: list[str] = [ma.name for ma in ma_liste if ma.ist_springer]
+    if springer_namen:
+        await update.message.reply_text(
+            f"🔄 Springer erkannt: {', '.join(springer_namen)}\n"
+            "   → Werden im Plan angezeigt (nur Urlaub/Krank), "
+            "aber nicht automatisch eingeplant."
+        )
+
     bekannte_namen = {ma.name for ma in ma_liste}
 
     abwesenheiten: list[Abwesenheit] = list(kranktage)
@@ -285,8 +294,9 @@ async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE
         report = gen.get_report()
         for chunk in _chunk_text(report, 4000):
             await update.message.reply_text(f"```\n{chunk}\n```", parse_mode="Markdown")
-        context.user_data["gen"]  = gen
-        context.user_data["plan"] = plan
+        context.user_data["gen"]             = gen
+        context.user_data["plan"]            = plan
+        context.user_data["springer_namen"]  = springer_namen
     except Exception as e:
         logger.exception("Generierung fehlgeschlagen")
         await update.message.reply_text(f"❌ Fehler bei der Planerstellung: {e}")
@@ -308,14 +318,16 @@ async def handle_bestaetigung(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text("⏳ Schreibe in Google Sheets …", reply_markup=ReplyKeyboardRemove())
     try:
         from app.services.gspread_client import write_dienstplan
-        gen  = context.user_data["gen"]
-        plan = context.user_data["plan"]
-        wunsch_notizen = _build_wunsch_notizen(gen)
+        gen             = context.user_data["gen"]
+        plan            = context.user_data["plan"]
+        springer_namen  = context.user_data.get("springer_namen", [])
+        wunsch_notizen  = _build_wunsch_notizen(gen)
 
-        # Soll-Stunden aus Generator-States bauen
+        # Soll-Stunden aus Generator-States bauen (nur reguläre MA)
         ma_soll = {
             ma.name: gen.states[ma.name].ma.soll_stunden
             for ma in gen.ma_liste
+            if not ma.ist_springer
         }
 
         tab = write_dienstplan(
@@ -325,6 +337,7 @@ async def handle_bestaetigung(update: Update, context: ContextTypes.DEFAULT_TYPE
             tage=gen.tage,
             wunsch_notizen=wunsch_notizen,
             ma_soll=ma_soll,
+            springer=springer_namen,
         )
         await update.message.reply_text(
             f"✅ Dienstplan in Tab *{tab}* geschrieben!\n"

@@ -16,44 +16,62 @@ CLUB_KEYS = [
     "clubs", "club", "fussballverein", "fussballvereine", "favoriten",
 ]
 
+# Aliase: jeder Wert in der Liste gilt als identisch mit dem Schluessel
+CLUB_ALIASES: dict[str, list[str]] = {
+    "borussia dortmund": ["dortmund", "bvb", "bvb 09", "borussia dortmund"],
+    "dynamo dresden":    ["dynamo", "sgd", "dynamo dresden"],
+    "fc bayern":         ["bayern", "fc bayern muenchen", "fc bayern münchen", "fcb"],
+    "rb leipzig":        ["leipzig", "rbl"],
+    "bayer leverkusen":  ["leverkusen", "bayer"],
+}
+
+
+def _canonical(name: str) -> str:
+    """Gibt den kanonischen Club-Namen zurueck (oder den Originalnamen falls kein Alias bekannt)."""
+    normalized = re.sub(r"\(.*?\)", "", name).strip().lower()
+    for canonical, aliases in CLUB_ALIASES.items():
+        if normalized in aliases:
+            return canonical
+    return normalized
+
 
 def _extract_clubs(memory: dict) -> list[str]:
-    clubs = []
+    """Extrahiert Clubs aus Memory, dedupliziert per kanonischem Namen."""
+    raw: list[str] = []
     for key in CLUB_KEYS:
         value = memory.get(key)
         if not value:
             continue
         for sep in [",", "/", ";", "|"]:
             if sep in value:
-                clubs.extend([v.strip() for v in value.split(sep) if v.strip()])
+                raw.extend([v.strip() for v in value.split(sep) if v.strip()])
                 break
         else:
-            clubs.append(value.strip())
+            raw.append(value.strip())
 
-    seen_normalized: set[str] = set()
-    unique = []
-    for c in clubs:
-        normalized = re.sub(r"\(.*?\)", "", c).strip().lower()
-        if normalized not in seen_normalized:
-            seen_normalized.add(normalized)
-            unique.append(c)
+    seen_canonical: set[str] = set()
+    unique: list[str] = []
+    for c in raw:
+        canon = _canonical(c)
+        if canon not in seen_canonical:
+            seen_canonical.add(canon)
+            # Bevorzuge die kanonische Schreibweise falls bekannt
+            canonical_name = next(
+                (k for k, aliases in CLUB_ALIASES.items() if canon in aliases),
+                c  # fallback: Originalschreibweise
+            )
+            unique.append(canonical_name)
     return unique
 
 
 def _cache_rows_to_ranked(rows: list[dict]) -> list[RankedNews]:
-    """Konvertiert Cache-Rows in RankedNews-Objekte.
-    Stellt sicher, dass sources und urls immer Listen sind und korrekt zugeordnet.
-    """
+    """Konvertiert Cache-Rows in RankedNews-Objekte."""
     items = []
     for r in rows:
         source_str = r.get("source") or ""
-        # sources ist kommagetrennt im Cache gespeichert
         sources = [s.strip() for s in source_str.split(",") if s.strip()] or ["Unbekannt"]
         url = r.get("url") or ""
-        # Jede Cache-Row hat genau eine URL — beim Clustering im Ranker werden mehrere zusammengeführt.
-        # Hier bauen wir pro Source-Eintrag eine URL-Liste mit der einzigen verfügbaren URL.
         urls = [url] * len(sources) if url else []
-
         items.append(RankedNews(
             title=r.get("title") or "",
             snippet=r.get("snippet") or "",
@@ -73,8 +91,8 @@ def _freshness_label(club_name: str) -> str:
     age_label = get_cache_age_label(club_name)
     age_hours = age.total_seconds() / 3600
     if age_hours > NEWS_STALE_LABEL_HOURS:
-        return f"\n\n_🕐 Gecacht {age_label} · Nächstes Update automatisch_"
-    return f"\n\n_✅ Gecacht {age_label}_"
+        return f"\n\n_\u23f0 Gecacht {age_label} \u00b7 N\u00e4chstes Update automatisch_"
+    return f"\n\n_\u2705 Gecacht {age_label}_"
 
 
 async def _llm_deduplicate_by_topic(
@@ -83,59 +101,59 @@ async def _llm_deduplicate_by_topic(
     max_items: int = TOP_N_OUTPUT,
 ) -> list[RankedNews]:
     """
-    Sendet Titel-Liste ans LLM und bittet es, thematische Duplikate zu entfernen.
-    Das LLM bewertet NUR nach Themendiversität — es darf keine Inhalte ergänzen oder verändern.
+    Sendet Titel-Liste ans LLM und bittet es, thematisch vielfaeltige Artikel auszuwaehlen.
+    Das LLM waehlt NUR Indizes aus — es erfindet oder veraendert keine Inhalte.
     """
     if len(items) <= max_items:
         return items
 
-    from app.services.openrouter_client import call_llm_raw
+    from app.services.openrouter_client import ask_llm  # korrekter Funktionsname
 
     titles_block = "\n".join(f"{i}. {item.title}" for i, item in enumerate(items))
     prompt = (
-        f"Du bekommst eine nummerierte Liste von Nachrichten-Schlagzeilen über {club} (Fußball, 1. Mannschaft).\n"
-        f"Deine Aufgabe: Wähle genau {max_items} Schlagzeilen aus, die thematisch möglichst vielfältig sind.\n\n"
+        f"Du bekommst eine nummerierte Liste von Nachrichten-Schlagzeilen \u00fcber {club} (Fu\u00dfball, 1. Mannschaft).\n"
+        f"Deine Aufgabe: W\u00e4hle genau {max_items} Schlagzeilen aus, die thematisch m\u00f6glichst vielf\u00e4ltig sind.\n\n"
         f"Regeln:\n"
-        f"- Wähle KEINE zwei Artikel zum selben Thema (z.B. zwei Transfer-Artikel über denselben Spieler).\n"
-        f"- Wähle KEINE Artikel über andere Mannschaften (U23, Frauen, andere Sportarten).\n"
-        f"- Bevorzuge Artikel mit konkreten, aktuellen Informationen gegenüber vagen Spekulationen.\n"
-        f"- Verändere, ergänze oder erfünde KEINERLEI Inhalte. Du wählst nur aus.\n\n"
-        f"Antworte AUSSCHLIEßLICH mit den Nummern der ausgewählten Artikel, kommasepariert.\n"
+        f"- W\u00e4hle KEINE zwei Artikel zum selben Thema.\n"
+        f"- W\u00e4hle KEINE Artikel \u00fcber andere Mannschaften (U23, Frauen, andere Sportarten).\n"
+        f"- Bevorzuge Artikel mit konkreten, aktuellen Informationen.\n"
+        f"- Ver\u00e4ndere, erg\u00e4nze oder erfinde KEINERLEI Inhalte. Du w\u00e4hlst nur aus.\n\n"
+        f"Antworte AUSSCHLIE\u00dfLICH mit den Nummern der ausgew\u00e4hlten Artikel, kommasepariert.\n"
         f"Beispiel: 0,2,5,7,9\n\n"
         f"Schlagzeilen:\n{titles_block}"
     )
 
     try:
-        response = await call_llm_raw(prompt, max_tokens=50)
+        response = await ask_llm(prompt, system_prompt="Du bist ein News-Selektor. Antworte nur mit Zahlen.")
         response = response.strip()
         indices = [int(x.strip()) for x in response.split(",") if x.strip().isdigit()]
         valid = [i for i in indices if 0 <= i < len(items)]
         valid = list(dict.fromkeys(valid))[:max_items]
         if len(valid) >= 3:
-            logger.info("LLM-Dedup: %d → %d Artikel für %s", len(items), len(valid), club)
+            logger.info("LLM-Dedup: %d \u2192 %d Artikel f\u00fcr %s", len(items), len(valid), club)
             return [items[i] for i in valid]
     except Exception as e:
-        logger.warning("LLM-Dedup fehlgeschlagen für %s: %s — Fallback Top-%d", club, e, max_items)
+        logger.warning("LLM-Dedup fehlgeschlagen f\u00fcr %s: %s \u2014 Fallback Top-%d", club, e, max_items)
 
     return items[:max_items]
 
 
 async def _build_club_block(club: str, force_refresh: bool) -> str:
-    """Laed, dedupliziert und formatiert News für einen einzelnen Club."""
+    """Laedt, dedupliziert und formatiert News fuer einen einzelnen Club."""
     try:
         if force_refresh:
             success = await refresh_club_cache(club)
             if not success:
-                return f"⚠️ Refresh fehlgeschlagen für *{club}*. Zeige Cache-Version."
+                return f"\u26a0\ufe0f Refresh fehlgeschlagen f\u00fcr *{club}*. Zeige Cache-Version."
 
         rows = load_from_cache(club)
         if not rows or not is_cache_fresh(club):
-            logger.info("Cache leer/abgelaufen für %s — Live-Fallback", club)
+            logger.info("Cache leer/abgelaufen f\u00fcr %s \u2014 Live-Fallback", club)
             await refresh_club_cache(club)
             rows = load_from_cache(club)
 
         if not rows:
-            return f"Keine News für *{club}* gefunden."
+            return f"Keine News f\u00fcr *{club}* gefunden."
 
         ranked = _cache_rows_to_ranked(rows)
         ranked = await _llm_deduplicate_by_topic(ranked, club, max_items=TOP_N_OUTPUT)
@@ -144,13 +162,13 @@ async def _build_club_block(club: str, force_refresh: bool) -> str:
         return block
 
     except Exception as e:
-        logger.error("Fehler beim Laden des Cache für %s: %s", club, e)
-        return f"Fehler beim Abrufen der News für *{club}*."
+        logger.error("Fehler beim Laden des Cache f\u00fcr %s: %s", club, e, exc_info=True)
+        return f"\u26a0\ufe0f Fehler beim Abrufen der News f\u00fcr *{club}*."
 
 
 async def fetch_news_for_user(user_id: int, force_refresh: bool = False) -> list[str]:
     """
-    Gibt eine Liste von Nachrichten-Blöcken zurück — einen Block pro Verein.
+    Gibt eine Liste von Nachrichten-Bloecken zurueck — einen Block pro Verein.
     Jeder Block wird als separate Telegram-Nachricht gesendet.
     """
     memory = get_confirmed(user_id)
@@ -160,7 +178,7 @@ async def fetch_news_for_user(user_id: int, force_refresh: bool = False) -> list
         return [
             "Ich habe keine Lieblingsvereine in deiner Memory gefunden.\n\n"
             "Sag mir einfach: _\"Mein Lieblingsverein ist FC Bayern\"_ "
-            "und ich merke es mir für das nächste Mal!"
+            "und ich merke es mir f\u00fcr das n\u00e4chste Mal!"
         ]
 
     logger.info("fetch_news_for_user | user=%d | clubs=%s | force=%s", user_id, clubs, force_refresh)

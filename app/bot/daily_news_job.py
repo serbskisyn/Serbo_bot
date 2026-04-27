@@ -1,7 +1,7 @@
 """
 Täglicher News-Push via Telegram JobQueue.
 Läuft jeden Morgen um NEWS_DAILY_PUSH_HOUR:NEWS_DAILY_PUSH_MINUTE (Europe/Berlin).
-Schickt die Top-5-News nur an den ersten User aus NEWS_DAILY_PUSH_USER_IDS.
+Schickt die News nur an den ersten User aus NEWS_DAILY_PUSH_USER_IDS.
 """
 import logging
 from datetime import time, timezone, timedelta
@@ -32,16 +32,19 @@ async def _send_daily_news(context) -> None:
     logger.info("Daily News Push gestartet | user=%d", user_id)
 
     try:
-        result = await fetch_news_for_user(user_id, force_refresh=False)
-        chunks = _split(result)
-        for chunk in chunks:
-            await bot.send_message(
-                chat_id=user_id,
-                text=chunk,
-                parse_mode="Markdown",
-                disable_web_page_preview=True,
-            )
-        logger.info("Daily News Push gesendet | user=%d | chunks=%d", user_id, len(chunks))
+        # fetch_news_for_user gibt list[str] zurück — ein Block pro Verein
+        blocks: list[str] = await fetch_news_for_user(user_id, force_refresh=False)
+        total_chunks = 0
+        for block in blocks:
+            for chunk in _split(block):
+                await bot.send_message(
+                    chat_id=user_id,
+                    text=chunk,
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True,
+                )
+                total_chunks += 1
+        logger.info("Daily News Push gesendet | user=%d | chunks=%d", user_id, total_chunks)
     except Exception as e:
         logger.error("Daily News Push fehlgeschlagen | user=%d | error=%s", user_id, e)
 
@@ -65,10 +68,18 @@ def _split(text: str, limit: int = 4000) -> list[str]:
 def register_daily_news_job(app: Application) -> None:
     """
     Registriert den täglichen News-Push in der JobQueue.
-    Muss nach app.build() aufgerufen werden (JobQueue ist dann verfügbar).
+    Falls job_queue nicht verfügbar ist (fehlendes [job-queue] Extra),
+    wird nur eine Warnung geloggt — der Bot startet trotzdem.
     """
     if not NEWS_DAILY_PUSH_USER_IDS:
         logger.info("NEWS_DAILY_PUSH_USER_IDS leer — kein Daily Push registriert.")
+        return
+
+    if app.job_queue is None:
+        logger.warning(
+            "JobQueue nicht verfügbar (pip install 'python-telegram-bot[job-queue]' fehlt). "
+            "Daily News Push deaktiviert — Bot läuft trotzdem."
+        )
         return
 
     push_time = time(
@@ -84,7 +95,7 @@ def register_daily_news_job(app: Application) -> None:
         name="daily_news_push",
     )
     logger.info(
-        "Daily News Push registriert: täglich %02d:%02d CEST — nur user=%d",
+        "Daily News Push registriert: täglich %02d:%02d CEST — user=%d",
         NEWS_DAILY_PUSH_HOUR,
         NEWS_DAILY_PUSH_MINUTE,
         NEWS_DAILY_PUSH_USER_IDS[0],

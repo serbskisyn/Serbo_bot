@@ -22,6 +22,7 @@ from app.services.schedule_builder import (
 from app.config import (
     SCHEDULE_URLAUB_SHEET_ID,
     SCHEDULE_WUNSCH_SHEET_ID,
+    SCHEDULE_KRANK_SHEET_ID,
     SCHEDULE_OUTPUT_SHEET_ID,
 )
 
@@ -126,10 +127,10 @@ async def handle_monat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
                     "Juli", "August", "September", "Oktober", "November", "Dezember"]
     await update.message.reply_text(
         f"✅ Monat: *{monate_namen[monat]} {jahr}*\n\n"
-        "Gibt es Krankmeldungen?\n"
+        "Gibt es manuelle Krankmeldungen (zusätzlich zum Sheet)?\n"
         "Format: `Name Von-Bis` z.B. `Maria 03.05-07.05`\n"
         "Mehrere: je eine Zeile oder Komma getrennt.\n\n"
-        "Ohne Krankmeldungen: `/fertig`",
+        "Ohne manuelle Eingabe: `/fertig`",
         parse_mode="Markdown",
     )
     context.user_data["kranktage"] = []
@@ -160,11 +161,10 @@ async def handle_kranktage(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 def _build_wunsch_notizen(
     generator: DienstplanGenerator,
 ) -> dict[str, list[tuple[date, str, bool]]]:
-    from app.services.schedule_builder import Dienst
     notizen: dict[str, list[tuple[date, str, bool]]] = {}
     for ma_name, wuensche in generator._wunsch_index.items():
         for wdatum, wdienst in wuensche:
-            geplant = generator.plan.get(ma_name, {}).get(wdatum)
+            geplant  = generator.plan.get(ma_name, {}).get(wdatum)
             erfuellt = (geplant == wdienst)
             notizen.setdefault(ma_name, []).append(
                 (wdatum, wdienst.value, erfuellt)
@@ -177,19 +177,39 @@ async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE
     jahr      = context.user_data["jahr"]
     kranktage: list[Abwesenheit] = context.user_data.get("kranktage", [])
 
-    await update.message.reply_text("⏳ Lade Urlaubsdaten und Wunschschichten …")
+    await update.message.reply_text("⏳ Lade Urlaubsdaten, Krankenstand und Wunschschichten …")
 
-    # ── Abwesenheiten ──────────────────────────────────────────────────
     abwesenheiten: list[Abwesenheit] = list(kranktage)
+
+    # ── Urlaub ──────────────────────────────────────────────────────
     try:
         from app.services.gspread_client import read_abwesenheiten
         ab_urlaub = read_abwesenheiten(SCHEDULE_URLAUB_SHEET_ID, "Urlaub_CLI")
         abwesenheiten.extend(ab_urlaub)
+        logger.info("Urlaub geladen: %d Einträge", len(ab_urlaub))
     except Exception as e:
         logger.warning("Urlaub laden fehlgeschlagen: %s", e)
-        await update.message.reply_text(
-            f"⚠️ Urlaubsdaten nicht ladbar: {e}\nPlan ohne Urlaub."
-        )
+        await update.message.reply_text(f"⚠️ Urlaubsdaten nicht ladbar: {e}\nPlan ohne Urlaub.")
+
+    # ── Krankenstand aus Sheet ───────────────────────────────────────
+    if SCHEDULE_KRANK_SHEET_ID:
+        try:
+            from app.services.gspread_client import read_krankenstand
+            ab_krank = read_krankenstand(SCHEDULE_KRANK_SHEET_ID, "Krankenstand")
+            abwesenheiten.extend(ab_krank)
+            if ab_krank:
+                namen_krank = list({a.name for a in ab_krank})
+                await update.message.reply_text(
+                    f"🤒 Krankenstand geladen: {len(ab_krank)} Tage "
+                    f"({', '.join(namen_krank)})"
+                )
+            else:
+                await update.message.reply_text("ℹ️ Kein Krankenstand im Sheet eingetragen.")
+        except Exception as e:
+            logger.warning("Krankenstand laden fehlgeschlagen: %s", e)
+            await update.message.reply_text(
+                f"⚠️ Krankenstand nicht ladbar: {e}\nPlan ohne Sheet-Krankdaten."
+            )
 
     # ── Wunschschichten ────────────────────────────────────────────────
     wunschschichten: list[Wunschschicht] = []
@@ -206,9 +226,7 @@ async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE
                 f"🙋 {len(wunschschichten)} Wunschschichten für diesen Monat geladen."
             )
         else:
-            await update.message.reply_text(
-                "ℹ️ Keine Wunschschichten für diesen Monat gefunden."
-            )
+            await update.message.reply_text("ℹ️ Keine Wunschschichten für diesen Monat gefunden.")
     except Exception as e:
         logger.warning("Wunschschichten laden fehlgeschlagen: %s", e)
         await update.message.reply_text(
@@ -232,9 +250,7 @@ async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE
         plan   = gen.generate()
         report = gen.get_report()
         for chunk in _chunk_text(report, 4000):
-            await update.message.reply_text(
-                f"```\n{chunk}\n```", parse_mode="Markdown"
-            )
+            await update.message.reply_text(f"```\n{chunk}\n```", parse_mode="Markdown")
         context.user_data["gen"]  = gen
         context.user_data["plan"] = plan
     except Exception as e:
@@ -245,23 +261,17 @@ async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE
     keyboard = [["✅ In Google Sheets übertragen", "❌ Abbrechen"]]
     await update.message.reply_text(
         "Plan erstellt. In Google Sheets übertragen?",
-        reply_markup=ReplyKeyboardMarkup(
-            keyboard, one_time_keyboard=True, resize_keyboard=True
-        ),
+        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True),
     )
     return BESTAETIGUNG
 
 
 async def handle_bestaetigung(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if "Abbrechen" in update.message.text:
-        await update.message.reply_text(
-            "Plan verworfen.", reply_markup=ReplyKeyboardRemove()
-        )
+        await update.message.reply_text("Plan verworfen.", reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
 
-    await update.message.reply_text(
-        "⏳ Schreibe in Google Sheets …", reply_markup=ReplyKeyboardRemove()
-    )
+    await update.message.reply_text("⏳ Schreibe in Google Sheets …", reply_markup=ReplyKeyboardRemove())
     try:
         from app.services.gspread_client import write_dienstplan
         gen  = context.user_data["gen"]
@@ -286,9 +296,7 @@ async def handle_bestaetigung(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def cmd_abbrechen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text(
-        "Abgebrochen.", reply_markup=ReplyKeyboardRemove()
-    )
+    await update.message.reply_text("Abgebrochen.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
 

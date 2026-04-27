@@ -35,17 +35,21 @@ NEWS_STALE_LABEL_HOURS: int = int(os.getenv("NEWS_STALE_LABEL_HOURS", 4))
 # ── Google Sheets / Dienstplan ────────────────────────────────────────────────
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 
-# Dienstplan-Sheet (Urlaub_CLI, 2026, Info)
+# Dienstplan-Sheet (Tabs: Urlaub_CLI, 2026, Info)
 SCHEDULE_URLAUB_SHEET_ID = os.getenv(
     "SCHEDULE_URLAUB_SHEET_ID", "1M9WTVPlP-ivvmW_SsPSzQLIHBDwnGdFyoqgeHR7QUZE"
 )
 
-# Wunsch-Sheet (Formularantworten 1)
+# Wunsch-Sheet (Tab: Formularantworten 1)
 SCHEDULE_WUNSCH_SHEET_ID = os.getenv(
     "SCHEDULE_WUNSCH_SHEET_ID", "1a1IcfdnfyU-MdLjzCajC2LH5thbHw5WTN9Q1O1kInt8"
 )
 
-SCHEDULE_KRANK_SHEET_ID  = os.getenv("SCHEDULE_KRANK_SHEET_ID", "")
+# Krankenstand-Sheet (Tab: Krankenstand) — Spalten: Name | Beginn | Ende
+SCHEDULE_KRANK_SHEET_ID = os.getenv(
+    "SCHEDULE_KRANK_SHEET_ID", "1BO4LwgNm9YWHyrYqy6N9kaDgoj1pA7xpcYZVkWlNkLc"
+)
+
 SCHEDULE_OUTPUT_SHEET_ID = os.getenv(
     "SCHEDULE_OUTPUT_SHEET_ID", "1nMF24sf-HNvgJRMvQeZ3lTSf6qiGTvsHXedWjFpckkQ"
 )

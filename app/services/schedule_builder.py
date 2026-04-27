@@ -10,6 +10,10 @@ Wünsche werden mit höchster Priorität eingeplant, sofern keine harte Regel
 (Gesperrt, Spät→Früh, max. Konsekutiv) verletzt wird. Kann ein Wunsch nicht
 erfüllt werden, wird er als Violation ausgewiesen.
 
+Springer: MA mit tagesstunden=0 (keine festen Stunden) werden im Plan
+angezeigt (Urlaub/Krank sichtbar), bekommen aber KEINE automatischen Schichten.
+Sie können manuell auf offene Dienste gesetzt werden.
+
 Regeln:
 - Max. 5 aufeinanderfolgende Arbeitstage
 - Kein Früh direkt nach Spät (Vortag)
@@ -101,6 +105,11 @@ class Mitarbeiter:
     wochenstunden: float = 0.0
     soll_stunden:  float = 0.0
 
+    @property
+    def ist_springer(self) -> bool:
+        """Springer = keine festen Stunden (tagesstunden == 0)."""
+        return self.tagesstunden == 0.0
+
     def __post_init__(self):
         self.wochenstunden = round(self.tagesstunden * 5, 1)
 
@@ -146,7 +155,7 @@ class PlanungState:
     frueh_count:        int   = 0
     spaet_count:        int   = 0
     nacht_count:        int   = 0
-    konsekutiv_arbeits: int   = 0   # nur für Vormonat-Init
+    konsekutiv_arbeits: int   = 0
     letzter_dienst:     Optional[Dienst] = None
     wunschfrei:         list[date] = field(default_factory=list)
 
@@ -218,6 +227,11 @@ class DienstplanGenerator:
         self.states: dict[str, PlanungState] = {}
         self.violations: list[str] = []
 
+        # Springer-Namen als Set für schnellen Lookup
+        self._springer_namen: set[str] = {
+            ma.name for ma in self.ma_liste if ma.ist_springer
+        }
+
         # Index: ma_name → list[(tag_date, dienst)]
         self._wunsch_index: dict[str, list[tuple[date, Dienst]]] = {}
 
@@ -226,10 +240,6 @@ class DienstplanGenerator:
     # ------------------------------------------------------------------
 
     def _konsekutiv(self, ma_name: str, bis_exkl: date) -> int:
-        """
-        Aufeinanderfolgende Arbeitstage rückwärts aus dem Plan lesen.
-        Immer exakt, da direkt aus self.plan gelesen.
-        """
         count = 0
         vormonat_konsekutiv = self.states[ma_name].konsekutiv_arbeits
         check = bis_exkl - timedelta(days=1)
@@ -252,6 +262,9 @@ class DienstplanGenerator:
         return self.plan[ma_name].get(tag) is None
 
     def _kann_arbeiten(self, ma_name: str, tag: date) -> bool:
+        # Springer bekommen KEINE automatischen Schichten
+        if ma_name in self._springer_namen:
+            return False
         if not self._slot_frei(ma_name, tag):
             return False
         if self._ist_gesperrt(ma_name, tag):
@@ -323,11 +336,6 @@ class DienstplanGenerator:
     # ------------------------------------------------------------------
 
     def _build_wunsch_index(self):
-        """
-        Erstellt self._wunsch_index: ma_name → [(datum, dienst), …]
-        Ungültige Daten (z.B. 31.02) oder unbekannte MA werden als
-        Violation geloggt und übersprungen.
-        """
         ma_namen = {ma.name for ma in self.ma_liste}
         for w in self.wunschschichten:
             if w.name not in ma_namen:
@@ -355,27 +363,15 @@ class DienstplanGenerator:
         logger.info("Wunsch-Index aufgebaut: %d Wünsche für %d MA", total, len(self._wunsch_index))
 
     # ------------------------------------------------------------------
-    # Wünsche einplanen (vor regulärer Planung)
+    # Wünsche einplanen
     # ------------------------------------------------------------------
 
     def _plan_wuensche(self):
-        """
-        Trägt Wunschschichten mit höchster Priorität ein.
-
-        Prüft dabei alle harten Regeln (_kann_dienst). Schlägt ein Wunsch fehl,
-        wird er als Violation ausgewiesen – der Tag bleibt frei für die
-        reguläre Planung.
-
-        Kann ein Wunsch zwar eingetragen werden, aber der Bedarf für diesen
-        Dienst ist bereits gedeckt, wird der Wunsch trotzdem erfüllt
-        (Überbesetzung ist kein Fehler, der Bedarf wird dann um 1 erhöht).
-        """
         for ma_name, wuensche in self._wunsch_index.items():
             for wdatum, wdienst in wuensche:
                 if wdatum not in self.tage:
                     continue
 
-                # Harte Regel: MA ist gesperrt (Urlaub/Krank/Frei)
                 if self._ist_gesperrt(ma_name, wdatum):
                     self.violations.append(
                         f"⚠️ Wunsch nicht erfüllt: {ma_name} {wdatum.strftime('%d.%m')} "
@@ -383,7 +379,6 @@ class DienstplanGenerator:
                     )
                     continue
 
-                # Harte Regel: Slot bereits belegt (anderer Dienst)
                 existing = self.plan[ma_name].get(wdatum)
                 if existing is not None and existing != Dienst.FREI:
                     self.violations.append(
@@ -392,13 +387,11 @@ class DienstplanGenerator:
                     )
                     continue
 
-                # Slot ist Frei (z.B. Nacht-Puffer) → temporär freigeben
                 puffer_war_gesetzt = existing == Dienst.FREI
                 if puffer_war_gesetzt:
                     del self.plan[ma_name][wdatum]
 
                 if not self._kann_dienst(ma_name, wdatum, wdienst):
-                    # Puffer wiederherstellen
                     if puffer_war_gesetzt:
                         self.plan[ma_name][wdatum] = Dienst.FREI
                     self.violations.append(
@@ -421,9 +414,9 @@ class DienstplanGenerator:
         self._init_states()
         self._set_abwesenheiten()
         self._init_aus_vormonat()
-        self._build_wunsch_index()    # Wunsch-Index aufbauen
-        self._plan_wuensche()         # Wünsche zuerst eintragen
-        self._plan_alle_dienste()     # Reguläre Planung füllt Rest auf
+        self._build_wunsch_index()
+        self._plan_wuensche()
+        self._plan_alle_dienste()
         self._fill_frei()
         self._build_offen_plan()
         self._validate()
@@ -435,6 +428,7 @@ class DienstplanGenerator:
             self.states[ma.name] = PlanungState(ma=ma)
 
     def _set_abwesenheiten(self):
+        """Setzt Urlaub/Krank/Frei — auch für Springer."""
         art_map = {"U": Dienst.URLAUB, "F": Dienst.FREI, "K": Dienst.KRANK}
         for ab in self.abwesenheiten:
             if ab.datum.year == self.jahr and ab.datum.month == self.monat:
@@ -463,6 +457,7 @@ class DienstplanGenerator:
             s.letzter_dienst = tage_plan.get(vortag)
 
     def _plan_alle_dienste(self):
+        """Nur Nicht-Springer werden automatisch eingeplant."""
         offen_map = {
             Dienst.FRUEH:  Dienst.OFFEN_FD,
             Dienst.SPAET:  Dienst.OFFEN_SD,
@@ -485,6 +480,9 @@ class DienstplanGenerator:
 
                 kandidaten = []
                 for ma in self.ma_liste:
+                    # Springer nie als Kandidat
+                    if ma.ist_springer:
+                        continue
                     if (dienst in (Dienst.FRUEH, Dienst.SPAET)
                             and tag in nacht_puffer[ma.name]
                             and self.plan[ma.name].get(tag) == Dienst.FREI):
@@ -527,12 +525,23 @@ class DienstplanGenerator:
                         self.offen[tag].append(offen_map[dienst])
 
     def _fill_frei(self):
+        """Füllt leere Slots:
+        - Reguläre MA → Frei
+        - Springer → leer lassen (nur Abwesenheiten bleiben stehen)
+        """
         for ma in self.ma_liste:
             for tag in self.tage:
-                if self.plan[ma.name].get(tag) is None:
-                    self.plan[ma.name][tag] = Dienst.FREI
+                if ma.ist_springer:
+                    # Springer: leere Slots bleiben LEER (kein "Frei" eintragen)
+                    pass
+                else:
+                    if self.plan[ma.name].get(tag) is None:
+                        self.plan[ma.name][tag] = Dienst.FREI
 
+        # Wochenend-Check nur für reguläre MA
         for ma in self.ma_liste:
+            if ma.ist_springer:
+                continue
             hat_frei_we = False
             for tag in self.tage:
                 if tag.weekday() == 5:
@@ -583,7 +592,10 @@ class DienstplanGenerator:
                         f"nur {gesamt}/{anzahl} besetzt"
                     )
 
+        # Spät→Früh nur für reguläre MA prüfen
         for ma in self.ma_liste:
+            if ma.ist_springer:
+                continue
             for tag in self.tage:
                 vortag = tag - timedelta(days=1)
                 if (self.plan[ma.name].get(vortag) == Dienst.SPAET
@@ -599,16 +611,14 @@ class DienstplanGenerator:
     def get_report(self) -> str:
         lines = [f"=== Dienstplan {self.monat}/{self.jahr} ==="]
 
-        # Wünsche-Zusammenfassung
-        erfuellt = [
-            w for w in self.wunschschichten
-            if not any(
-                w.name in v and str(w.tag).zfill(2) in v and "Wunsch nicht erfüllt" in v
-                for v in self.violations
-            )
-        ]
-        nicht_erfuellt = [v for v in self.violations if "Wunsch nicht erfüllt" in v]
+        # Springer auflisten
+        springer_namen = sorted(self._springer_namen)
+        if springer_namen:
+            lines.append(f"\n🔄 Springer (keine festen Stunden): {', '.join(springer_namen)}")
+            lines.append("   → Im Plan sichtbar, manuell auf offene Dienste setzen")
 
+        # Wünsche-Zusammenfassung
+        nicht_erfuellt = [v for v in self.violations if "Wunsch nicht erfüllt" in v]
         total_wuensche = len([
             x for lst in self._wunsch_index.values() for x in lst
         ])
@@ -632,9 +642,11 @@ class DienstplanGenerator:
         else:
             lines.append("\n✅ Alle Dienste vollständig besetzt")
 
-        # MA-Übersicht
+        # MA-Übersicht (nur reguläre MA)
         lines.append("\n📊 Mitarbeiter-Übersicht:")
         for ma in self.ma_liste:
+            if ma.ist_springer:
+                continue
             s = self.states[ma.name]
             delta_sign = "+" if s.stunden_delta >= 0 else ""
             lines.append(
@@ -645,7 +657,7 @@ class DienstplanGenerator:
                 f"Δ:{delta_sign}{s.stunden_delta:.1f}h"
             )
 
-        # Regelviols (ohne Wünsche und offene Dienste)
+        # Regelviols
         rule_violations = [
             v for v in self.violations
             if "nicht besetzt" not in v

@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 SIMILARITY_THRESHOLD = 0.20      # gesenkt von 0.35
 ENTITY_BOOST_WORDS   = 3         # min. gemeinsame Entitäten für Cluster-Merge
 MEDALS = ["🥇", "🥈", "🥉"]
+TOP_N_OUTPUT = 5                  # max. News pro Verein in der Ausgabe
 
 
 @dataclass
@@ -182,28 +183,30 @@ async def enrich_ranked_news(ranked: list[RankedNews], club: str) -> list[Ranked
 
 
 def format_news_output(club_name: str, ranked: list[RankedNews]) -> str:
+    """Formatiert die Top-N News eines Vereins für Telegram-Ausgabe."""
     if not ranked:
         return f"⚽ *{club_name}* – Keine aktuellen News gefunden (letzte 48h)."
 
-    lines = [f"⚽ *{club_name}* – Top News\n{'─' * 30}"]
+    top = ranked[:TOP_N_OUTPUT]
+    lines = [f"⚽ *{club_name}* – Top {len(top)} News\n{'─' * 28}"]
 
-    for i, news in enumerate(ranked):
-        medal        = MEDALS[i] if i < 3 else f"{i + 1}."
-        source_count = f"[{news.score} {'Quelle' if news.score == 1 else 'Quellen'}]"
+    for i, news in enumerate(top):
+        medal = MEDALS[i] if i < 3 else f"{i + 1}."
 
-        lines.append(f"\n{medal} {source_count} *{news.title}*")
+        lines.append(f"\n{medal} *{news.title}*")
 
         if news.snippet:
-            lines.append(f"{news.snippet}")
+            lines.append(news.snippet)
 
         if news.published:
             lines.append(f"🕐 {news.published}")
 
-        source_links = " · ".join(
-            f"[{_domain(url)}]({url})"
-            for url in news.urls
-        )
-        lines.append(source_links)
+        # Quellen nummeriert untereinander
+        if len(news.urls) == 1:
+            lines.append(f"[{_domain(news.urls[0])}]({news.urls[0]})")
+        else:
+            for idx, url in enumerate(news.urls, start=1):
+                lines.append(f"{idx}. [{_domain(url)}]({url})")
 
     return "\n".join(lines)
 

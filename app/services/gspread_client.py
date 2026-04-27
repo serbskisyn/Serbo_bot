@@ -28,16 +28,13 @@ _CREDENTIALS_FILE = os.path.join(
 )
 
 # RGB-Farben für jede Schichtart (0.0–1.0)
-# Früh  = Weiß        | Spät   = Hellgrün   | Nacht = Dunkelorange
-# Frei  = Hellgrau    | Urlaub = Grün        | krank = Rot
-# BT    = Rosa        | Team   = Gelb         | OFFEN = Kräftiges Orange
 FARBEN_RGB: dict[str, tuple[float, float, float]] = {
     "Früh":        (1.000, 1.000, 1.000),   # Weiß
-    "Spät":        (0.698, 0.875, 0.604),   # Hellgrün (kräftiger als vorher)
+    "Spät":        (0.698, 0.875, 0.604),   # Hellgrün
     "Nacht":       (0.773, 0.353, 0.067),   # Dunkelorange
     "Frei":        (0.847, 0.847, 0.847),   # Hellgrau
     "Urlaub":      (0.573, 0.816, 0.314),   # Grün
-    "krank":       (0.918, 0.196, 0.196),   # Rot (etwas weicher)
+    "krank":       (0.918, 0.196, 0.196),   # Rot
     "BT":          (0.918, 0.820, 0.863),   # Rosa
     "Team":        (1.000, 0.851, 0.400),   # Gelb
     "Supervision": (1.000, 0.851, 0.400),   # Gelb
@@ -58,7 +55,6 @@ def _get_client() -> gspread.Client:
     if json_str:
         try:
             info = json.loads(json_str)
-            # Sicherstellen dass private_key korrekte Newlines hat
             if "private_key" in info:
                 info["private_key"] = info["private_key"].replace("\\n", "\n")
             creds = Credentials.from_service_account_info(info, scopes=SCOPES)
@@ -66,7 +62,6 @@ def _get_client() -> gspread.Client:
         except Exception as e:
             logger.warning("GOOGLE_SERVICE_ACCOUNT_JSON ungueltig (%s), versuche credentials.json", e)
 
-    # Fallback: direkt credentials.json lesen
     creds_path = os.path.abspath(_CREDENTIALS_FILE)
     if os.path.exists(creds_path):
         logger.info("Nutze credentials.json: %s", creds_path)
@@ -77,6 +72,32 @@ def _get_client() -> gspread.Client:
         "Kein Google-Credential gefunden. "
         "Setze GOOGLE_SERVICE_ACCOUNT_JSON oder lege credentials.json ins Projektroot."
     )
+
+
+def _resolve_tab_name(sh: gspread.Spreadsheet, base_name: str) -> tuple[str, bool]:
+    """Gibt den finalen Tab-Namen zurück und ob er neu angelegt werden muss.
+
+    Logik:
+    - Existiert base_name noch nicht  → (base_name, neu=True)
+    - Existiert base_name bereits     → versuche base_name-1, base_name-2, …
+      bis ein freier Name gefunden wird
+
+    Beispiel:
+      Mai_2026 existiert       → Mai_2026-1
+      Mai_2026-1 existiert     → Mai_2026-2
+      Mai_2026-2 existiert     → Mai_2026-3  usw.
+    """
+    vorhandene = {ws.title for ws in sh.worksheets()}
+
+    if base_name not in vorhandene:
+        return base_name, True
+
+    counter = 1
+    while True:
+        candidate = f"{base_name}-{counter}"
+        if candidate not in vorhandene:
+            return candidate, True
+        counter += 1
 
 
 def read_abwesenheiten(spreadsheet_id: str, tab_name: str = "Urlaub_CLI") -> list["Abwesenheit"]:
@@ -122,26 +143,37 @@ def write_dienstplan(
     tage:           list[date],
     tab_name:       str | None = None,
 ) -> str:
-    if tab_name is None:
-        monate_de = ["", "Jan", "Feb", "Mär", "Apr", "Mai", "Jun",
-                     "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
-        erster = tage[0]
-        tab_name = f"{monate_de[erster.month]}_{erster.year}"
+    monate_de = ["", "Jan", "Feb", "Mär", "Apr", "Mai", "Jun",
+                 "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
+    erster = tage[0]
+
+    base_name = tab_name if tab_name else f"{monate_de[erster.month]}_{erster.year}"
 
     client = _get_client()
     sh = client.open_by_key(spreadsheet_id)
 
-    try:
-        ws = sh.worksheet(tab_name)
-        ws.clear()
-    except gspread.WorksheetNotFound:
-        ws = sh.add_worksheet(title=tab_name, rows=50, cols=35)
+    # Finalen Tab-Namen ermitteln: neues Blatt wenn Monat bereits existiert
+    final_name, is_new = _resolve_tab_name(sh, base_name)
 
-    # Kopfzeile: Namen der Mitarbeiter
+    if is_new:
+        ws = sh.add_worksheet(title=final_name, rows=50, cols=35)
+        logger.info("Neues Tabellenblatt angelegt: '%s'", final_name)
+    else:
+        # Sollte durch _resolve_tab_name nie eintreten, Fallback-Sicherheit
+        ws = sh.worksheet(final_name)
+        ws.clear()
+        logger.info("Vorhandenes Tabellenblatt gecleart: '%s'", final_name)
+
+    if final_name != base_name:
+        logger.info(
+            "Tab '%s' existierte bereits → neuer Plan als '%s' gespeichert",
+            base_name, final_name,
+        )
+
+    # Kopfzeile
     header1 = ["Tag"] + mitarbeiter + ["offen", "Tag"]
     ws.update("A1", [header1])
 
-    # Leerzeile 2, Dienstart-Label in Zeile 3
     dienstart_row = [""] + ["Dienstart"] * len(mitarbeiter) + ["Dienstart", ""]
     ws.update("A3", [dienstart_row])
 
@@ -177,16 +209,15 @@ def write_dienstplan(
             rgb = FARBEN_RGB.get(val, (1.0, 1.0, 1.0))
             requests.append(_bg_request(ws.id, sheet_row - 1, col_idx - 1, *rgb))
 
-        # Wochenende-Zeilen leicht grau hinterlegen (Spalte A und letzte Spalte)
         if tag.weekday() >= 5:
-            for col in [0, len(mitarbeiter) + 2]:  # Spalte A und offen+1
+            for col in [0, len(mitarbeiter) + 2]:
                 requests.append(_bg_request(ws.id, sheet_row - 1, col, 0.95, 0.95, 0.95))
 
     if requests:
         sh.batch_update({"requests": requests})
 
-    logger.info("Dienstplan '%s' geschrieben (%d Tage)", tab_name, len(tage))
-    return tab_name
+    logger.info("Dienstplan '%s' geschrieben (%d Tage)", final_name, len(tage))
+    return final_name
 
 
 def _bg_request(sheet_id: int, row: int, col: int, r: float, g: float, b: float) -> dict:

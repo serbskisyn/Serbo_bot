@@ -66,6 +66,12 @@ _MONATE_MAP: dict[str, int] = {
     "oktober": 10, "november": 11, "dezember": 12,
 }
 
+# Vollständige Monatsnamen (für Zusammenfassungs-Labels)
+_MONATE_LANG = ["",
+    "Jan.", "Feb.", "März", "Apr.", "Mai", "Juni",
+    "Juli", "Aug.", "Sep.", "Okt.", "Nov.", "Dez.",
+]
+
 _SCHICHT_MAP: dict[str, str] = {
     "fd": "Früh",        "früdienst": "Früh",  "früh": "Früh",
     "frueh": "Früh",    "f": "Früh",
@@ -197,6 +203,60 @@ def _find_previous_month_tabs(
 
 
 # ---------------------------------------------------------------------------
+# Vormonats-Differenz (Carry-over) aus letztem Vormonats-Tab lesen
+# ---------------------------------------------------------------------------
+
+def read_vormonat_differenz(
+    sh: gspread.Spreadsheet,
+    erster_des_monats: date,
+    mitarbeiter: list[str],
+) -> dict[str, float]:
+    """
+    Liest die 'Differenz'-Zeile aus dem letzten Vormonats-Tab.
+    Gibt dict[ma_name → differenz_stunden] zurück.
+    Fehlende Werte werden als 0.0 zurückgegeben.
+    """
+    tabs = _find_previous_month_tabs(sh, erster_des_monats)
+    if not tabs:
+        return {ma: 0.0 for ma in mitarbeiter}
+
+    ws   = tabs[-1]
+    rows = ws.get_all_values()
+    if not rows:
+        return {ma: 0.0 for ma in mitarbeiter}
+
+    # Kopfzeile: MA-Namen ab Spalte B (Index 1)
+    header = rows[0]
+    ma_cols: dict[str, int] = {}  # ma_name → 0-basierter Spaltenindex
+    for col_idx, cell in enumerate(header[1:], start=1):
+        name = cell.strip()
+        if name and name.lower() not in ("offen", "tag", ""):
+            ma_cols[name] = col_idx
+
+    result = {ma: 0.0 for ma in mitarbeiter}
+
+    # 'Differenz'-Zeile suchen
+    for row in reversed(rows):
+        if not row:
+            continue
+        label = row[0].strip().lower()
+        if label == "differenz":
+            for ma_name in mitarbeiter:
+                col_idx = ma_cols.get(ma_name)
+                if col_idx is None:
+                    continue
+                raw = row[col_idx].strip() if col_idx < len(row) else ""
+                try:
+                    result[ma_name] = float(raw.replace(",", "."))
+                except ValueError:
+                    pass
+            break
+
+    logger.info("Vormonat-Differenz gelesen aus Tab '%s': %s", ws.title, result)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Vormonats-Plan aus Sheet lesen (für _init_aus_vormonat)
 # ---------------------------------------------------------------------------
 
@@ -231,7 +291,6 @@ def read_vormonat_plan(
         # Kopfzeile: ["Tag", MA1, MA2, ..., "offen", "Tag"]
         header = rows[0]
         ma_names = header[1:]  # Spalten ab Index 1
-        # Letzten "Tag"-Doppel und "offen" überspringen
         while ma_names and ma_names[-1].lower() in ("", "tag", "offen"):
             ma_names = ma_names[:-1]
         if ma_names and ma_names[-1].lower() == "offen":
@@ -239,12 +298,10 @@ def read_vormonat_plan(
 
         result: dict[str, dict[date, Dienst]] = {ma: {} for ma in ma_names}
 
-        wochentage_prefix = ["mo", "di", "mi", "do", "fr", "sa", "so"]
-        for row in rows[3:]:  # Datenzeilen ab Zeile 4 (Index 3)
+        for row in rows[3:]:
             if not row or not row[0].strip():
                 continue
             datum_raw = row[0].strip().lower()
-            # Format: "Mo, 01. Jan."
             parsed_date: date | None = None
             for sep in [",", " "]:
                 parts = datum_raw.split(sep, 1)
@@ -254,14 +311,13 @@ def read_vormonat_plan(
                     if len(tokens) >= 1:
                         try:
                             day = int(tokens[0])
-                            from app.services.schedule_builder import get_feiertage
                             if erster_des_monats.month == 1:
                                 pm, py = 12, erster_des_monats.year - 1
                             else:
                                 pm, py = erster_des_monats.month - 1, erster_des_monats.year
                             parsed_date = date(py, pm, day)
                             break
-                        except (ValueError, ImportError):
+                        except ValueError:
                             continue
 
             if parsed_date is None:
@@ -533,27 +589,24 @@ def write_dienstplan(
     """
     Schreibt den Dienstplan ins Google Sheet.
 
-    Zusätzlich wird ein Zusammenfassungs-Block (wie im Original-Sheet)
-    unterhalb der Tagesdaten eingefügt:
-      - Zeile: FREI-Zählung pro MA
-      - Zeile: Früh-Zählung
-      - Zeile: Spät-Zählung
-      - Zeile: Nacht-Zählung
-      - Zeile: Teamsitzung
-      - Zeile: BT
-      - Zeile: Urlaub
-      - Leerzeile
-      - Zeile: Dienstplan Ist-Stunden
-      - Zeile: Soll-Stunden
-      - Zeile: Differenz (Ist - Soll)
+    Zusammenfassungs-Block (wie im Original-Sheet):
+      FREI | Früh | Spät | Nacht | Teamsitzung | BT | Urlaub
+      [Leerzeile]
+      Dienstplanstd. <Monat>   → Ist-Stunden
+      Sollstd. <Monat>         → Soll-Stunden (aus ma_soll)
+      Differenz                → Ist − Soll + Carry-over aus Vormonat
 
-    ma_soll: dict[ma_name → soll_stunden] aus dem Generator.
-    Fehlende Soll-Stunden werden als '' geschrieben.
+    Die Labels 'Dienstplanstd.' und 'Sollstd.' enthalten den
+    variablen Monatsnamen (z.B. 'Dienstplanstd. Mai').
+    Die Differenz-Zeile berücksichtigt die Differenz aus dem
+    letzten Vormonats-Tab (Carry-over).
     """
-    monate_de = ["", "Jan", "Feb", "Mär", "Apr", "Mai", "Jun",
-                 "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
-    erster    = tage[0]
-    base_name = tab_name if tab_name else f"{monate_de[erster.month]}_{erster.year}"
+    erster     = tage[0]
+    monat_name = _MONATE_LANG[erster.month]   # z.B. 'Apr.' / 'Mai'
+
+    monate_kurz = ["", "Jan", "Feb", "Mär", "Apr", "Mai", "Jun",
+                   "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
+    base_name = tab_name if tab_name else f"{monate_kurz[erster.month]}_{erster.year}"
 
     client = _get_client()
     sh     = client.open_by_key(spreadsheet_id)
@@ -588,11 +641,21 @@ def write_dienstplan(
     ws.update("A4", data_rows)
 
     # ---------------------------------------------------------------------------
+    # Vormonat-Differenz (Carry-over) lesen
+    # ---------------------------------------------------------------------------
+    vormonat_diff: dict[str, float] = {}
+    try:
+        vormonat_diff = read_vormonat_differenz(sh, erster, mitarbeiter)
+    except Exception as e:
+        logger.warning("Vormonat-Differenz nicht lesbar: %s", e)
+        vormonat_diff = {ma: 0.0 for ma in mitarbeiter}
+
+    # ---------------------------------------------------------------------------
     # Zusammenfassungs-Block berechnen
     # ---------------------------------------------------------------------------
-    n_cols = len(mitarbeiter) + 2  # MA-Spalten + offen
+    n_cols = len(mitarbeiter) + 2  # MA-Spalten + offen + Tag
 
-    # Zähl-Kategorien
+    # Zähl-Kategorien — FIX: nur direkter Wertvergleich, kein doppelter Check
     count_labels = ["FREI", "Früh", "Spät", "Nacht", "Teamsitzung", "BT", "Urlaub"]
     dienst_keys  = ["Frei", "Früh", "Spät", "Nacht", "Team", "BT", "Urlaub"]
 
@@ -600,62 +663,69 @@ def write_dienstplan(
     for label, key in zip(count_labels, dienst_keys):
         row = [label]
         for ma_name in mitarbeiter:
+            ma_plan = plan.get(ma_name, {})
             count = sum(
                 1 for tag in tage
-                if (plan.get(ma_name, {}).get(tag) or _null_dienst()).value == key
-                or (plan.get(ma_name, {}).get(tag) is not None
-                    and plan[ma_name][tag].value == key)
+                if (ma_plan.get(tag) or _null_dienst()).value == key
             )
             row.append(count)
-        # Gesamt (offen-Spalte leer für Zähler)
-        row.append("")
-        row.append(label)
+        row.append("")          # offen-Spalte leer
+        row.append(label)       # rechtes Wiederholungs-Label
         summary_count_rows.append(row)
 
     # Leerzeile
     empty_row = [""] * (n_cols + 2)
 
-    # Ist-Stunden pro MA
-    ist_row = ["Dienstplanstd. Apr."]
+    # Ist-Stunden pro MA — Label mit variablem Monatsnamen
+    ist_label = f"Dienstplanstd. {monat_name}"
+    ist_row = [ist_label]
+    ist_values: dict[str, float] = {}
     for ma_name in mitarbeiter:
+        ma_plan = plan.get(ma_name, {})
         ist = sum(
-            _stunden_fuer(plan[ma_name][tag].value)
+            _stunden_fuer(d.value)
             for tag in tage
-            if plan.get(ma_name, {}).get(tag) is not None
+            if (d := ma_plan.get(tag)) is not None
         )
+        ist_values[ma_name] = round(ist, 1)
         ist_row.append(round(ist, 1) if ist > 0 else "")
-    ist_row.append("")
-    ist_row.append("Dienstplanstd.")
+    ist_row.append("")                  # offen
+    ist_row.append("Dienstplanstd.")    # rechtes Label ohne Monat
 
-    # Soll-Stunden pro MA
-    soll_dict = ma_soll or {}
-    soll_row = ["Sollstd. Apr."]
+    # Soll-Stunden pro MA — Label mit variablem Monatsnamen
+    soll_label = f"Sollstd. {monat_name}"
+    soll_dict  = ma_soll or {}
+    soll_row   = [soll_label]
+    soll_values: dict[str, float] = {}
     for ma_name in mitarbeiter:
-        soll_row.append(soll_dict.get(ma_name, ""))
-    soll_row.append("")
-    soll_row.append("Sollstd.")
+        v = soll_dict.get(ma_name)
+        soll_values[ma_name] = float(v) if v not in (None, "") else 0.0
+        soll_row.append(v if v is not None else "")
+    soll_row.append("")         # offen
+    soll_row.append("Sollstd.") # rechtes Label
 
-    # Differenz
+    # Differenz = Ist − Soll + Carry-over aus Vormonat
     diff_row = ["Differenz"]
+    diff_values: dict[str, float | str] = {}
     for ma_name in mitarbeiter:
-        ist_val  = ist_row[mitarbeiter.index(ma_name) + 1]
-        soll_val = soll_row[mitarbeiter.index(ma_name) + 1]
-        if isinstance(ist_val, (int, float)) and isinstance(soll_val, (int, float)):
-            diff = round(float(ist_val) - float(soll_val), 1)
-            diff_row.append(diff)
+        ist_val   = ist_values.get(ma_name, 0.0)
+        soll_val  = soll_values.get(ma_name, 0.0)
+        carry     = vormonat_diff.get(ma_name, 0.0)
+        if soll_val != 0.0 or ist_val != 0.0:
+            diff = round(ist_val - soll_val + carry, 1)
         else:
-            diff_row.append("")
-    diff_row.append("")
-    diff_row.append("Differenz")
+            diff = ""
+        diff_values[ma_name] = diff
+        diff_row.append(diff)
+    diff_row.append("")           # offen
+    diff_row.append("Differenz")  # rechtes Label
 
     # Zusammenfassung in Sheet schreiben
-    # Leerzeile nach den Tagen
-    data_end_row = 4 + len(tage)  # 1-basierte Zeilennummer der ersten Zeile nach den Tagen
-    summary_start = data_end_row + 2  # zwei Leerzeilen Abstand
+    data_end_row  = 4 + len(tage)
+    summary_start = data_end_row + 2
 
     all_summary = summary_count_rows + [empty_row, ist_row, soll_row, diff_row]
-    summary_range = f"A{summary_start}"
-    ws.update(summary_range, all_summary)
+    ws.update(f"A{summary_start}", all_summary)
 
     # ---------------------------------------------------------------------------
     # Formatierung (Farben)
@@ -691,7 +761,7 @@ def write_dienstplan(
                 continue
             d   = plan.get(ma_name, {}).get(tag)
             val = d.value if d else "Frei"
-            rgb = FARBEN_RGB.get(val) or FARBEN_RGB.get("Frei")
+            rgb = FARBEN_RGB.get(val) or FARBEN_RGB["Frei"]
             requests.append(_bg_request(ws.id, sheet_row - 1, col_idx - 1, *rgb))
             notiz = notiz_map.get((sheet_row, col_idx))
             if notiz:
@@ -703,49 +773,44 @@ def write_dienstplan(
 
     # Zusammenfassungs-Block einfärben
     for s_row_offset, (label, key) in enumerate(zip(count_labels, dienst_keys)):
-        sheet_row = summary_start + s_row_offset  # 1-basiert
-        row_0     = sheet_row - 1                 # 0-basiert für API
+        row_0 = summary_start + s_row_offset - 1  # 0-basiert
 
-        # Label-Zelle (Spalte A)
+        # Label-Zellen links und rechts
         requests.append(_bg_request(ws.id, row_0, 0, *_SUMMARY_LABEL_BG))
-        # Wiederhol-Label rechts
         requests.append(_bg_request(ws.id, row_0, len(mitarbeiter) + 2, *_SUMMARY_LABEL_BG))
 
-        # Farbe des Dienstes oder neutral
+        # Dienstfarbe für Zahlenzellen
         cell_rgb = FARBEN_RGB.get(key, _SUMMARY_VALUE_BG)
         for col_idx in range(1, len(mitarbeiter) + 2):
             requests.append(_bg_request(ws.id, row_0, col_idx, *cell_rgb))
 
-    # Urlaub-Zeile extra grün
-    urlaub_row_0 = summary_start + count_labels.index("Urlaub") - 1
-    for col_idx in range(1, len(mitarbeiter) + 2):
-        requests.append(_bg_request(ws.id, urlaub_row_0, col_idx, *_URLAUB_BG))
-
     # Ist-/Soll-/Differenz-Zeilen einfärben
-    ist_row_0  = summary_start + len(count_labels) + 1 - 1   # +1 für Leerzeile
+    ist_row_0  = summary_start + len(count_labels) + 1 - 1   # +1 für Leerzeile, -1 für 0-basis
     soll_row_0 = ist_row_0 + 1
     diff_row_0 = ist_row_0 + 2
 
-    for col_idx in range(len(mitarbeiter) + 2):
+    for col_idx in range(len(mitarbeiter) + 3):  # inkl. rechtes Label
         requests.append(_bg_request(ws.id, ist_row_0,  col_idx, *_SUMMARY_IST_BG))
         requests.append(_bg_request(ws.id, soll_row_0, col_idx, *_SUMMARY_SOLL_BG))
 
-    # Differenz: grün wenn ≥ 0, rot wenn < 0
+    # Differenz: Label-Spalten grau, Werte grün/rot je Vorzeichen
+    requests.append(_bg_request(ws.id, diff_row_0, 0, *_SUMMARY_LABEL_BG))
+    requests.append(_bg_request(ws.id, diff_row_0, len(mitarbeiter) + 2, *_SUMMARY_LABEL_BG))
     for i, ma_name in enumerate(mitarbeiter):
-        diff_val = diff_row[i + 1]
+        diff_val = diff_values.get(ma_name, "")
         if isinstance(diff_val, (int, float)):
             rgb = _SUMMARY_POS_BG if diff_val >= 0 else _SUMMARY_NEG_BG
         else:
             rgb = _SUMMARY_VALUE_BG
         requests.append(_bg_request(ws.id, diff_row_0, i + 1, *rgb))
-    requests.append(_bg_request(ws.id, diff_row_0, 0, *_SUMMARY_LABEL_BG))
-    requests.append(_bg_request(ws.id, diff_row_0, len(mitarbeiter) + 2, *_SUMMARY_LABEL_BG))
 
     if requests:
         sh.batch_update({"requests": requests})
 
-    logger.info("Dienstplan '%s' geschrieben (%d Tage, Zusammenfassung ab Zeile %d)",
-                final_name, len(tage), summary_start)
+    logger.info(
+        "Dienstplan '%s' geschrieben (%d Tage, Zusammenfassung ab Zeile %d)",
+        final_name, len(tage), summary_start,
+    )
     return final_name
 
 

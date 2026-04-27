@@ -12,6 +12,7 @@ from app.bot.whitelist import is_allowed
 from app.agents.runner import run as agent_run
 from app.agents.football_news_agent import fetch_news_for_user
 from app.bot.schedule_dialog import get_schedule_handler
+from app.bot.debug_handler import get_debug_handler
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/forget — Mein Gedächtnis löschen\n"
         f"/news — Aktuelle News deiner Lieblingsclubs\n"
         f"/news fresh — News sofort neu laden (Live-Fetch)\n"
-        f"/dienstplan — Dienstplan erstellen"
+        f"/dienstplan — Dienstplan erstellen\n"
+        f"/debugwunsch — Sheet-Struktur prüfen (Diagnose)"
     )
 
 
@@ -180,6 +182,7 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def register_handlers(application):
     from telegram.ext import CommandHandler, MessageHandler, filters
     application.add_handler(get_schedule_handler())
+    application.add_handler(get_debug_handler())          # /debugwunsch
     application.add_handler(CommandHandler("start", start_handler))
     application.add_handler(CommandHandler("reset", reset_handler))
     application.add_handler(CommandHandler("memory", memory_handler))

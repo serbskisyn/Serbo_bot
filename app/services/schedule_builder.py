@@ -7,20 +7,18 @@ OFFEN-FD / OFFEN-SD / OFFEN-ND ausgewiesen.
 
 Wunschschichten: Jeder MA kann bis zu 3 Wünsche (Tag + Schichtart) eintragen.
 Wünsche werden mit höchster Priorität eingeplant, sofern keine harte Regel
-(Gesperrt, Spät→Früh, max. Konsekutiv) verletzt wird. Kann ein Wunsch nicht
-erfüllt werden, wird er als Violation ausgewiesen.
+(Gesperrt, Spät→Früh, max. Konsekutiv) verletzt wird.
 
-Springer: MA mit tagesstunden=0 (keine festen Stunden) werden im Plan
-angezeigt (Urlaub/Krank sichtbar), bekommen aber KEINE automatischen Schichten.
-Sie können manuell auf offene Dienste gesetzt werden.
+Springer: MA mit tagesstunden=0 bekommen KEINE automatischen Schichten.
 
 Regeln (harte Regeln = [H], weiche Regeln = [W]):
 - [H] Max. 5 aufeinanderfolgende Arbeitstage
 - [H] Kein Früh direkt nach Spät (Vortag)
-- [W] Max. 3 gleiche FD/SD-Schichten in Folge
+- [W] Max. 3 gleiche FD/SD-Schichten in Folge (im 2. Pass bis 4 gelockert)
 - [H] Nachtdienste nur in Blöcken von 3–4 aufeinanderfolgenden Tagen
-- [H] Nach einem Nachtblock: mind. 2 Pflichttage frei
+- [H] Nach einem vollständigen Nachtblock (>= 3 Nächte): mind. 2 Pflicht-Freitags
 - [H] Innerhalb eines Nachtblocks darf keine andere Schichtart eingeplant werden
+- [H] MA mit laufendem Nachtblock MÜSSEN diesen fortsetzen (Block-Vollendung)
 - [W] Fairness: Gleichmäßige Verteilung aller Schichtarten über alle MA
 - [W] Gleichmäßige Verteilung der Nachtblöcke über alle MA
 - [W] Mindestens ein freies Wochenende pro Monat
@@ -86,10 +84,8 @@ FEIERTAGE_BERLIN: dict[tuple[int, int], str] = {
     (12, 26): "2. Weihnachtstag",
 }
 
-# Mindest- und Maximallänge eines Nachtblocks
 NACHT_BLOCK_MIN = 3
 NACHT_BLOCK_MAX = 4
-# Pflicht-Freitage nach einem Nachtblock (harte Regel)
 NACHT_PUFFER_TAGE = 2
 
 
@@ -117,7 +113,6 @@ class Mitarbeiter:
 
     @property
     def ist_springer(self) -> bool:
-        """Springer = keine festen Stunden (tagesstunden == 0)."""
         return self.tagesstunden == 0.0
 
     def __post_init__(self):
@@ -130,21 +125,15 @@ class Mitarbeiter:
 @dataclass
 class Abwesenheit:
     name:  str
-    art:   str   # U=Urlaub, F=Frei/FA, K=Krank
+    art:   str
     datum: date
 
 
 @dataclass
 class Wunschschicht:
-    """
-    Wunsch eines Mitarbeiters für einen bestimmten Tag und eine Schichtart.
-
-    tag:        Tag des Monats als Integer (z.B. 5 = 5. des Monats)
-    dienst_str: "Früh", "Spät" oder "Nacht"
-    """
     name:       str
-    tag:        int          # Tag des Monats (1–31)
-    dienst_str: str          # "Früh" | "Spät" | "Nacht"
+    tag:        int
+    dienst_str: str
 
     def to_dienst(self) -> Optional["Dienst"]:
         mapping = {"Früh": Dienst.FRUEH, "Spät": Dienst.SPAET, "Nacht": Dienst.NACHT}
@@ -165,12 +154,13 @@ class PlanungState:
     frueh_count:        int   = 0
     spaet_count:        int   = 0
     nacht_count:        int   = 0
-    nacht_blocks:       int   = 0   # Anzahl abgeschlossener Nachtblöcke
+    nacht_blocks:       int   = 0
     konsekutiv_arbeits: int   = 0
     letzter_dienst:     Optional[Dienst] = None
     wunschfrei:         list[date] = field(default_factory=list)
-    # Für Nachtblock-Tracking: wie viele Nächte in aktuellem Block
     akt_nacht_block:    int   = 0
+    # Vormonat-Letzter-Dienst (für _in_folge Grenzfall)
+    vormonat_letzter:   Optional[Dienst] = None
 
     def add_schicht(self, d: Dienst):
         if d == Dienst.FRUEH:
@@ -187,10 +177,9 @@ class PlanungState:
             self.arbeitstage += 1
             self.akt_nacht_block += 1
         else:
-            # Nicht-Arbeitsdienst → Nachtblock ggf. abschließen
-            if self.akt_nacht_block > 0:
+            if self.akt_nacht_block >= NACHT_BLOCK_MIN:
                 self.nacht_blocks += 1
-                self.akt_nacht_block = 0
+            self.akt_nacht_block = 0
         self.letzter_dienst = d
 
     @property
@@ -246,18 +235,13 @@ class DienstplanGenerator:
         self.states: dict[str, PlanungState] = {}
         self.violations: list[str] = []
 
-        # Springer-Namen als Set für schnellen Lookup
         self._springer_namen: set[str] = {
             ma.name for ma in self.ma_liste if ma.ist_springer
         }
-
-        # Index: ma_name → list[(tag_date, dienst)]
         self._wunsch_index: dict[str, list[tuple[date, Dienst]]] = {}
-
-        # Tracking: welche MA sind gerade in einem laufenden Nachtblock?
-        # ma_name → Startdatum des aktuellen Nachtblocks (None = keiner aktiv)
-        self._nacht_block_start: dict[str, Optional[date]] = {
-            ma.name: None for ma in self.ma_liste
+        # Nachtpuffer: MA → set of dates die als Pflichttfrei nach Block reserviert sind
+        self._nacht_puffer: dict[str, set[date]] = {
+            ma.name: set() for ma in self.ma_liste
         }
 
     # ------------------------------------------------------------------
@@ -265,12 +249,13 @@ class DienstplanGenerator:
     # ------------------------------------------------------------------
 
     def _konsekutiv(self, ma_name: str, bis_exkl: date) -> int:
+        """Anzahl aufeinanderfolgender Arbeitstage direkt vor bis_exkl."""
         count = 0
-        vormonat_konsekutiv = self.states[ma_name].konsekutiv_arbeits
         check = bis_exkl - timedelta(days=1)
         while True:
             if check < self.tage[0]:
-                count += vormonat_konsekutiv
+                # Vormonat-Konsekutiv nur einmal addieren
+                count += self.states[ma_name].konsekutiv_arbeits
                 break
             d = self.plan[ma_name].get(check)
             if d in self.ARBEITSDIENSTE:
@@ -299,11 +284,20 @@ class DienstplanGenerator:
         return True
 
     def _in_folge(self, ma_name: str, tag: date, dienst: Dienst) -> int:
-        """Wie viele gleiche Dienste direkt vor 'tag' (rückwärts zählen)."""
+        """Wie viele gleiche Dienste direkt vor 'tag' (inkl. Vormonat-Grenze)."""
         count = 0
         check = tag - timedelta(days=1)
-        while check >= self.tage[0]:
-            if self.plan[ma_name].get(check) == dienst:
+        while True:
+            if check < self.tage[0]:
+                # Vormonat prüfen
+                if (
+                    count == 0
+                    and self.states[ma_name].vormonat_letzter == dienst
+                ):
+                    count += 1
+                break
+            d = self.plan[ma_name].get(check)
+            if d == dienst:
                 count += 1
                 check -= timedelta(days=1)
             else:
@@ -311,83 +305,102 @@ class DienstplanGenerator:
         return count
 
     def _akt_nacht_block_len(self, ma_name: str, tag: date) -> int:
-        """Anzahl aufeinanderfolgender Nachtdienste direkt vor 'tag'."""
+        """Anzahl aufeinanderfolgender Nachtdienste direkt VOR 'tag'."""
         return self._in_folge(ma_name, tag, Dienst.NACHT)
 
-    def _nacht_puffer_aktiv(self, ma_name: str, tag: date) -> bool:
-        """
-        [H] Prüft, ob 'tag' innerhalb der 2 Pflicht-Freitage nach einem Nachtblock liegt.
-        Bedingung: Vor 'tag' (innerhalb NACHT_PUFFER_TAGE Tage rückwärts) war ein
-        Nicht-Nacht-Nicht-Frei-Übergang aus Nacht → also: der letzte Nacht-Tag
-        liegt genau NACHT_PUFFER_TAGE oder weniger Tage zurück.
-        """
-        for offset in range(1, NACHT_PUFFER_TAGE + 1):
-            check = tag - timedelta(days=offset)
-            if check < self.tage[0]:
-                # Vormonat — vereinfacht: kein Puffer
-                break
-            d = self.plan[ma_name].get(check)
-            if d == Dienst.NACHT:
-                # Prüfe ob das der letzte Tag eines Blocks war
-                # (d.h. Tag danach ist KEIN Nacht)
-                next_day = check + timedelta(days=1)
-                if next_day <= tag:
-                    d_next = self.plan[ma_name].get(next_day)
-                    if d_next != Dienst.NACHT:
-                        return True
-            elif d in self.ARBEITSDIENSTE:
-                # Nicht-Nacht-Arbeitstag → kein Nachtpuffer relevant
-                break
-        return False
+    def _ist_in_nacht_puffer(self, ma_name: str, tag: date) -> bool:
+        """[H] Liegt 'tag' im Pflicht-Puffer nach einem vollständigen Nachtblock?"""
+        return tag in self._nacht_puffer[ma_name]
 
-    def _kann_frueh(self, ma_name: str, tag: date) -> bool:
+    def _setze_nacht_puffer(self, ma_name: str, ab_tag: date):
+        """Setzt 2 Pflicht-Freitags nach Nachtblock-Ende."""
+        for offset in range(1, NACHT_PUFFER_TAGE + 1):
+            p_tag = ab_tag + timedelta(days=offset - 1)
+            if p_tag > self.tage[-1]:
+                break
+            self._nacht_puffer[ma_name].add(p_tag)
+            # Slot überschreiben falls noch leer
+            if self.plan[ma_name].get(p_tag) is None:
+                self.plan[ma_name][p_tag] = Dienst.FREI
+
+    def _ist_in_aktivem_nacht_block(self, ma_name: str, tag: date) -> bool:
+        """True wenn MA gestern Nacht hatte (Block läuft noch)."""
+        vortag = tag - timedelta(days=1)
+        if vortag < self.tage[0]:
+            return self.states[ma_name].vormonat_letzter == Dienst.NACHT
+        return self.plan[ma_name].get(vortag) == Dienst.NACHT
+
+    def _kann_frueh(self, ma_name: str, tag: date, locker: bool = False) -> bool:
         if not self._kann_arbeiten(ma_name, tag):
             return False
         # [H] Spät→Früh verboten
         vortag = tag - timedelta(days=1)
-        if self.plan[ma_name].get(vortag) == Dienst.SPAET:
+        vortag_d = (
+            self.plan[ma_name].get(vortag)
+            if vortag >= self.tage[0]
+            else self.states[ma_name].vormonat_letzter
+        )
+        if vortag_d == Dienst.SPAET:
             return False
-        # [H] Kein FD innerhalb Nacht-Puffer
-        if self._nacht_puffer_aktiv(ma_name, tag):
+        # [H] Kein FD im Nacht-Puffer
+        if self._ist_in_nacht_puffer(ma_name, tag):
             return False
-        # [H] Kein FD während eines aktiven Nachtblocks
-        if self._akt_nacht_block_len(ma_name, tag) > 0:
+        # [H] Kein FD während aktiven Nachtblocks
+        if self._ist_in_aktivem_nacht_block(ma_name, tag):
             return False
-        # [W] Max 3 gleiche FD in Folge
-        if self._in_folge(ma_name, tag, Dienst.FRUEH) >= 3:
+        # [W] Max 3 FD in Folge (im lockeren Modus bis 4)
+        limit = 4 if locker else 3
+        if self._in_folge(ma_name, tag, Dienst.FRUEH) >= limit:
             return False
         return True
 
-    def _kann_spaet(self, ma_name: str, tag: date) -> bool:
+    def _kann_spaet(self, ma_name: str, tag: date, locker: bool = False) -> bool:
         if not self._kann_arbeiten(ma_name, tag):
             return False
-        # [H] Kein SD innerhalb Nacht-Puffer
-        if self._nacht_puffer_aktiv(ma_name, tag):
+        # [H] Kein SD im Nacht-Puffer
+        if self._ist_in_nacht_puffer(ma_name, tag):
             return False
-        # [H] Kein SD während eines aktiven Nachtblocks
-        if self._akt_nacht_block_len(ma_name, tag) > 0:
+        # [H] Kein SD während aktiven Nachtblocks
+        if self._ist_in_aktivem_nacht_block(ma_name, tag):
             return False
-        # [W] Max 3 gleiche SD in Folge
-        if self._in_folge(ma_name, tag, Dienst.SPAET) >= 3:
+        # [W] Max 3 SD in Folge (im lockeren Modus bis 4)
+        limit = 4 if locker else 3
+        if self._in_folge(ma_name, tag, Dienst.SPAET) >= limit:
             return False
         return True
 
     def _kann_nacht(self, ma_name: str, tag: date) -> bool:
         if not self._kann_arbeiten(ma_name, tag):
             return False
-        # [H] Kein ND innerhalb Nacht-Puffer (erst nach 2 Freitagen neu starten)
-        if self._nacht_puffer_aktiv(ma_name, tag):
+        # [H] Kein ND im Nacht-Puffer
+        if self._ist_in_nacht_puffer(ma_name, tag):
             return False
-        # [H] Nachtblock darf max NACHT_BLOCK_MAX Tage lang sein
+        # [H] Block max NACHT_BLOCK_MAX
         if self._akt_nacht_block_len(ma_name, tag) >= NACHT_BLOCK_MAX:
             return False
         return True
 
-    def _kann_dienst(self, ma_name: str, tag: date, dienst: Dienst) -> bool:
+    def _muss_nacht_fortsetzen(self, ma_name: str, tag: date) -> bool:
+        """
+        [H] MA hat gestern Nacht gemacht, der Block ist noch nicht abgeschlossen
+        (< NACHT_BLOCK_MAX), und der Slot ist noch frei → MUSS Nacht machen.
+        """
+        block_len = self._akt_nacht_block_len(ma_name, tag)
+        if block_len == 0:
+            return False
+        if block_len >= NACHT_BLOCK_MAX:
+            return False  # Block voll, darf nicht mehr
+        if not self._kann_arbeiten(ma_name, tag):
+            return False
+        if self._ist_in_nacht_puffer(ma_name, tag):
+            return False
+        return True
+
+    def _kann_dienst(self, ma_name: str, tag: date, dienst: Dienst, locker: bool = False) -> bool:
         if dienst == Dienst.FRUEH:
-            return self._kann_frueh(ma_name, tag)
+            return self._kann_frueh(ma_name, tag, locker)
         if dienst == Dienst.SPAET:
-            return self._kann_spaet(ma_name, tag)
+            return self._kann_spaet(ma_name, tag, locker)
         if dienst == Dienst.NACHT:
             return self._kann_nacht(ma_name, tag)
         return False
@@ -396,53 +409,57 @@ class DienstplanGenerator:
         self.plan[ma_name][tag] = dienst
         if dienst in self.ARBEITSDIENSTE:
             self.states[ma_name].add_schicht(dienst)
+            # Nach Nacht-Setzen: prüfe ob Block abgeschlossen werden muss
+            if dienst == Dienst.NACHT:
+                block_len = self._akt_nacht_block_len(ma_name, tag + timedelta(days=1))
+                # Wenn morgen max erreicht → Puffer vormerken (wird in _plan_nacht_tag gesetzt)
+        else:
+            # Nicht-Arbeitsdienst → Nachtblock abschließen
+            block_len = self.states[ma_name].akt_nacht_block
+            self.states[ma_name].add_schicht(dienst)
 
     def _score(self, ma_name: str, dienst: Dienst, tag: date) -> float:
         """
         Niedrigerer Score = bevorzugt.
 
         Faktoren:
-        1. Stunden-Delta: MA mit viel Minus bekommt mehr Schichten
-        2. Schichtart-Ungleichgewicht: unterrepräsentierte Schichten bevorzugen
-        3. Konsekutive Arbeitstage: MA mit weniger Tagen am Stück bevorzugen
-        4. Nachtblock-Fairness: MA mit weniger Nachtblöcken für Nacht bevorzugen
+        1. Stunden-Delta (Gewicht 3.0): MA mit hohem Minus stark bevorzugen
+        2. Schichtart-Fairness (Gewicht 10.0): unterrepräsentierte Schicht bevorzugen
+        3. Konsekutive Arbeitstage (Gewicht 0.5): weniger Tage am Stück bevorzugen
+        4. Nachtblock-Fairness (Gewicht 2.0): weniger Nachtblöcke bevorzugen
+        5. Zufallskomponente (Gewicht 0.01): Tiebreaker
         """
         s = self.states[ma_name]
         gesamt = s.gesamt_schichten
         score = 0.0
 
-        # 1. Stunden-Delta (positiv = braucht Stunden, wird bevorzugt)
-        score -= s.stunden_delta * 0.8
+        # 1. Stunden-Delta — STARK gewichtet (war 0.8, jetzt 3.0)
+        score -= s.stunden_delta * 3.0
 
-        # 2. Schichtart-Fairness: relative Häufigkeit der gewünschten Schichtart
+        # 2. Schichtart-Fairness
         if gesamt > 0:
             if dienst == Dienst.FRUEH:
                 ratio = s.frueh_count / gesamt
             elif dienst == Dienst.SPAET:
                 ratio = s.spaet_count / gesamt
-            else:  # Nacht
+            else:
                 ratio = s.nacht_count / gesamt
-            # Je höher der Anteil dieser Schicht, desto mehr Punkte (schlechter)
             score += ratio * 10.0
-        else:
-            # Noch keine Schichten → gleichmäßig verteilen über MA
-            # Tiebreaker: Alphabet
-            score += ord(ma_name[0]) * 0.001
 
-        # 3. Konsekutive Arbeitstage: MA mit weniger Konsekutivtagen bevorzugen
+        # 3. Konsekutive Arbeitstage
         score += self._konsekutiv(ma_name, tag) * 0.5
 
         # 4. Nachtblock-Fairness
         if dienst == Dienst.NACHT:
             score += s.nacht_blocks * 2.0
 
-        # 5. Leichte Zufallskomponente für Abwechslung (deterministisch via Name+Tag)
+        # 5. Zufallskomponente
         score += (hash(f"{ma_name}{tag}") % 100) * 0.01
 
         return score
 
     # ------------------------------------------------------------------
-    # Wunsch-Index aufbauen
+    # Wunsch-Index
     # ------------------------------------------------------------------
 
     def _build_wunsch_index(self):
@@ -469,26 +486,17 @@ class DienstplanGenerator:
                 continue
             self._wunsch_index.setdefault(w.name, []).append((wdatum, wdienst))
 
-        total = sum(len(v) for v in self._wunsch_index.values())
-        logger.info("Wunsch-Index aufgebaut: %d Wünsche für %d MA", total, len(self._wunsch_index))
-
-    # ------------------------------------------------------------------
-    # Wünsche einplanen
-    # ------------------------------------------------------------------
-
     def _plan_wuensche(self):
         for ma_name, wuensche in self._wunsch_index.items():
             for wdatum, wdienst in wuensche:
                 if wdatum not in self.tage:
                     continue
-
                 if self._ist_gesperrt(ma_name, wdatum):
                     self.violations.append(
                         f"⚠️ Wunsch nicht erfüllt: {ma_name} {wdatum.strftime('%d.%m')} "
-                        f"{wdienst.value} – Tag ist gesperrt (Urlaub/Krank/Frei)"
+                        f"{wdienst.value} – Tag ist gesperrt"
                     )
                     continue
-
                 existing = self.plan[ma_name].get(wdatum)
                 if existing is not None and existing != Dienst.FREI:
                     self.violations.append(
@@ -496,25 +504,18 @@ class DienstplanGenerator:
                         f"{wdienst.value} – bereits als {existing.value} eingeplant"
                     )
                     continue
-
                 puffer_war_gesetzt = existing == Dienst.FREI
                 if puffer_war_gesetzt:
                     del self.plan[ma_name][wdatum]
-
                 if not self._kann_dienst(ma_name, wdatum, wdienst):
                     if puffer_war_gesetzt:
                         self.plan[ma_name][wdatum] = Dienst.FREI
                     self.violations.append(
                         f"⚠️ Wunsch nicht erfüllt: {ma_name} {wdatum.strftime('%d.%m')} "
-                        f"{wdienst.value} – Regelkonflikt (Konsekutiv/Spät→Früh/3er-Regel)"
+                        f"{wdienst.value} – Regelkonflikt"
                     )
                     continue
-
                 self._setze_dienst(ma_name, wdatum, wdienst)
-                logger.info(
-                    "Wunsch erfüllt: %s %s %s",
-                    ma_name, wdatum.strftime("%d.%m"), wdienst.value,
-                )
 
     # ------------------------------------------------------------------
     # Planungsschritte
@@ -538,7 +539,6 @@ class DienstplanGenerator:
             self.states[ma.name] = PlanungState(ma=ma)
 
     def _set_abwesenheiten(self):
-        """Setzt Urlaub/Krank/Frei — auch für Springer."""
         art_map = {"U": Dienst.URLAUB, "F": Dienst.FREI, "K": Dienst.KRANK}
         for ab in self.abwesenheiten:
             if ab.datum.year == self.jahr and ab.datum.month == self.monat:
@@ -564,22 +564,35 @@ class DienstplanGenerator:
                     break
             s.konsekutiv_arbeits = konsekutiv
             vortag = erster - timedelta(days=1)
-            s.letzter_dienst = tage_plan.get(vortag)
+            letzter = tage_plan.get(vortag)
+            s.letzter_dienst = letzter
+            s.vormonat_letzter = letzter
+            # Vormonat-Nachtblock: war letzter Dienst Nacht?
+            if letzter == Dienst.NACHT:
+                # Wieviele Nächte am Ende des Vormonats?
+                nb = 0
+                for i in range(1, NACHT_BLOCK_MAX + 1):
+                    check = erster - timedelta(days=i)
+                    if tage_plan.get(check) == Dienst.NACHT:
+                        nb += 1
+                    else:
+                        break
+                s.akt_nacht_block = nb
 
     # ------------------------------------------------------------------
-    # Nachtblock-Planung (zentral, vor FD/SD)
+    # Nachtblock-Planung
     # ------------------------------------------------------------------
 
-    def _plan_nacht_tag(
-        self,
-        tag: date,
-        nacht_puffer: dict[str, set[date]],
-    ) -> int:
+    def _plan_nacht_tag(self, tag: date) -> int:
         """
         Plant Nachtdienste für 'tag'.
-        Bevorzugt MA, die bereits einen laufenden Nachtblock haben
-        (d.h. gestern Nacht hatten) — um Blöcke zu vervollständigen.
-        Gibt Anzahl bereits besetzter Nächte zurück.
+
+        Prioritäten:
+        A) MA die MÜSSEN (laufender Block, noch nicht abgeschlossen)
+        B) MA die KÖNNEN und einen neuen Block starten (fairste zuerst)
+
+        Nach dem Setzen: prüft ob Block jetzt >= MIN → Puffer setzen wenn
+        der nächste Tag kein Nacht mehr wird.
         """
         bedarf = PFLICHT[Dienst.NACHT]
         bereits = sum(
@@ -589,97 +602,119 @@ class DienstplanGenerator:
         if bereits >= bedarf:
             return bereits
 
-        vortag = tag - timedelta(days=1)
-
-        # Kandidaten-Gruppen:
-        # Gruppe A: MA die gestern Nacht hatten (Block fortsetzen)
-        # Gruppe B: MA die noch keinen Nachtblock haben / neuen starten können
-        gruppe_a = []
-        gruppe_b = []
+        # Gruppe A: müssen Nacht fortsetzen (harte Pflicht)
+        muss_ma = []
+        kann_ma = []
 
         for ma in self.ma_liste:
             if ma.ist_springer:
                 continue
-            # Nachtpuffer-Tag durch FD/SD aufheben wenn nötig
-            if (tag in nacht_puffer[ma.name]
-                    and self.plan[ma.name].get(tag) == Dienst.FREI):
-                # Während Nachtpuffer KEINE anderen Schichten planen
-                continue
+            if self._muss_nacht_fortsetzen(ma.name, tag):
+                muss_ma.append(ma)
+            elif self._kann_nacht(ma.name, tag):
+                kann_ma.append(ma)
 
-            if not self._kann_nacht(ma.name, tag):
-                continue
-
-            vortag_dienst = self.plan[ma.name].get(vortag)
-            if vortag_dienst == Dienst.NACHT:
-                gruppe_a.append(ma)
-            else:
-                gruppe_b.append(ma)
-
-        # Gruppe A zuerst sortieren (Block-Vollendung bevorzugen)
-        gruppe_a.sort(key=lambda ma: self._score(ma.name, Dienst.NACHT, tag))
-        gruppe_b.sort(key=lambda ma: self._score(ma.name, Dienst.NACHT, tag))
-
-        for ma in gruppe_a + gruppe_b:
+        # Gruppe A zuerst (Pflicht)
+        muss_ma.sort(key=lambda ma: self._score(ma.name, Dienst.NACHT, tag))
+        for ma in muss_ma:
             if bereits >= bedarf:
                 break
-            # Puffer ggf. aufheben
-            if tag in nacht_puffer[ma.name] and self.plan[ma.name].get(tag) == Dienst.FREI:
-                del self.plan[ma.name][tag]
-                nacht_puffer[ma.name].discard(tag)
             self._setze_dienst(ma.name, tag, Dienst.NACHT)
             bereits += 1
 
-        # Nacht-Puffer setzen für alle MA die heute Nacht haben
+        # Gruppe B: neue Blöcke starten
+        kann_ma.sort(key=lambda ma: self._score(ma.name, Dienst.NACHT, tag))
+        for ma in kann_ma:
+            if bereits >= bedarf:
+                break
+            self._setze_dienst(ma.name, tag, Dienst.NACHT)
+            bereits += 1
+
+        # Puffer setzen: für jeden MA der heute Nacht hat und dessen Block endet
         for ma in self.ma_liste:
-            if self.plan[ma.name].get(tag) == Dienst.NACHT:
-                # Prüfe: morgen Nacht möglich? Wenn Blockende → Puffer
-                next_day = tag + timedelta(days=1)
-                if next_day > self.tage[-1]:
-                    continue
-                # Block endet wenn: MA schon NACHT_BLOCK_MAX Nächte hat
-                block_len = self._akt_nacht_block_len(ma.name, next_day)
-                if block_len >= NACHT_BLOCK_MAX:
-                    # Puffer setzen
-                    for offset in range(1, NACHT_PUFFER_TAGE + 1):
-                        p_tag = tag + timedelta(days=offset)
-                        if p_tag > self.tage[-1]:
-                            break
-                        if self._slot_frei(ma.name, p_tag):
-                            self.plan[ma.name][p_tag] = Dienst.FREI
-                            nacht_puffer[ma.name].add(p_tag)
+            if self.plan[ma.name].get(tag) != Dienst.NACHT:
+                continue
+            morgen = tag + timedelta(days=1)
+            if morgen > self.tage[-1]:
+                # Monatsende: Block-Abschluss
+                block_len = self._akt_nacht_block_len(ma.name, morgen)
+                if block_len >= NACHT_BLOCK_MIN:
+                    self._setze_nacht_puffer(ma.name, morgen)
+                continue
+            # Morgen kein Nacht mehr geplant UND Block >= MIN → Puffer
+            morgen_d = self.plan[ma.name].get(morgen)
+            if morgen_d != Dienst.NACHT and morgen_d is not None:
+                # Block wird unterbrochen → Puffer prüfen
+                block_len = self._akt_nacht_block_len(ma.name, morgen)
+                if block_len >= NACHT_BLOCK_MIN:
+                    # Puffer bereits gesetzt durch späteres Datum, nichts tun
+                    pass
+            # Block-Max erreicht → nach morgen Puffer setzen
+            block_len = self._akt_nacht_block_len(ma.name, morgen)
+            if block_len >= NACHT_BLOCK_MAX:
+                self._setze_nacht_puffer(ma.name, morgen)
 
         return bereits
+
+    def _finalisiere_nacht_puffer(self):
+        """
+        Nach dem ersten Planungsdurchlauf: für alle MA, bei denen ein
+        Nachtblock abgeschlossen wurde aber noch kein Puffer gesetzt ist,
+        den Puffer nachholen.
+        """
+        for ma in self.ma_liste:
+            if ma.ist_springer:
+                continue
+            in_block = False
+            block_len = 0
+            for i, tag in enumerate(self.tage):
+                d = self.plan[ma.name].get(tag)
+                if d == Dienst.NACHT:
+                    if not in_block:
+                        in_block = True
+                        block_len = 1
+                    else:
+                        block_len += 1
+                else:
+                    if in_block:
+                        # Block endet hier
+                        if block_len >= NACHT_BLOCK_MIN:
+                            # Prüfe ob Puffer bereits gesetzt
+                            puffer_ok = all(
+                                tag + timedelta(days=offset) in self._nacht_puffer[ma.name]
+                                for offset in range(NACHT_PUFFER_TAGE)
+                                if tag + timedelta(days=offset) <= self.tage[-1]
+                            )
+                            if not puffer_ok:
+                                self._setze_nacht_puffer(ma.name, tag)
+                        in_block = False
+                        block_len = 0
 
     # ------------------------------------------------------------------
     # Alle Dienste planen
     # ------------------------------------------------------------------
 
     def _plan_alle_dienste(self):
-        """Nur Nicht-Springer werden automatisch eingeplant."""
         offen_map = {
             Dienst.FRUEH:  Dienst.OFFEN_FD,
             Dienst.SPAET:  Dienst.OFFEN_SD,
             Dienst.NACHT:  Dienst.OFFEN_ND,
         }
-        nacht_puffer: dict[str, set[date]] = {ma.name: set() for ma in self.ma_liste}
 
+        # --- Pass 1: Normaler Durchlauf (strenge Regeln) ---
         for tag in self.tage:
-            # 1) Nachtdienste zuerst (eigene Logik mit Block-Planung)
-            nacht_besetzt = self._plan_nacht_tag(tag, nacht_puffer)
+            # 1) Nacht
+            nacht_besetzt = self._plan_nacht_tag(tag)
 
-            # 2) Fehlende Nächte als OFFEN markieren
             fehlend_nacht = PFLICHT[Dienst.NACHT] - nacht_besetzt
             if fehlend_nacht > 0:
-                if tag not in self.offen:
-                    self.offen[tag] = []
+                self.offen.setdefault(tag, [])
                 for _ in range(fehlend_nacht):
                     self.offen[tag].append(Dienst.OFFEN_ND)
 
-            # 3) FD und SD
-            for dienst, kann_fn, bedarf in [
-                (Dienst.FRUEH, self._kann_frueh, PFLICHT[Dienst.FRUEH]),
-                (Dienst.SPAET, self._kann_spaet, PFLICHT[Dienst.SPAET]),
-            ]:
+            # 2) FD und SD (streng, max 3 in Folge)
+            for dienst in [Dienst.FRUEH, Dienst.SPAET]:
+                bedarf = PFLICHT[dienst]
                 bereits = sum(
                     1 for ma in self.ma_liste
                     if self.plan[ma.name].get(tag) == dienst
@@ -687,22 +722,11 @@ class DienstplanGenerator:
                 if bereits >= bedarf:
                     continue
 
-                kandidaten = []
-                for ma in self.ma_liste:
-                    if ma.ist_springer:
-                        continue
-                    # Nachtpuffer-Tag durch FD/SD aufheben wenn nötig
-                    if (tag in nacht_puffer[ma.name]
-                            and self.plan[ma.name].get(tag) == Dienst.FREI):
-                        del self.plan[ma.name][tag]
-                        nacht_puffer[ma.name].discard(tag)
-                        if kann_fn(ma.name, tag):
-                            kandidaten.append(ma)
-                        else:
-                            self.plan[ma.name][tag] = Dienst.FREI
-                    elif kann_fn(ma.name, tag):
-                        kandidaten.append(ma)
-
+                kandidaten = [
+                    ma for ma in self.ma_liste
+                    if not ma.ist_springer
+                    and self._kann_dienst(ma.name, tag, dienst, locker=False)
+                ]
                 kandidaten.sort(key=lambda ma: self._score(ma.name, dienst, tag))
 
                 for ma in kandidaten:
@@ -711,27 +735,117 @@ class DienstplanGenerator:
                     self._setze_dienst(ma.name, tag, dienst)
                     bereits += 1
 
+                # Fehlende merken (werden in Pass 2 nochmal versucht)
                 fehlend = bedarf - bereits
                 if fehlend > 0:
-                    if tag not in self.offen:
-                        self.offen[tag] = []
+                    self.offen.setdefault(tag, [])
                     for _ in range(fehlend):
                         self.offen[tag].append(offen_map[dienst])
 
-    def _fill_frei(self):
-        """Füllt leere Slots:
-        - Reguläre MA → Frei
-        - Springer → leer lassen (nur Abwesenheiten bleiben stehen)
+        # Puffer nachfinalisieren
+        self._finalisiere_nacht_puffer()
+
+        # --- Pass 2: Lockerer Durchlauf für noch offene FD/SD ---
+        # Versucht MA die im 1. Pass durch Soft-Rules blockiert waren
+        tage_mit_fd_offen = [
+            tag for tag in self.tage
+            if any(d == Dienst.OFFEN_FD for d in self.offen.get(tag, []))
+        ]
+        tage_mit_sd_offen = [
+            tag for tag in self.tage
+            if any(d == Dienst.OFFEN_SD for d in self.offen.get(tag, []))
+        ]
+
+        for tag in tage_mit_fd_offen:
+            offen_count = sum(1 for d in self.offen.get(tag, []) if d == Dienst.OFFEN_FD)
+            gesetzt = 0
+            kandidaten = [
+                ma for ma in self.ma_liste
+                if not ma.ist_springer
+                and self._kann_dienst(ma.name, tag, Dienst.FRUEH, locker=True)
+            ]
+            kandidaten.sort(key=lambda ma: self._score(ma.name, Dienst.FRUEH, tag))
+            for ma in kandidaten:
+                if gesetzt >= offen_count:
+                    break
+                self._setze_dienst(ma.name, tag, Dienst.FRUEH)
+                gesetzt += 1
+            # Offene Liste aktualisieren
+            for _ in range(gesetzt):
+                if Dienst.OFFEN_FD in self.offen.get(tag, []):
+                    self.offen[tag].remove(Dienst.OFFEN_FD)
+            if not self.offen.get(tag):
+                self.offen.pop(tag, None)
+
+        for tag in tage_mit_sd_offen:
+            offen_count = sum(1 for d in self.offen.get(tag, []) if d == Dienst.OFFEN_SD)
+            gesetzt = 0
+            kandidaten = [
+                ma for ma in self.ma_liste
+                if not ma.ist_springer
+                and self._kann_dienst(ma.name, tag, Dienst.SPAET, locker=True)
+            ]
+            kandidaten.sort(key=lambda ma: self._score(ma.name, Dienst.SPAET, tag))
+            for ma in kandidaten:
+                if gesetzt >= offen_count:
+                    break
+                self._setze_dienst(ma.name, tag, Dienst.SPAET)
+                gesetzt += 1
+            for _ in range(gesetzt):
+                if Dienst.OFFEN_SD in self.offen.get(tag, []):
+                    self.offen[tag].remove(Dienst.OFFEN_SD)
+            if not self.offen.get(tag):
+                self.offen.pop(tag, None)
+
+        # --- Pass 3: Stunden-Ausgleich ---
+        # MA mit sehr hohem Minus bekommen zusätzliche Schichten auf freien Slots
+        self._pass_stunden_ausgleich()
+
+    def _pass_stunden_ausgleich(self):
         """
+        Pass 3: MA deren Ist-Stunden < 70% der Soll-Stunden sind,
+        bekommen auf freien Slots nachträglich Schichten zugewiesen.
+        Bevorzugt abwechselnde Schichtarten (FD/SD).
+        """
+        for tag in self.tage:
+            # MA mit hohem Stunden-Minus sortiert (größtes Minus zuerst)
+            beduerft = [
+                ma for ma in self.ma_liste
+                if not ma.ist_springer
+                and self.states[ma.name].stunden_delta > self.states[ma.name].ma.soll_stunden * 0.30
+                and self.plan[ma.name].get(tag) is None
+            ]
+            if not beduerft:
+                continue
+
+            beduerft.sort(key=lambda ma: -self.states[ma.name].stunden_delta)
+
+            for ma in beduerft:
+                # Bevorzuge die Schichtart die der MA am wenigsten hatte
+                s = self.states[ma.name]
+                gesamt = s.gesamt_schichten
+                if gesamt == 0:
+                    praeferenz = [Dienst.FRUEH, Dienst.SPAET]
+                else:
+                    ratios = {
+                        Dienst.FRUEH: s.frueh_count / gesamt,
+                        Dienst.SPAET: s.spaet_count / gesamt,
+                    }
+                    praeferenz = sorted(ratios, key=lambda d: ratios[d])
+
+                for dienst in praeferenz:
+                    if self._kann_dienst(ma.name, tag, dienst, locker=True):
+                        self._setze_dienst(ma.name, tag, dienst)
+                        break
+
+    def _fill_frei(self):
         for ma in self.ma_liste:
             for tag in self.tage:
-                if ma.ist_springer:
-                    pass
-                else:
+                if not ma.ist_springer:
                     if self.plan[ma.name].get(tag) is None:
                         self.plan[ma.name][tag] = Dienst.FREI
 
-        # Wochenend-Check nur für reguläre MA
+        # Wochenend-Check
         for ma in self.ma_liste:
             if ma.ist_springer:
                 continue
@@ -739,9 +853,11 @@ class DienstplanGenerator:
             for tag in self.tage:
                 if tag.weekday() == 5:
                     so = tag + timedelta(days=1)
-                    if (self.plan[ma.name].get(tag) == Dienst.FREI
-                            and so <= self.tage[-1]
-                            and self.plan[ma.name].get(so) == Dienst.FREI):
+                    if (
+                        self.plan[ma.name].get(tag) == Dienst.FREI
+                        and so <= self.tage[-1]
+                        and self.plan[ma.name].get(so) == Dienst.FREI
+                    ):
                         hat_frei_we = True
                         break
             if not hat_frei_we:
@@ -778,21 +894,23 @@ class DienstplanGenerator:
                     1 for d in self.offen.get(tag, [])
                     if d == offen_map_rev[dienst]
                 )
-                gesamt = ist + offen_count
-                if gesamt < anzahl:
+                if ist + offen_count < anzahl:
                     self.violations.append(
                         f"{tag.strftime('%d.%m')}: {dienst.value} "
-                        f"nur {gesamt}/{anzahl} besetzt"
+                        f"nur {ist + offen_count}/{anzahl} besetzt"
                     )
 
-        # Spät→Früh nur für reguläre MA prüfen
         for ma in self.ma_liste:
             if ma.ist_springer:
                 continue
             for tag in self.tage:
                 vortag = tag - timedelta(days=1)
-                if (self.plan[ma.name].get(vortag) == Dienst.SPAET
-                        and self.plan[ma.name].get(tag) == Dienst.FRUEH):
+                vortag_d = (
+                    self.plan[ma.name].get(vortag)
+                    if vortag >= self.tage[0]
+                    else self.states[ma.name].vormonat_letzter
+                )
+                if vortag_d == Dienst.SPAET and self.plan[ma.name].get(tag) == Dienst.FRUEH:
                     self.violations.append(
                         f"{ma.name} {tag.strftime('%d.%m')}: Spät→Früh verboten"
                     )
@@ -805,7 +923,6 @@ class DienstplanGenerator:
             while i < len(self.tage):
                 tag = self.tage[i]
                 if self.plan[ma.name].get(tag) == Dienst.NACHT:
-                    # Block-Start gefunden → Block vermessen
                     block_len = 0
                     j = i
                     while j < len(self.tage) and self.plan[ma.name].get(self.tage[j]) == Dienst.NACHT:
@@ -814,8 +931,21 @@ class DienstplanGenerator:
                     if block_len < NACHT_BLOCK_MIN:
                         self.violations.append(
                             f"{ma.name} ab {tag.strftime('%d.%m')}: "
-                            f"Nachtblock zu kurz ({block_len} Tage, min. {NACHT_BLOCK_MIN})"
+                            f"Nachtblock zu kurz ({block_len}/{NACHT_BLOCK_MIN})"
                         )
+                    # Puffer prüfen
+                    puffer_start = self.tage[j] if j < len(self.tage) else None
+                    if puffer_start and block_len >= NACHT_BLOCK_MIN:
+                        for offset in range(NACHT_PUFFER_TAGE):
+                            p_tag = puffer_start + timedelta(days=offset)
+                            if p_tag > self.tage[-1]:
+                                break
+                            d_p = self.plan[ma.name].get(p_tag)
+                            if d_p in self.ARBEITSDIENSTE:
+                                self.violations.append(
+                                    f"{ma.name} {p_tag.strftime('%d.%m')}: "
+                                    f"Arbeit während Nacht-Puffer ({d_p.value})"
+                                )
                     i = j
                 else:
                     i += 1
@@ -827,38 +957,32 @@ class DienstplanGenerator:
     def get_report(self) -> str:
         lines = [f"=== Dienstplan {self.monat}/{self.jahr} ==="]
 
-        # Springer auflisten
         springer_namen = sorted(self._springer_namen)
         if springer_namen:
-            lines.append(f"\n🔄 Springer (keine festen Stunden): {', '.join(springer_namen)}")
-            lines.append("   → Im Plan sichtbar, manuell auf offene Dienste setzen")
+            lines.append(f"\n🔄 Springer: {', '.join(springer_namen)}")
 
-        # Wünsche-Zusammenfassung
         nicht_erfuellt = [v for v in self.violations if "Wunsch nicht erfüllt" in v]
-        total_wuensche = len([
-            x for lst in self._wunsch_index.values() for x in lst
-        ])
+        total_wuensche = sum(len(v) for v in self._wunsch_index.values())
         if total_wuensche > 0:
             lines.append(
                 f"\n🙋 Wunschschichten: {total_wuensche - len(nicht_erfuellt)}/{total_wuensche} erfüllt"
             )
         if nicht_erfuellt:
-            lines.append(f"  Nicht erfüllte Wünsche:")
+            lines.append("  Nicht erfüllte Wünsche:")
             for v in nicht_erfuellt:
                 lines.append(f"  {v}")
 
-        # Offene Dienste
-        alle_offen = []
-        for tag, dienste in sorted(self.offen.items()):
-            for d in dienste:
-                alle_offen.append(f"  {tag.strftime('%d.%m')} → {d.value}")
+        alle_offen = [
+            f"  {tag.strftime('%d.%m')} → {d.value}"
+            for tag, dienste in sorted(self.offen.items())
+            for d in dienste
+        ]
         if alle_offen:
             lines.append(f"\n⚠️  Offene Dienste ({len(alle_offen)}):")
             lines.extend(alle_offen)
         else:
             lines.append("\n✅ Alle Dienste vollständig besetzt")
 
-        # MA-Übersicht (nur reguläre MA)
         lines.append("\n📊 Mitarbeiter-Übersicht:")
         for ma in self.ma_liste:
             if ma.ist_springer:
@@ -873,7 +997,6 @@ class DienstplanGenerator:
                 f"Δ:{delta_sign}{s.stunden_delta:.1f}h"
             )
 
-        # Regelviols
         rule_violations = [
             v for v in self.violations
             if "nicht besetzt" not in v

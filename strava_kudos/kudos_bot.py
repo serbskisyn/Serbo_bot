@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
 """
-Strava Kudos Bot – API-Version
-Kein Browser, kein Playwright. Nutzt die offizielle Strava API.
+Strava Kudos Bot – Web-Session Version
+Kein Browser, kein Playwright, kein API-Key.
+Login via HTTP direkt, echter Friend Feed.
 
-Strategie:
-  1. Eigene Clubs abrufen → Club Activities → Kudos geben
-  2. Fallback: /athlete/following → pro Athlet letzte Activity → Kudos
+Setup:
+  cp .env.example .env
+  nano .env  # STRAVA_EMAIL + STRAVA_PASSWORD eintragen
 
-Setup (einmalig, auf Rechner mit Browser):
-  python kudos_bot.py --auth
-
-Normaler Lauf (via Cronjob auf Pi):
+Lauf:
   python kudos_bot.py
+
+Cronjob (alle 30 Min):
+  */30 * * * * cd /home/pi/Serbo_bot/strava_kudos && \
+    /home/pi/Serbo_bot/.venv/bin/python kudos_bot.py >> kudos.log 2>&1
 """
 
 import os
+import re
 import sys
 import json
+import time
 import logging
-import webbrowser
-from datetime import datetime, timezone
 from pathlib import Path
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs, urlencode
 
 import requests
 from dotenv import load_dotenv
@@ -30,21 +30,25 @@ from dotenv import load_dotenv
 # ── Konfiguration ────────────────────────────────────────────────────────────
 load_dotenv()
 
-BASE_DIR    = Path(__file__).parent
-TOKEN_FILE  = BASE_DIR / "tokens.json"
-LOG_FILE    = BASE_DIR / "kudos.log"
+BASE_DIR = Path(__file__).parent
+LOG_FILE = BASE_DIR / "kudos.log"
 
-CLIENT_ID     = os.getenv("STRAVA_CLIENT_ID")
-CLIENT_SECRET = os.getenv("STRAVA_CLIENT_SECRET")
-REDIRECT_URI  = "http://localhost:8765/callback"
-SCOPE         = "activity:read_all,profile:read_all,read"
+EMAIL    = os.getenv("STRAVA_EMAIL")
+PASSWORD = os.getenv("STRAVA_PASSWORD")
 
-API_BASE  = "https://www.strava.com/api/v3"
-AUTH_URL  = "https://www.strava.com/oauth/authorize"
-TOKEN_URL = "https://www.strava.com/oauth/token"
+BASE_URL   = "https://www.strava.com"
+FEED_LIMIT = 30   # Activities pro Lauf
+DELAY      = 2.0  # Sekunden zwischen Kudos (Rate-Limit-Schutz)
 
-# Wie viele Activities pro Club prüfen
-FEED_LIMIT = 30
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+}
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -58,237 +62,199 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-# ── Hilfsfunktionen ──────────────────────────────────────────────────────────
-def _require_env(*keys):
-    missing = [k for k in keys if not os.getenv(k)]
-    if missing:
+# ── Session / Login ───────────────────────────────────────────────────────────
+def _get_csrf_token(html: str) -> str:
+    """Extrahiert CSRF-Token aus dem HTML der Login-Seite."""
+    match = re.search(r'<meta\s+name=["\']csrf-token["\']\s+content=["\']([^"\']+)["\']', html)
+    if not match:
+        match = re.search(r'authenticity_token["\']\s+value=["\']([^"\']+)["\']', html)
+    if not match:
+        raise ValueError("CSRF-Token nicht gefunden. Strava hat evtl. die Login-Seite geändert.")
+    return match.group(1)
+
+
+def create_session() -> requests.Session:
+    """Loggt sich bei Strava ein und gibt eine authentifizierte Session zurück."""
+    if not EMAIL or not PASSWORD:
         raise EnvironmentError(
-            f"Fehlende Umgebungsvariablen: {', '.join(missing)}\n"
-            "Bitte in .env eintragen (siehe .env.example)."
+            "STRAVA_EMAIL oder STRAVA_PASSWORD fehlt. Bitte .env befüllen."
         )
 
+    session = requests.Session()
+    session.headers.update(HEADERS)
 
-def _save_tokens(data: dict):
-    TOKEN_FILE.write_text(json.dumps(data, indent=2))
-    log.info("Tokens gespeichert: %s", TOKEN_FILE)
-
-
-def _load_tokens() -> dict:
-    if not TOKEN_FILE.exists():
-        raise FileNotFoundError(
-            "tokens.json nicht gefunden. Bitte zuerst --auth ausführen:\n"
-            "  python kudos_bot.py --auth"
-        )
-    return json.loads(TOKEN_FILE.read_text())
-
-
-def _refresh_token_if_needed(tokens: dict) -> dict:
-    """Erneuert den Access Token automatisch wenn abgelaufen."""
-    expires_at = tokens.get("expires_at", 0)
-    now = datetime.now(timezone.utc).timestamp()
-    if now < expires_at - 60:
-        return tokens
-
-    log.info("Access Token abgelaufen – erneuere via Refresh Token …")
-    resp = requests.post(TOKEN_URL, data={
-        "client_id":     CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "grant_type":    "refresh_token",
-        "refresh_token": tokens["refresh_token"],
-    }, timeout=15)
+    # 1. Login-Seite laden (CSRF-Token holen)
+    log.info("Lade Login-Seite …")
+    resp = session.get(f"{BASE_URL}/login", timeout=15)
     resp.raise_for_status()
-    new_tokens = resp.json()
-    tokens.update(new_tokens)
-    _save_tokens(tokens)
-    log.info("Token erneuert, gültig bis %s",
-             datetime.fromtimestamp(new_tokens["expires_at"]).strftime("%Y-%m-%d %H:%M"))
-    return tokens
+    csrf = _get_csrf_token(resp.text)
+    log.debug("CSRF-Token: %s…", csrf[:12])
 
-
-def _give_kudos_for_activity(act: dict, headers: dict) -> str:
-    """Gibt Kudos für eine einzelne Activity. Gibt Status zurück: given/skipped/error."""
-    act_id    = act.get("id")
-    firstname = act.get("athlete", {}).get("firstname", "?")
-    lastname  = act.get("athlete", {}).get("lastname", "")
-    athlete   = f"{firstname} {lastname}".strip()
-    name      = act.get("name", "Unbenannte Activity")
-
-    if act.get("kudosed", False):
-        log.debug("Bereits bekudost: %s – %s", athlete, name)
-        return "skipped"
-
-    resp = requests.post(
-        f"{API_BASE}/activities/{act_id}/kudos",
-        headers=headers,
-        timeout=10,
+    # 2. Login POST
+    log.info("Logge ein als %s …", EMAIL)
+    login_resp = session.post(
+        f"{BASE_URL}/session",
+        data={
+            "utf8":               "✓",
+            "authenticity_token": csrf,
+            "plan":               "",
+            "email":              EMAIL,
+            "password":           PASSWORD,
+            "remember_me":        "on",
+        },
+        headers={
+            **HEADERS,
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Referer":      f"{BASE_URL}/login",
+            "Origin":       BASE_URL,
+        },
+        allow_redirects=True,
+        timeout=15,
     )
-    if resp.status_code in (200, 201, 204):
-        log.info("✅ Kudos: %s – %s", athlete, name)
-        return "given"
-    elif resp.status_code == 429:
-        log.warning("⚠️  Rate Limit erreicht – stoppe.")
-        return "ratelimit"
-    else:
-        log.warning("❌ Fehler %s bei Activity %s: %s", resp.status_code, act_id, resp.text[:80])
-        return "error"
+
+    # Login-Check: nach /dashboard oder /athlete/dashboard weitergeleitet?
+    if "/login" in login_resp.url or "/session" in login_resp.url:
+        raise PermissionError(
+            "Login fehlgeschlagen. Email/Passwort prüfen oder Strava hat 2FA aktiviert."
+        )
+
+    log.info("✅ Eingeloggt. Redirect: %s", login_resp.url)
+    return session
 
 
-# ── OAuth Authorization Flow ──────────────────────────────────────────────────
-class _CallbackHandler(BaseHTTPRequestHandler):
-    code = None
+# ── Feed abrufen ──────────────────────────────────────────────────────────────
+def get_feed(session: requests.Session) -> list:
+    """Holt den Friend-Feed als Liste von Activity-Dicts."""
+    log.info("Lade Friend Feed …")
+    resp = session.get(
+        f"{BASE_URL}/dashboard/feed",
+        params={
+            "feed_type": "following",
+            "num_entries": FEED_LIMIT,
+        },
+        headers={
+            **HEADERS,
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": f"{BASE_URL}/dashboard",
+        },
+        timeout=15,
+    )
 
-    def do_GET(self):
-        params = parse_qs(urlparse(self.path).query)
-        if "code" in params:
-            _CallbackHandler.code = params["code"][0]
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(
-                b"<h2>Strava Auth erfolgreich!</h2>"
-                b"<p>Du kannst dieses Fenster jetzt schliessen.</p>"
-            )
-        else:
-            self.send_response(400)
-            self.end_headers()
-            self.wfile.write(b"Fehler: kein Code erhalten.")
-
-    def log_message(self, *args):
-        pass
-
-
-def do_auth():
-    """Einmaliger OAuth-Flow: öffnet Browser, fängt Callback lokal ab."""
-    _require_env("STRAVA_CLIENT_ID", "STRAVA_CLIENT_SECRET")
-
-    params = urlencode({
-        "client_id":       CLIENT_ID,
-        "redirect_uri":    REDIRECT_URI,
-        "response_type":   "code",
-        "approval_prompt": "auto",
-        "scope":           SCOPE,
-    })
-    url = f"{AUTH_URL}?{params}"
-
-    print("\n" + "="*60)
-    print("STRAVA AUTHORISIERUNG")
-    print("="*60)
-    print(f"\nÖffne im Browser:\n  {url}")
-    print("\nFalls kein Browser startet, kopiere die URL manuell.")
-    print("="*60 + "\n")
+    if not resp.ok:
+        raise RuntimeError(f"Feed-Abruf fehlgeschlagen: {resp.status_code} {resp.text[:200]}")
 
     try:
-        webbrowser.open(url)
-    except Exception:
-        pass
+        data = resp.json()
+    except json.JSONDecodeError:
+        raise RuntimeError(f"Feed ist kein JSON. Strava-Struktur geändert?\n{resp.text[:300]}")
 
-    server = HTTPServer(("localhost", 8765), _CallbackHandler)
-    log.info("Warte auf OAuth Callback auf http://localhost:8765 …")
-    while _CallbackHandler.code is None:
-        server.handle_request()
-
-    code = _CallbackHandler.code
-    log.info("Authorization Code erhalten – tausche gegen Tokens …")
-
-    resp = requests.post(TOKEN_URL, data={
-        "client_id":     CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "code":          code,
-        "grant_type":    "authorization_code",
-    }, timeout=15)
-    resp.raise_for_status()
-    tokens = resp.json()
-    _save_tokens(tokens)
-
-    athlete = tokens.get("athlete", {})
-    print(f"\n✅ Eingeloggt als: {athlete.get('firstname', '')} {athlete.get('lastname', '')}")
-    print(f"   Token gültig bis: {datetime.fromtimestamp(tokens['expires_at']).strftime('%Y-%m-%d %H:%M')}")
-    print("\nKopiere tokens.json auf den Pi und starte: python kudos_bot.py\n")
+    # Strava gibt entweder eine Liste oder ein Dict mit 'entries'
+    if isinstance(data, list):
+        return data
+    return data.get("entries", data.get("feed", []))
 
 
-# ── Kudos-Logik ───────────────────────────────────────────────────────────────
-def give_kudos():
-    tokens  = _load_tokens()
-    tokens  = _refresh_token_if_needed(tokens)
-    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+# ── Kudos geben ────────────────────────────────────────────────────────────────
+def _extract_activity_id(entry: dict) -> int | None:
+    """Extrahiert die Activity-ID aus einem Feed-Eintrag (verschiedene Formate)."""
+    # Format 1: direktes activity-Dict
+    act_id = entry.get("activity_id") or entry.get("id")
+    if act_id:
+        return int(act_id)
+    # Format 2: verschachtelt unter 'activity'
+    activity = entry.get("activity", {})
+    act_id = activity.get("id")
+    if act_id:
+        return int(act_id)
+    # Format 3: 'entity' / 'object_id'
+    if entry.get("type") == "Activity":
+        return entry.get("object_id")
+    return None
 
-    seen_ids     = set()
-    kudos_given   = 0
-    kudos_skipped = 0
 
-    # ── Strategie 1: Club Activities ─────────────────────────────────────────
-    log.info("Lade Clubs …")
-    clubs_resp = requests.get(f"{API_BASE}/athlete/clubs", headers=headers, timeout=15)
-    clubs = clubs_resp.json() if clubs_resp.ok else []
-    log.info("%d Club(s) gefunden.", len(clubs))
+def _already_kudosed(entry: dict) -> bool:
+    """Prüft ob bereits Kudos gegeben wurden."""
+    activity = entry.get("activity", entry)
+    return (
+        activity.get("kudosed", False)
+        or activity.get("has_kudoed", False)
+        or entry.get("kudosed", False)
+    )
 
-    for club in clubs:
-        club_id   = club["id"]
-        club_name = club.get("name", str(club_id))
-        log.info("Club: %s – lade Activities …", club_name)
 
-        acts_resp = requests.get(
-            f"{API_BASE}/clubs/{club_id}/activities",
-            headers=headers,
-            params={"per_page": FEED_LIMIT},
-            timeout=15,
-        )
-        if not acts_resp.ok:
-            log.warning("Club %s: Fehler %s", club_name, acts_resp.status_code)
+def give_kudos_to_feed(session: requests.Session, entries: list) -> tuple[int, int]:
+    """Gibt Kudos auf alle nicht-bekudosten Activities. Gibt (gegeben, geskippt) zurück."""
+    # CSRF-Token aus Dashboard holen (benötigt für POST)
+    dash_resp = session.get(f"{BASE_URL}/dashboard", timeout=15)
+    csrf = _get_csrf_token(dash_resp.text)
+
+    given   = 0
+    skipped = 0
+
+    for entry in entries:
+        act_id = _extract_activity_id(entry)
+        if not act_id:
+            log.debug("Kein Activity-ID in Eintrag: %s", str(entry)[:80])
             continue
 
-        for act in acts_resp.json():
-            act_id = act.get("id")
-            if not act_id or act_id in seen_ids:
-                continue
-            seen_ids.add(act_id)
-            result = _give_kudos_for_activity(act, headers)
-            if result == "given":
-                kudos_given += 1
-            elif result == "skipped":
-                kudos_skipped += 1
-            elif result == "ratelimit":
-                log.info("Fertig (Rate Limit). Kudos: %d | Skipped: %d", kudos_given, kudos_skipped)
-                return
-
-    # ── Strategie 2: Gefolgten Athleten → letzte Activity ────────────────────
-    log.info("Lade gefolgten Athleten für direkte Kudos …")
-    page = 1
-    while True:
-        follow_resp = requests.get(
-            f"{API_BASE}/athlete/following",
-            headers=headers,
-            params={"per_page": 50, "page": page},
-            timeout=15,
+        athlete = (
+            entry.get("activity", entry)
+            .get("athlete", {}).get("display_name", "?")
         )
-        if not follow_resp.ok or not follow_resp.json():
+        name = entry.get("activity", entry).get("name", "Activity")
+
+        if _already_kudosed(entry):
+            log.debug("Bereits bekudost: %s – %s", athlete, name)
+            skipped += 1
+            continue
+
+        resp = session.post(
+            f"{BASE_URL}/activities/{act_id}/kudos",
+            headers={
+                **HEADERS,
+                "X-CSRF-Token":    csrf,
+                "X-Requested-With": "XMLHttpRequest",
+                "Referer":          f"{BASE_URL}/dashboard",
+                "Accept":           "application/json, text/javascript, */*; q=0.01",
+            },
+            timeout=10,
+        )
+
+        if resp.status_code in (200, 201, 204):
+            log.info("✅ Kudos: %s – %s", athlete, name)
+            given += 1
+            time.sleep(DELAY)
+        elif resp.status_code == 429:
+            log.warning("⚠️  Rate Limit – stoppe.")
             break
+        elif resp.status_code == 401:
+            log.warning("🔒 Nicht authorisiert für Activity %s (privat?)", act_id)
+        else:
+            log.warning("❌ Fehler %s bei Activity %s: %s",
+                        resp.status_code, act_id, resp.text[:100])
 
-        athletes = follow_resp.json()
-        for ath in athletes:
-            ath_id = ath.get("id")
-            # Letzte Activity des Athleten abrufen
-            act_resp = requests.get(
-                f"{API_BASE}/athletes/{ath_id}/stats",
-                headers=headers,
-                timeout=10,
-            )
-            # stats gibt keine einzelnen Activities – nutze stattdessen
-            # die bekannten Activity-IDs aus recent_*_totals (nicht kudosbar direkt)
-            # → Strategie 2 nur als Fallback wenn Clubs leer sind
-        break  # Einmal reicht als Hinweis
-
-    if not clubs:
-        log.warning(
-            "Keine Clubs gefunden und /activities/following ist deprecated.\n"
-            "Tritt einem Strava-Club bei, damit der Bot Activities findet!"
-        )
-
-    log.info("Fertig. Kudos gegeben: %d | Bereits bekudost: %d", kudos_given, kudos_skipped)
+    return given, skipped
 
 
-# ── Einstieg ──────────────────────────────────────────────────────────────────
+# ── Hauptprogramm ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    if "--auth" in sys.argv:
-        do_auth()
-    else:
-        give_kudos()
+    try:
+        session = create_session()
+        entries = get_feed(session)
+        log.info("%d Einträge im Feed.", len(entries))
+
+        if not entries:
+            log.warning("Feed ist leer – möglicherweise hat Strava die Feed-Struktur geändert.")
+            log.warning("Aktiviere Debug-Logging mit LOG_LEVEL=DEBUG für mehr Details.")
+            sys.exit(0)
+
+        given, skipped = give_kudos_to_feed(session, entries)
+        log.info("Fertig. ✅ Kudos gegeben: %d | ⏭ Skipped: %d", given, skipped)
+
+    except PermissionError as e:
+        log.error("🔒 Login fehlgeschlagen: %s", e)
+        sys.exit(1)
+    except Exception as e:
+        log.error("❌ Unerwarteter Fehler: %s", e)
+        raise

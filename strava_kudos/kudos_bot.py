@@ -1,233 +1,237 @@
+#!/usr/bin/env python3
 """
-strava_kudos/kudos_bot.py
+Strava Kudos Bot – API-Version
+Kein Browser, kein Playwright. Nutzt die offizielle Strava API.
 
-Automatisch Kudos an alle Aktivitäten im Strava-Feed geben.
+Setup (einmalig):
+  python kudos_bot.py --auth
 
-Methode: Playwright (headless Chromium) – keine API-Keys nötig.
-Session wird nach dem ersten Login in 'session_state.json' gespeichert
-und bei jedem weiteren Aufruf wiederverwendet.
-
-Nutzung:
-  Einmalig (Login): python kudos_bot.py --login
-  Normaler Lauf:    python kudos_bot.py
-
-Cron (alle 30 Min):
-  */30 * * * * cd /home/pi/Serbo_bot/strava_kudos && /home/pi/Serbo_bot/.venv/bin/python kudos_bot.py >> kudos.log 2>&1
+Normaler Lauf (via Cronjob):
+  python kudos_bot.py
 """
-from __future__ import annotations
 
-import argparse
+import os
+import sys
 import json
 import logging
-import os
-import time
+import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs, urlencode
 
-from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+import requests
+from dotenv import load_dotenv
 
-# ---------------------------------------------------------------------------
-# Konfiguration
-# ---------------------------------------------------------------------------
-BASE_DIR        = Path(__file__).parent
-STATE_FILE      = BASE_DIR / "session_state.json"
-KUDOSED_FILE    = BASE_DIR / "kudosed.json"
-LOG_FILE        = BASE_DIR / "kudos.log"
+# ── Konfiguration ────────────────────────────────────────────────────────────
+load_dotenv()
 
-STRAVA_LOGIN    = "https://www.strava.com/login"
-STRAVA_FEED     = "https://www.strava.com/dashboard?num_entries=200"
+BASE_DIR    = Path(__file__).parent
+TOKEN_FILE  = BASE_DIR / "tokens.json"
+LOG_FILE    = BASE_DIR / "kudos.log"
 
-# Buttons: sowohl der leere Kudo-Button als auch "als Erster kudosen"
-KUDO_SELECTOR   = (
-    'button[title="Give kudos"], '
-    'button[title="Be the first to give kudos!"], '
-    'button[data-testid="kudos_button"]:not([class*="active"]):not([class*="kudoed"])'
-)
+CLIENT_ID     = os.getenv("STRAVA_CLIENT_ID")
+CLIENT_SECRET = os.getenv("STRAVA_CLIENT_SECRET")
+REDIRECT_URI  = "http://localhost:8765/callback"
+SCOPE         = "activity:read,profile:read_all"
 
-CLICK_DELAY_MS  = 1800   # ms zwischen zwei Kudos (Rate-Limiting)
-SCROLL_PAUSE_MS = 2000   # ms nach dem Scrollen (Feed nachladen)
-MAX_SCROLLS     = 8      # wie oft nach unten scrollen
-KEEP_KUDOSED    = 2000   # max. gecachte Activity-IDs
+API_BASE = "https://www.strava.com/api/v3"
+AUTH_URL = "https://www.strava.com/oauth/authorize"
+TOKEN_URL = "https://www.strava.com/oauth/token"
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
+# Wie viele Activities aus dem Feed prüfen (max 200)
+FEED_LIMIT = 30
+
+# ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        logging.FileHandler(LOG_FILE, encoding="utf-8"),
-        logging.StreamHandler(),
+        logging.FileHandler(LOG_FILE),
+        logging.StreamHandler(sys.stdout),
     ],
 )
-logger = logging.getLogger("strava_kudos")
+log = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Hilfsfunktionen
-# ---------------------------------------------------------------------------
-def load_kudosed() -> set[str]:
-    if KUDOSED_FILE.exists():
-        return set(json.loads(KUDOSED_FILE.read_text(encoding="utf-8")))
-    return set()
-
-
-def save_kudosed(ids: set[str]):
-    recent = sorted(ids)[-KEEP_KUDOSED:]
-    KUDOSED_FILE.write_text(json.dumps(recent, indent=2), encoding="utf-8")
-
-
-def _get_env(key: str) -> str:
-    val = os.environ.get(key, "")
-    if not val:
+# ── Hilfsfunktionen ──────────────────────────────────────────────────────────
+def _require_env(*keys):
+    missing = [k for k in keys if not os.getenv(k)]
+    if missing:
         raise EnvironmentError(
-            f"Umgebungsvariable '{key}' fehlt. "
-            f"In .env eintragen oder: export {key}=..."
+            f"Fehlende Umgebungsvariablen: {', '.join(missing)}\n"
+            "Bitte in .env eintragen (siehe .env.example)."
         )
-    return val
 
 
-# ---------------------------------------------------------------------------
-# Login (einmalig)
-# ---------------------------------------------------------------------------
-def do_login():
-    """
-    Öffnet einen sichtbaren Browser, meldet sich bei Strava an und
-    speichert die Session in session_state.json.
-    Nur einmalig nötig – danach läuft alles headless.
-    """
-    email    = _get_env("STRAVA_EMAIL")
-    password = _get_env("STRAVA_PASSWORD")
-
-    logger.info("Starte Login-Browser (NICHT headless)...")
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False, slow_mo=200)
-        ctx     = browser.new_context()
-        page    = ctx.new_page()
-
-        page.goto(STRAVA_LOGIN)
-        page.fill("#email",    email)
-        page.fill("#password", password)
-        page.click("#login-button")
-
-        try:
-            page.wait_for_url("**/dashboard**", timeout=20_000)
-            logger.info("Login erfolgreich!")
-        except PWTimeout:
-            logger.error("Login-Timeout – falsches Passwort oder 2FA aktiv?")
-            browser.close()
-            return
-
-        ctx.storage_state(path=str(STATE_FILE))
-        logger.info("Session gespeichert in %s", STATE_FILE)
-        browser.close()
+def _save_tokens(data: dict):
+    TOKEN_FILE.write_text(json.dumps(data, indent=2))
+    log.info("Tokens gespeichert: %s", TOKEN_FILE)
 
 
-# ---------------------------------------------------------------------------
-# Kudos geben
-# ---------------------------------------------------------------------------
-def give_kudos(headless: bool = True) -> int:
-    """
-    Navigiert zum Strava-Feed, gibt Kudos an alle noch nicht gekudosten
-    Aktivitäten und gibt die Anzahl neuer Kudos zurück.
-    """
-    if not STATE_FILE.exists():
-        logger.error(
-            "Keine Session gefunden. Bitte einmalig --login ausführen."
+def _load_tokens() -> dict:
+    if not TOKEN_FILE.exists():
+        raise FileNotFoundError(
+            "tokens.json nicht gefunden. Bitte zuerst --auth ausführen:"
+            "  python kudos_bot.py --auth"
         )
-        return 0
+    return json.loads(TOKEN_FILE.read_text())
 
-    kudosed = load_kudosed()
-    new_kudos = 0
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
-        ctx     = browser.new_context(storage_state=str(STATE_FILE))
-        page    = ctx.new_page()
+def _refresh_token_if_needed(tokens: dict) -> dict:
+    """Erneuert den Access Token automatisch wenn abgelaufen."""
+    expires_at = tokens.get("expires_at", 0)
+    now = datetime.now(timezone.utc).timestamp()
+    if now < expires_at - 60:  # 60s Puffer
+        return tokens
 
-        # Feed laden
-        logger.info("Lade Feed: %s", STRAVA_FEED)
-        page.goto(STRAVA_FEED, wait_until="networkidle", timeout=30_000)
+    log.info("Access Token abgelaufen – erneuere via Refresh Token …")
+    resp = requests.post(TOKEN_URL, data={
+        "client_id":     CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "grant_type":    "refresh_token",
+        "refresh_token": tokens["refresh_token"],
+    }, timeout=15)
+    resp.raise_for_status()
+    new_tokens = resp.json()
+    tokens.update(new_tokens)
+    _save_tokens(tokens)
+    log.info("Token erneuert, gültig bis %s",
+             datetime.fromtimestamp(new_tokens["expires_at"]).strftime("%Y-%m-%d %H:%M"))
+    return tokens
 
-        # Prüfe ob Session noch gültig
-        if "login" in page.url:
-            logger.warning("Session abgelaufen – bitte erneut --login ausführen.")
-            browser.close()
-            return 0
 
-        # Feed nach unten scrollen um mehr Aktivitäten zu laden
-        for i in range(MAX_SCROLLS):
-            page.evaluate("window.scrollBy(0, window.innerHeight * 2)")
-            page.wait_for_timeout(SCROLL_PAUSE_MS)
-            logger.debug("Scroll %d/%d", i + 1, MAX_SCROLLS)
+# ── OAuth Authorization Flow ──────────────────────────────────────────────────
+class _CallbackHandler(BaseHTTPRequestHandler):
+    """Minimaler HTTP-Server fängt den OAuth Callback ab."""
+    code = None
 
-        # Alle Kudos-Buttons finden
-        buttons = page.query_selector_all(KUDO_SELECTOR)
-        logger.info("%d Kudos-Buttons gefunden", len(buttons))
+    def do_GET(self):
+        params = parse_qs(urlparse(self.path).query)
+        if "code" in params:
+            _CallbackHandler.code = params["code"][0]
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(
+                b"<h2>Strava Auth erfolgreich!</h2>"
+                b"<p>Du kannst dieses Fenster jetzt schliessen.</p>"
+            )
+        else:
+            self.send_response(400)
+            self.end_headers()
+            self.wfile.write(b"Fehler: kein Code erhalten.")
 
-        for btn in buttons:
-            try:
-                # Activity-ID aus dem nächsten Elternelement ermitteln
-                activity_id = (
-                    btn.evaluate(
-                        "el => el.closest('[data-activity-id]')"
-                        "?.getAttribute('data-activity-id') || ''"
-                    )
-                    or btn.evaluate(
-                        "el => el.closest('article, [id^=\"activity\"]')"
-                        "?.id?.replace('activity-', '') || ''"
-                    )
-                )
+    def log_message(self, *args):  # HTTP-Logs unterdrücken
+        pass
 
-                if activity_id and activity_id in kudosed:
-                    logger.debug("Bereits gekudost: %s", activity_id)
-                    continue
 
-                btn.scroll_into_view_if_needed()
-                page.wait_for_timeout(CLICK_DELAY_MS)
-                btn.click()
-                new_kudos += 1
+def do_auth():
+    """Einmaliger OAuth-Flow: öffnet Browser, fängt Callback lokal ab."""
+    _require_env("STRAVA_CLIENT_ID", "STRAVA_CLIENT_SECRET")
 
-                if activity_id:
-                    kudosed.add(activity_id)
-                    logger.info("👍 Kudos gegeben (Activity %s)", activity_id)
-                else:
-                    logger.info("👍 Kudos gegeben (ID unbekannt)")
+    params = urlencode({
+        "client_id":     CLIENT_ID,
+        "redirect_uri":  REDIRECT_URI,
+        "response_type": "code",
+        "approval_prompt": "auto",
+        "scope":         SCOPE,
+    })
+    url = f"{AUTH_URL}?{params}"
 
-            except Exception as exc:
-                logger.warning("Fehler beim Kudos-Klick: %s", exc)
+    print("\n" + "="*60)
+    print("STRAVA AUTHORISIERUNG")
+    print("="*60)
+    print(f"\nÖffne im Browser:\n  {url}")
+    print("\nFalls kein Browser startet, kopiere die URL manuell.")
+    print("="*60 + "\n")
 
-        # Aktualisierte Session speichern (verlängert Lebensdauer)
-        ctx.storage_state(path=str(STATE_FILE))
-        browser.close()
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
 
-    save_kudosed(kudosed)
-    logger.info(
-        "✅ Fertig: %d neue Kudos | %s",
-        new_kudos,
-        datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+    # Lokalen Server starten und auf Callback warten
+    server = HTTPServer(("localhost", 8765), _CallbackHandler)
+    log.info("Warte auf OAuth Callback auf http://localhost:8765 …")
+    while _CallbackHandler.code is None:
+        server.handle_request()
+
+    code = _CallbackHandler.code
+    log.info("Authorization Code erhalten – tausche gegen Tokens …")
+
+    resp = requests.post(TOKEN_URL, data={
+        "client_id":     CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "code":          code,
+        "grant_type":    "authorization_code",
+    }, timeout=15)
+    resp.raise_for_status()
+    tokens = resp.json()
+    _save_tokens(tokens)
+
+    athlete = tokens.get("athlete", {})
+    print(f"\n✅ Eingeloggt als: {athlete.get('firstname', '')} {athlete.get('lastname', '')}")
+    print(f"   Token gültig bis: {datetime.fromtimestamp(tokens['expires_at']).strftime('%Y-%m-%d %H:%M')}")
+    print("\nDu kannst den Bot jetzt starten: python kudos_bot.py\n")
+
+
+# ── Kudos-Logik ───────────────────────────────────────────────────────────────
+def give_kudos():
+    """Holt den Activity-Feed und gibt Kudos auf alle noch nicht bekudosten Activities."""
+    tokens = _load_tokens()
+    tokens = _refresh_token_if_needed(tokens)
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    # Feed der gefolgten Athleten abrufen
+    log.info("Lade Activity-Feed (max %d Activities) …", FEED_LIMIT)
+    resp = requests.get(
+        f"{API_BASE}/activities/following",
+        headers=headers,
+        params={"per_page": FEED_LIMIT},
+        timeout=15,
     )
-    return new_kudos
+    resp.raise_for_status()
+    activities = resp.json()
+    log.info("%d Activities im Feed gefunden.", len(activities))
+
+    kudos_given = 0
+    kudos_skipped = 0
+
+    for act in activities:
+        act_id    = act["id"]
+        athlete   = act.get("athlete", {}).get("firstname", "?") + " " + act.get("athlete", {}).get("lastname", "")
+        name      = act.get("name", "Unbenannte Activity")
+        has_kudos = act.get("kudosed", False)
+
+        if has_kudos:
+            kudos_skipped += 1
+            log.debug("Bereits bekudost: %s – %s", athlete.strip(), name)
+            continue
+
+        # Kudos POST
+        kudo_resp = requests.post(
+            f"{API_BASE}/activities/{act_id}/kudos",
+            headers=headers,
+            timeout=10,
+        )
+
+        if kudo_resp.status_code in (200, 201, 204):
+            log.info("✅ Kudos gegeben: %s – %s", athlete.strip(), name)
+            kudos_given += 1
+        elif kudo_resp.status_code == 429:
+            log.warning("⚠️  Rate Limit erreicht – stoppe für heute.")
+            break
+        else:
+            log.warning("❌ Fehler bei Activity %s: %s %s",
+                        act_id, kudo_resp.status_code, kudo_resp.text[:100])
+
+    log.info("Fertig. Kudos gegeben: %d | Bereits bekudost: %d",
+             kudos_given, kudos_skipped)
 
 
-# ---------------------------------------------------------------------------
-# Einstiegspunkt
-# ---------------------------------------------------------------------------
+# ── Einstieg ──────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Strava Auto-Kudos Bot")
-    parser.add_argument(
-        "--login",
-        action="store_true",
-        help="Einmaligen Login durchführen und Session speichern",
-    )
-    parser.add_argument(
-        "--visible",
-        action="store_true",
-        help="Browser sichtbar starten (Debug)",
-    )
-    args = parser.parse_args()
-
-    if args.login:
-        do_login()
+    if "--auth" in sys.argv:
+        do_auth()
     else:
-        give_kudos(headless=not args.visible)
+        give_kudos()

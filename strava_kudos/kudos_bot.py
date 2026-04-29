@@ -64,13 +64,28 @@ log = logging.getLogger(__name__)
 
 # ── Session / Login ───────────────────────────────────────────────────────────
 def _get_csrf_token(html: str) -> str:
-    """Extrahiert CSRF-Token aus dem HTML der Login-Seite."""
-    match = re.search(r'<meta\s+name=["\']csrf-token["\']\s+content=["\']([^"\']+)["\']', html)
-    if not match:
-        match = re.search(r'authenticity_token["\']\s+value=["\']([^"\']+)["\']', html)
-    if not match:
-        raise ValueError("CSRF-Token nicht gefunden. Strava hat evtl. die Login-Seite geändert.")
-    return match.group(1)
+    """
+    Extrahiert CSRF-Token aus HTML.
+    Unterstützt alle bekannten Strava-Formate:
+      - <meta name="csrf" content="...">          (aktuell, Next.js)
+      - <meta name="csrf-token" content="...">    (alt, Rails)
+      - authenticity_token value="..."            (Formular-Fallback)
+    """
+    patterns = [
+        r'<meta\s+name=["\']csrf["\']\s+content=["\']([^"\']+)["\']',
+        r'<meta\s+content=["\']([^"\']+)["\']\s+name=["\']csrf["\']',
+        r'<meta\s+name=["\']csrf-token["\']\s+content=["\']([^"\']+)["\']',
+        r'<meta\s+content=["\']([^"\']+)["\']\s+name=["\']csrf-token["\']',
+        r'authenticity_token["\']\s+value=["\']([^"\']+)["\']',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, html)
+        if match:
+            return match.group(1)
+    raise ValueError(
+        "CSRF-Token nicht gefunden. HTML-Snippet:\n"
+        + html[:500]
+    )
 
 
 def create_session() -> requests.Session:
@@ -88,7 +103,7 @@ def create_session() -> requests.Session:
     resp = session.get(f"{BASE_URL}/login", timeout=15)
     resp.raise_for_status()
     csrf = _get_csrf_token(resp.text)
-    log.debug("CSRF-Token: %s…", csrf[:12])
+    log.info("CSRF-Token gefunden: %s…", csrf[:16])
 
     # 2. Login POST
     log.info("Logge ein als %s …", EMAIL)
@@ -112,13 +127,13 @@ def create_session() -> requests.Session:
         timeout=15,
     )
 
-    # Login-Check: nach /dashboard oder /athlete/dashboard weitergeleitet?
+    # Login-Check: nach /dashboard weitergeleitet?
     if "/login" in login_resp.url or "/session" in login_resp.url:
         raise PermissionError(
-            "Login fehlgeschlagen. Email/Passwort prüfen oder Strava hat 2FA aktiviert."
+            "Login fehlgeschlagen. Email/Passwort prüfen oder 2FA aktiv."
         )
 
-    log.info("✅ Eingeloggt. Redirect: %s", login_resp.url)
+    log.info("✅ Eingeloggt. URL: %s", login_resp.url)
     return session
 
 
@@ -129,65 +144,69 @@ def get_feed(session: requests.Session) -> list:
     resp = session.get(
         f"{BASE_URL}/dashboard/feed",
         params={
-            "feed_type": "following",
+            "feed_type":   "following",
             "num_entries": FEED_LIMIT,
         },
         headers={
             **HEADERS,
-            "Accept": "application/json, text/javascript, */*; q=0.01",
-            "X-Requested-With": "XMLHttpRequest",
-            "Referer": f"{BASE_URL}/dashboard",
+            "Accept":             "application/json, text/javascript, */*; q=0.01",
+            "X-Requested-With":   "XMLHttpRequest",
+            "Referer":            f"{BASE_URL}/dashboard",
         },
         timeout=15,
     )
 
     if not resp.ok:
-        raise RuntimeError(f"Feed-Abruf fehlgeschlagen: {resp.status_code} {resp.text[:200]}")
+        raise RuntimeError(
+            f"Feed-Abruf fehlgeschlagen: {resp.status_code}\n{resp.text[:300]}"
+        )
 
     try:
         data = resp.json()
     except json.JSONDecodeError:
-        raise RuntimeError(f"Feed ist kein JSON. Strava-Struktur geändert?\n{resp.text[:300]}")
+        raise RuntimeError(
+            f"Feed ist kein JSON (Strava-Struktur geändert?):\n{resp.text[:400]}"
+        )
 
-    # Strava gibt entweder eine Liste oder ein Dict mit 'entries'
+    log.debug("Feed-Rohdaten Typ: %s, Keys: %s",
+              type(data).__name__,
+              list(data.keys()) if isinstance(data, dict) else "(Liste)")
+
     if isinstance(data, list):
         return data
-    return data.get("entries", data.get("feed", []))
+    return data.get("entries", data.get("feed", data.get("activities", [])))
 
 
-# ── Kudos geben ────────────────────────────────────────────────────────────────
+# ── Kudos geben ───────────────────────────────────────────────────────────────
 def _extract_activity_id(entry: dict) -> int | None:
-    """Extrahiert die Activity-ID aus einem Feed-Eintrag (verschiedene Formate)."""
-    # Format 1: direktes activity-Dict
-    act_id = entry.get("activity_id") or entry.get("id")
-    if act_id:
-        return int(act_id)
-    # Format 2: verschachtelt unter 'activity'
+    """Extrahiert die Activity-ID aus einem Feed-Eintrag."""
+    for key in ("activity_id", "id", "object_id"):
+        val = entry.get(key)
+        if val:
+            return int(val)
     activity = entry.get("activity", {})
-    act_id = activity.get("id")
-    if act_id:
-        return int(act_id)
-    # Format 3: 'entity' / 'object_id'
-    if entry.get("type") == "Activity":
-        return entry.get("object_id")
+    val = activity.get("id")
+    if val:
+        return int(val)
     return None
 
 
 def _already_kudosed(entry: dict) -> bool:
-    """Prüft ob bereits Kudos gegeben wurden."""
     activity = entry.get("activity", entry)
-    return (
-        activity.get("kudosed", False)
-        or activity.get("has_kudoed", False)
-        or entry.get("kudosed", False)
+    return bool(
+        activity.get("kudosed")
+        or activity.get("has_kudoed")
+        or entry.get("kudosed")
     )
 
 
 def give_kudos_to_feed(session: requests.Session, entries: list) -> tuple[int, int]:
-    """Gibt Kudos auf alle nicht-bekudosten Activities. Gibt (gegeben, geskippt) zurück."""
-    # CSRF-Token aus Dashboard holen (benötigt für POST)
+    """Gibt Kudos auf alle nicht-bekudosten Activities."""
+    # Frisches CSRF-Token vom Dashboard holen
+    log.info("Hole CSRF-Token vom Dashboard …")
     dash_resp = session.get(f"{BASE_URL}/dashboard", timeout=15)
     csrf = _get_csrf_token(dash_resp.text)
+    log.info("Dashboard CSRF: %s…", csrf[:16])
 
     given   = 0
     skipped = 0
@@ -195,14 +214,12 @@ def give_kudos_to_feed(session: requests.Session, entries: list) -> tuple[int, i
     for entry in entries:
         act_id = _extract_activity_id(entry)
         if not act_id:
-            log.debug("Kein Activity-ID in Eintrag: %s", str(entry)[:80])
+            log.debug("Kein Activity-ID: %s", str(entry)[:100])
             continue
 
-        athlete = (
-            entry.get("activity", entry)
-            .get("athlete", {}).get("display_name", "?")
-        )
-        name = entry.get("activity", entry).get("name", "Activity")
+        activity = entry.get("activity", entry)
+        athlete  = activity.get("athlete", {}).get("display_name", "?")
+        name     = activity.get("name", "Activity")
 
         if _already_kudosed(entry):
             log.debug("Bereits bekudost: %s – %s", athlete, name)
@@ -213,10 +230,10 @@ def give_kudos_to_feed(session: requests.Session, entries: list) -> tuple[int, i
             f"{BASE_URL}/activities/{act_id}/kudos",
             headers={
                 **HEADERS,
-                "X-CSRF-Token":    csrf,
-                "X-Requested-With": "XMLHttpRequest",
-                "Referer":          f"{BASE_URL}/dashboard",
-                "Accept":           "application/json, text/javascript, */*; q=0.01",
+                "X-CSRF-Token":      csrf,
+                "X-Requested-With":  "XMLHttpRequest",
+                "Referer":           f"{BASE_URL}/dashboard",
+                "Accept":            "application/json, text/javascript, */*; q=0.01",
             },
             timeout=10,
         )
@@ -229,15 +246,15 @@ def give_kudos_to_feed(session: requests.Session, entries: list) -> tuple[int, i
             log.warning("⚠️  Rate Limit – stoppe.")
             break
         elif resp.status_code == 401:
-            log.warning("🔒 Nicht authorisiert für Activity %s (privat?)", act_id)
+            log.warning("🔒 Privat/nicht authorisiert: Activity %s", act_id)
         else:
             log.warning("❌ Fehler %s bei Activity %s: %s",
-                        resp.status_code, act_id, resp.text[:100])
+                        resp.status_code, act_id, resp.text[:120])
 
     return given, skipped
 
 
-# ── Hauptprogramm ──────────────────────────────────────────────────────────────
+# ── Einstieg ──────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     try:
         session = create_session()
@@ -245,16 +262,15 @@ if __name__ == "__main__":
         log.info("%d Einträge im Feed.", len(entries))
 
         if not entries:
-            log.warning("Feed ist leer – möglicherweise hat Strava die Feed-Struktur geändert.")
-            log.warning("Aktiviere Debug-Logging mit LOG_LEVEL=DEBUG für mehr Details.")
+            log.warning("Feed leer – Strava-Struktur geändert? Bitte melden.")
             sys.exit(0)
 
         given, skipped = give_kudos_to_feed(session, entries)
-        log.info("Fertig. ✅ Kudos gegeben: %d | ⏭ Skipped: %d", given, skipped)
+        log.info("Fertig. ✅ Kudos: %d | ⏭ Skipped: %d", given, skipped)
 
     except PermissionError as e:
-        log.error("🔒 Login fehlgeschlagen: %s", e)
+        log.error("🔒 %s", e)
         sys.exit(1)
     except Exception as e:
-        log.error("❌ Unerwarteter Fehler: %s", e)
+        log.error("❌ %s", e)
         raise

@@ -1,0 +1,6 @@
+.env
+session_state.json
+kudosed.json
+kudos.log
+__pycache__/
+*.pyc

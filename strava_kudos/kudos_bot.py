@@ -38,6 +38,7 @@ BASE_URL   = "https://www.strava.com"
 FEED_LIMIT = 30
 DELAY      = 2.0
 
+# Browser-ähnliche Basis-Header (kein X-Requested-With – Strava setzt das nicht)
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -58,45 +59,25 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-# ── CSRF ─────────────────────────────────────────────────────────────────────
 def _get_csrf_token(html: str) -> str:
     for pattern in [
         r'<meta\s+name=["\']csrf["\']\s+content=["\']([^"\']+)["\']',
         r'<meta\s+content=["\']([^"\']+)["\']\s+name=["\']csrf["\']',
         r'<meta\s+name=["\']csrf-token["\']\s+content=["\']([^"\']+)["\']',
         r'<meta\s+content=["\']([^"\']+)["\']\s+name=["\']csrf-token["\']',
-        r'authenticity_token[^>]+value=["\']([^"\']+)["\']',
     ]:
         m = re.search(pattern, html)
         if m:
             return m.group(1)
-    raise ValueError("CSRF-Token nicht gefunden.\nHTML-Anfang:\n" + html[:200])
+    raise ValueError("CSRF-Token nicht gefunden.")
 
 
-# ── Login ──────────────────────────────────────────────────────────────────────
-def _post_session(session, data, csrf):
+def _multipart(fields: dict) -> dict:
     """
-    POST /session ohne automatische Redirects.
-    Gibt (status_code, headers, body_text) zurück.
-    Strava gibt bei Erfolg manchmal 302 (Location-Header)
-    oder 200 mit JSON {redirect_url: '...'} zurück.
+    Baut ein multipart/form-data files-Dict für requests.
+    requests setzt Content-Type automatisch mit boundary.
     """
-    resp = session.post(
-        f"{BASE_URL}/session",
-        data=data,
-        headers={
-            **HEADERS,
-            "Accept":             "application/json, text/html, */*; q=0.01",
-            "Content-Type":      "application/x-www-form-urlencoded; charset=UTF-8",
-            "X-Requested-With":  "XMLHttpRequest",
-            "Referer":           f"{BASE_URL}/login",
-            "Origin":            BASE_URL,
-            "X-CSRF-Token":      csrf,
-        },
-        allow_redirects=False,
-        timeout=15,
-    )
-    return resp
+    return {k: (None, str(v)) for k, v in fields.items()}
 
 
 def create_session() -> requests.Session:
@@ -106,7 +87,7 @@ def create_session() -> requests.Session:
     session = requests.Session()
     session.headers.update(HEADERS)
 
-    # 1. Login-Seite → CSRF
+    # 1. Login-Seite → CSRF + Session-Cookie
     log.info("Lade Login-Seite …")
     page = session.get(
         f"{BASE_URL}/login",
@@ -117,27 +98,43 @@ def create_session() -> requests.Session:
     csrf = _get_csrf_token(page.text)
     log.info("CSRF: %s…", csrf[:16])
 
-    # 2. Step 1: E-Mail einreichen
-    log.info("Step 1: Email …")
-    r1 = _post_session(session, {
-        "authenticity_token": csrf,
-        "email":              EMAIL,
-        "logging_in":         "true",
-        "auth_version":       "v2",
-    }, csrf)
+    # Gemeinsame POST-Header (wie Strava's axios-Instanz)
+    api_headers = {
+        **HEADERS,
+        "Accept":        "application/json",
+        "accept":        "application/json",
+        "x-csrf-token":  csrf,          # lowercase! (Strava-Standard)
+        "Referer":       f"{BASE_URL}/login",
+        "Origin":        BASE_URL,
+    }
+
+    # 2. Step 1: E-Mail einreichen → otp_state holen
+    log.info("Step 1: Email einreichen …")
+    r1 = session.post(
+        f"{BASE_URL}/session",
+        files=_multipart({
+            "authenticity_token": csrf,
+            "email":              EMAIL,
+            "logging_in":         "true",
+            "auth_version":       "v2",
+        }),
+        headers=api_headers,
+        allow_redirects=False,
+        timeout=15,
+    )
     log.info("Step 1 → %s", r1.status_code)
     log.debug("Step 1 Body: %s", r1.text[:300])
 
     otp_state = None
     try:
         d1 = r1.json()
-        otp_state = d1.get("otp_state")
         log.info("Step 1 JSON: %s", d1)
+        otp_state = d1.get("otp_state")
     except Exception:
         pass
 
     # 3. Step 2: Passwort einreichen
-    log.info("Step 2: Passwort …")
+    log.info("Step 2: Passwort einreichen …")
     payload2 = {
         "authenticity_token": csrf,
         "password":           PASSWORD,
@@ -147,38 +144,39 @@ def create_session() -> requests.Session:
     if otp_state:
         payload2["otp_state"] = otp_state
 
-    r2 = _post_session(session, payload2, csrf)
+    r2 = session.post(
+        f"{BASE_URL}/session",
+        files=_multipart(payload2),
+        headers=api_headers,
+        allow_redirects=False,
+        timeout=15,
+    )
     log.info("Step 2 → %s", r2.status_code)
-    log.debug("Step 2 Body: %s", r2.text[:400])
     log.debug("Step 2 Headers: %s", dict(r2.headers))
+    log.debug("Step 2 Body: %s", r2.text[:400])
 
     # 4. Redirect auflösen
     redirect_url = None
 
-    # Fall A: HTTP 302
     if r2.status_code in (301, 302, 303):
-        redirect_url = r2.headers.get("Location", "/dashboard")
-        if redirect_url.startswith("/"):
-            redirect_url = BASE_URL + redirect_url
-        log.info("302 Redirect → %s", redirect_url)
-
-    # Fall B: JSON mit redirect_url
+        loc = r2.headers.get("Location", "/dashboard")
+        redirect_url = loc if loc.startswith("http") else BASE_URL + loc
+        log.info("HTTP-Redirect → %s", redirect_url)
     elif r2.status_code == 200:
         try:
             d2 = r2.json()
-            log.info("Step 2 JSON: %s", d2)
-            redirect_url = d2.get("redirect_url") or d2.get("redirectUrl")
-            if redirect_url and redirect_url.startswith("/"):
-                redirect_url = BASE_URL + redirect_url
+            log.info("Step 2 JSON: %s", str(d2)[:200])
+            loc = d2.get("redirect_url") or d2.get("redirectUrl") or d2.get("location")
+            if loc:
+                redirect_url = loc if loc.startswith("http") else BASE_URL + loc
         except Exception:
             pass
 
     if not redirect_url:
-        # Fallback: Dashboard direkt ansteuern
         redirect_url = f"{BASE_URL}/dashboard"
-        log.warning("Kein Redirect gefunden, versuche %s direkt.", redirect_url)
+        log.warning("Kein Redirect – Fallback: %s", redirect_url)
 
-    # 5. Redirect GET → Session-Cookie setzen lassen
+    # 5. Redirect GET → Session-Cookie endgültig setzen
     final = session.get(
         redirect_url,
         headers={**HEADERS, "Accept": "text/html,*/*", "Referer": f"{BASE_URL}/login"},
@@ -188,16 +186,14 @@ def create_session() -> requests.Session:
     log.info("Final URL: %s | Status: %s", final.url, final.status_code)
 
     if "/login" in final.url:
-        log.error("Login-HTML-Snippet: %s", final.text[final.text.find('<title'):final.text.find('<title')+80])
         raise PermissionError(
-            f"Login fehlgeschlagen – Email/Passwort prüfen oder 2FA aktiv.\nFinal URL: {final.url}"
+            f"Login fehlgeschlagen – Email/Passwort prüfen.\nFinal URL: {final.url}"
         )
 
     log.info("✅ Eingeloggt! URL: %s", final.url)
     return session
 
 
-# ── Feed ───────────────────────────────────────────────────────────────────────
 def get_feed(session: requests.Session) -> list:
     log.info("Lade Friend Feed …")
     resp = session.get(
@@ -211,20 +207,19 @@ def get_feed(session: requests.Session) -> list:
         },
         timeout=15,
     )
-    log.info("Feed Status: %s | Content-Type: %s", resp.status_code,
+    log.info("Feed Status: %s | CT: %s", resp.status_code,
              resp.headers.get("Content-Type", "?"))
     if not resp.ok:
-        raise RuntimeError(f"Feed fehlgeschlagen: {resp.status_code}\n{resp.text[:200]}")
+        raise RuntimeError(f"Feed {resp.status_code}: {resp.text[:200]}")
     try:
         data = resp.json()
     except json.JSONDecodeError:
-        raise RuntimeError(f"Feed kein JSON (nicht eingeloggt?):\n{resp.text[:400]}")
+        raise RuntimeError(f"Feed kein JSON:\n{resp.text[:400]}")
     if isinstance(data, list):
         return data
     return data.get("entries", data.get("feed", data.get("activities", [])))
 
 
-# ── Kudos ───────────────────────────────────────────────────────────────────────
 def _extract_activity_id(entry):
     for key in ("activity_id", "id", "object_id"):
         v = entry.get(key)
@@ -261,7 +256,7 @@ def give_kudos_to_feed(session, entries) -> tuple:
             f"{BASE_URL}/activities/{act_id}/kudos",
             headers={
                 **HEADERS,
-                "X-CSRF-Token":     csrf,
+                "x-csrf-token":     csrf,
                 "X-Requested-With": "XMLHttpRequest",
                 "Referer":          f"{BASE_URL}/dashboard",
                 "Accept":           "application/json, */*",
@@ -282,17 +277,16 @@ def give_kudos_to_feed(session, entries) -> tuple:
     return given, skipped
 
 
-# ── Main ───────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     try:
         session = create_session()
         entries = get_feed(session)
-        log.info("%d Einträge im Feed.", len(entries))
+        log.info("%d Einträge.", len(entries))
         if not entries:
             log.warning("Feed leer.")
             sys.exit(0)
         given, skipped = give_kudos_to_feed(session, entries)
-        log.info("Fertig. ✅ Kudos: %d | ⏭ Skipped: %d", given, skipped)
+        log.info("Fertig. ✅ %d Kudos | ⏭ %d Skipped", given, skipped)
     except PermissionError as e:
         log.error("🔒 %s", e)
         sys.exit(1)

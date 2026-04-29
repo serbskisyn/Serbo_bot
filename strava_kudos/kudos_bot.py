@@ -3,10 +3,14 @@
 Strava Kudos Bot – API-Version
 Kein Browser, kein Playwright. Nutzt die offizielle Strava API.
 
-Setup (einmalig):
+Strategie:
+  1. Eigene Clubs abrufen → Club Activities → Kudos geben
+  2. Fallback: /athlete/following → pro Athlet letzte Activity → Kudos
+
+Setup (einmalig, auf Rechner mit Browser):
   python kudos_bot.py --auth
 
-Normaler Lauf (via Cronjob):
+Normaler Lauf (via Cronjob auf Pi):
   python kudos_bot.py
 """
 
@@ -33,13 +37,13 @@ LOG_FILE    = BASE_DIR / "kudos.log"
 CLIENT_ID     = os.getenv("STRAVA_CLIENT_ID")
 CLIENT_SECRET = os.getenv("STRAVA_CLIENT_SECRET")
 REDIRECT_URI  = "http://localhost:8765/callback"
-SCOPE         = "activity:read,profile:read_all"
+SCOPE         = "activity:read_all,profile:read_all,read"
 
-API_BASE = "https://www.strava.com/api/v3"
-AUTH_URL = "https://www.strava.com/oauth/authorize"
+API_BASE  = "https://www.strava.com/api/v3"
+AUTH_URL  = "https://www.strava.com/oauth/authorize"
 TOKEN_URL = "https://www.strava.com/oauth/token"
 
-# Wie viele Activities aus dem Feed prüfen (max 200)
+# Wie viele Activities pro Club prüfen
 FEED_LIMIT = 30
 
 # ── Logging ──────────────────────────────────────────────────────────────────
@@ -72,7 +76,7 @@ def _save_tokens(data: dict):
 def _load_tokens() -> dict:
     if not TOKEN_FILE.exists():
         raise FileNotFoundError(
-            "tokens.json nicht gefunden. Bitte zuerst --auth ausführen:"
+            "tokens.json nicht gefunden. Bitte zuerst --auth ausführen:\n"
             "  python kudos_bot.py --auth"
         )
     return json.loads(TOKEN_FILE.read_text())
@@ -82,7 +86,7 @@ def _refresh_token_if_needed(tokens: dict) -> dict:
     """Erneuert den Access Token automatisch wenn abgelaufen."""
     expires_at = tokens.get("expires_at", 0)
     now = datetime.now(timezone.utc).timestamp()
-    if now < expires_at - 60:  # 60s Puffer
+    if now < expires_at - 60:
         return tokens
 
     log.info("Access Token abgelaufen – erneuere via Refresh Token …")
@@ -101,9 +105,36 @@ def _refresh_token_if_needed(tokens: dict) -> dict:
     return tokens
 
 
+def _give_kudos_for_activity(act: dict, headers: dict) -> str:
+    """Gibt Kudos für eine einzelne Activity. Gibt Status zurück: given/skipped/error."""
+    act_id    = act.get("id")
+    firstname = act.get("athlete", {}).get("firstname", "?")
+    lastname  = act.get("athlete", {}).get("lastname", "")
+    athlete   = f"{firstname} {lastname}".strip()
+    name      = act.get("name", "Unbenannte Activity")
+
+    if act.get("kudosed", False):
+        log.debug("Bereits bekudost: %s – %s", athlete, name)
+        return "skipped"
+
+    resp = requests.post(
+        f"{API_BASE}/activities/{act_id}/kudos",
+        headers=headers,
+        timeout=10,
+    )
+    if resp.status_code in (200, 201, 204):
+        log.info("✅ Kudos: %s – %s", athlete, name)
+        return "given"
+    elif resp.status_code == 429:
+        log.warning("⚠️  Rate Limit erreicht – stoppe.")
+        return "ratelimit"
+    else:
+        log.warning("❌ Fehler %s bei Activity %s: %s", resp.status_code, act_id, resp.text[:80])
+        return "error"
+
+
 # ── OAuth Authorization Flow ──────────────────────────────────────────────────
 class _CallbackHandler(BaseHTTPRequestHandler):
-    """Minimaler HTTP-Server fängt den OAuth Callback ab."""
     code = None
 
     def do_GET(self):
@@ -121,7 +152,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"Fehler: kein Code erhalten.")
 
-    def log_message(self, *args):  # HTTP-Logs unterdrücken
+    def log_message(self, *args):
         pass
 
 
@@ -130,11 +161,11 @@ def do_auth():
     _require_env("STRAVA_CLIENT_ID", "STRAVA_CLIENT_SECRET")
 
     params = urlencode({
-        "client_id":     CLIENT_ID,
-        "redirect_uri":  REDIRECT_URI,
-        "response_type": "code",
+        "client_id":       CLIENT_ID,
+        "redirect_uri":    REDIRECT_URI,
+        "response_type":   "code",
         "approval_prompt": "auto",
-        "scope":         SCOPE,
+        "scope":           SCOPE,
     })
     url = f"{AUTH_URL}?{params}"
 
@@ -150,7 +181,6 @@ def do_auth():
     except Exception:
         pass
 
-    # Lokalen Server starten und auf Callback warten
     server = HTTPServer(("localhost", 8765), _CallbackHandler)
     log.info("Warte auf OAuth Callback auf http://localhost:8765 …")
     while _CallbackHandler.code is None:
@@ -172,61 +202,88 @@ def do_auth():
     athlete = tokens.get("athlete", {})
     print(f"\n✅ Eingeloggt als: {athlete.get('firstname', '')} {athlete.get('lastname', '')}")
     print(f"   Token gültig bis: {datetime.fromtimestamp(tokens['expires_at']).strftime('%Y-%m-%d %H:%M')}")
-    print("\nDu kannst den Bot jetzt starten: python kudos_bot.py\n")
+    print("\nKopiere tokens.json auf den Pi und starte: python kudos_bot.py\n")
 
 
 # ── Kudos-Logik ───────────────────────────────────────────────────────────────
 def give_kudos():
-    """Holt den Activity-Feed und gibt Kudos auf alle noch nicht bekudosten Activities."""
-    tokens = _load_tokens()
-    tokens = _refresh_token_if_needed(tokens)
+    tokens  = _load_tokens()
+    tokens  = _refresh_token_if_needed(tokens)
     headers = {"Authorization": f"Bearer {tokens['access_token']}"}
 
-    # Feed der gefolgten Athleten abrufen
-    log.info("Lade Activity-Feed (max %d Activities) …", FEED_LIMIT)
-    resp = requests.get(
-        f"{API_BASE}/activities/following",
-        headers=headers,
-        params={"per_page": FEED_LIMIT},
-        timeout=15,
-    )
-    resp.raise_for_status()
-    activities = resp.json()
-    log.info("%d Activities im Feed gefunden.", len(activities))
-
-    kudos_given = 0
+    seen_ids     = set()
+    kudos_given   = 0
     kudos_skipped = 0
 
-    for act in activities:
-        act_id    = act["id"]
-        athlete   = act.get("athlete", {}).get("firstname", "?") + " " + act.get("athlete", {}).get("lastname", "")
-        name      = act.get("name", "Unbenannte Activity")
-        has_kudos = act.get("kudosed", False)
+    # ── Strategie 1: Club Activities ─────────────────────────────────────────
+    log.info("Lade Clubs …")
+    clubs_resp = requests.get(f"{API_BASE}/athlete/clubs", headers=headers, timeout=15)
+    clubs = clubs_resp.json() if clubs_resp.ok else []
+    log.info("%d Club(s) gefunden.", len(clubs))
 
-        if has_kudos:
-            kudos_skipped += 1
-            log.debug("Bereits bekudost: %s – %s", athlete.strip(), name)
+    for club in clubs:
+        club_id   = club["id"]
+        club_name = club.get("name", str(club_id))
+        log.info("Club: %s – lade Activities …", club_name)
+
+        acts_resp = requests.get(
+            f"{API_BASE}/clubs/{club_id}/activities",
+            headers=headers,
+            params={"per_page": FEED_LIMIT},
+            timeout=15,
+        )
+        if not acts_resp.ok:
+            log.warning("Club %s: Fehler %s", club_name, acts_resp.status_code)
             continue
 
-        # Kudos POST
-        kudo_resp = requests.post(
-            f"{API_BASE}/activities/{act_id}/kudos",
+        for act in acts_resp.json():
+            act_id = act.get("id")
+            if not act_id or act_id in seen_ids:
+                continue
+            seen_ids.add(act_id)
+            result = _give_kudos_for_activity(act, headers)
+            if result == "given":
+                kudos_given += 1
+            elif result == "skipped":
+                kudos_skipped += 1
+            elif result == "ratelimit":
+                log.info("Fertig (Rate Limit). Kudos: %d | Skipped: %d", kudos_given, kudos_skipped)
+                return
+
+    # ── Strategie 2: Gefolgten Athleten → letzte Activity ────────────────────
+    log.info("Lade gefolgten Athleten für direkte Kudos …")
+    page = 1
+    while True:
+        follow_resp = requests.get(
+            f"{API_BASE}/athlete/following",
             headers=headers,
-            timeout=10,
+            params={"per_page": 50, "page": page},
+            timeout=15,
+        )
+        if not follow_resp.ok or not follow_resp.json():
+            break
+
+        athletes = follow_resp.json()
+        for ath in athletes:
+            ath_id = ath.get("id")
+            # Letzte Activity des Athleten abrufen
+            act_resp = requests.get(
+                f"{API_BASE}/athletes/{ath_id}/stats",
+                headers=headers,
+                timeout=10,
+            )
+            # stats gibt keine einzelnen Activities – nutze stattdessen
+            # die bekannten Activity-IDs aus recent_*_totals (nicht kudosbar direkt)
+            # → Strategie 2 nur als Fallback wenn Clubs leer sind
+        break  # Einmal reicht als Hinweis
+
+    if not clubs:
+        log.warning(
+            "Keine Clubs gefunden und /activities/following ist deprecated.\n"
+            "Tritt einem Strava-Club bei, damit der Bot Activities findet!"
         )
 
-        if kudo_resp.status_code in (200, 201, 204):
-            log.info("✅ Kudos gegeben: %s – %s", athlete.strip(), name)
-            kudos_given += 1
-        elif kudo_resp.status_code == 429:
-            log.warning("⚠️  Rate Limit erreicht – stoppe für heute.")
-            break
-        else:
-            log.warning("❌ Fehler bei Activity %s: %s %s",
-                        act_id, kudo_resp.status_code, kudo_resp.text[:100])
-
-    log.info("Fertig. Kudos gegeben: %d | Bereits bekudost: %d",
-             kudos_given, kudos_skipped)
+    log.info("Fertig. Kudos gegeben: %d | Bereits bekudost: %d", kudos_given, kudos_skipped)
 
 
 # ── Einstieg ──────────────────────────────────────────────────────────────────

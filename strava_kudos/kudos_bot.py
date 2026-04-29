@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """
-Strava Kudos Bot – Web-Session Version
-Login via HTTP (2-Step: Email → Passwort, auth_version=v2)
+Strava Kudos Bot – Web-Session via gespeichertem Browser-Cookie
 
-Setup:
-  cp .env.example .env
-  nano .env  # STRAVA_EMAIL + STRAVA_PASSWORD eintragen
-
-Lauf:
-  python kudos_bot.py
+Setup (einmalig, wenn Session abläuft):
+  1. Im Browser bei Strava einloggen
+  2. DevTools öffnen (F12) → Application → Cookies → https://www.strava.com
+  3. Wert von '_strava4_session' kopieren
+  4. python kudos_bot.py --set-session WERT_HIER_EINFÜGEN
 
 Cronjob (alle 30 Min):
   */30 * * * * cd /home/pi/Serbo_bot/strava_kudos && \
@@ -28,17 +26,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-BASE_DIR = Path(__file__).parent
-LOG_FILE  = BASE_DIR / "kudos.log"
-
-EMAIL    = os.getenv("STRAVA_EMAIL")
-PASSWORD = os.getenv("STRAVA_PASSWORD")
+BASE_DIR      = Path(__file__).parent
+LOG_FILE      = BASE_DIR / "kudos.log"
+SESSION_FILE  = BASE_DIR / "session.json"
 
 BASE_URL   = "https://www.strava.com"
 FEED_LIMIT = 30
 DELAY      = 2.0
 
-# Browser-ähnliche Basis-Header (kein X-Requested-With – Strava setzt das nicht)
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -59,139 +54,62 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-def _get_csrf_token(html: str) -> str:
-    for pattern in [
-        r'<meta\s+name=["\']csrf["\']\s+content=["\']([^"\']+)["\']',
-        r'<meta\s+content=["\']([^"\']+)["\']\s+name=["\']csrf["\']',
+# ---------------------------------------------------------------------------
+# Session management
+# ---------------------------------------------------------------------------
+
+def load_session_cookie() -> str:
+    """Load _strava4_session cookie from session.json or .env."""
+    if SESSION_FILE.exists():
+        data = json.loads(SESSION_FILE.read_text())
+        cookie = data.get("_strava4_session", "")
+        if cookie:
+            return cookie
+    cookie = os.getenv("STRAVA_SESSION_COOKIE", "")
+    if cookie:
+        return cookie
+    return ""
+
+
+def save_session_cookie(value: str):
+    SESSION_FILE.write_text(json.dumps({"_strava4_session": value}, indent=2))
+    log.info("Session-Cookie gespeichert in %s", SESSION_FILE)
+
+
+def build_session(cookie_value: str) -> requests.Session:
+    session = requests.Session()
+    session.headers.update(HEADERS)
+    session.cookies.set("_strava4_session", cookie_value, domain="www.strava.com")
+    return session
+
+
+# ---------------------------------------------------------------------------
+# CSRF
+# ---------------------------------------------------------------------------
+
+def _get_csrf(html: str) -> str:
+    for pat in [
         r'<meta\s+name=["\']csrf-token["\']\s+content=["\']([^"\']+)["\']',
         r'<meta\s+content=["\']([^"\']+)["\']\s+name=["\']csrf-token["\']',
+        r'<meta\s+name=["\']csrf["\']\s+content=["\']([^"\']+)["\']',
+        r'<meta\s+content=["\']([^"\']+)["\']\s+name=["\']csrf["\']',
     ]:
-        m = re.search(pattern, html)
+        m = re.search(pat, html)
         if m:
             return m.group(1)
     raise ValueError("CSRF-Token nicht gefunden.")
 
 
-def _multipart(fields: dict) -> dict:
-    """
-    Baut ein multipart/form-data files-Dict für requests.
-    requests setzt Content-Type automatisch mit boundary.
-    """
-    return {k: (None, str(v)) for k, v in fields.items()}
+# ---------------------------------------------------------------------------
+# Feed
+# ---------------------------------------------------------------------------
 
-
-def create_session() -> requests.Session:
-    if not EMAIL or not PASSWORD:
-        raise EnvironmentError("STRAVA_EMAIL oder STRAVA_PASSWORD fehlt.")
-
-    session = requests.Session()
-    session.headers.update(HEADERS)
-
-    # 1. Login-Seite → CSRF + Session-Cookie
-    log.info("Lade Login-Seite …")
-    page = session.get(
-        f"{BASE_URL}/login",
-        headers={**HEADERS, "Accept": "text/html,*/*"},
-        timeout=15,
-    )
-    page.raise_for_status()
-    csrf = _get_csrf_token(page.text)
-    log.info("CSRF: %s…", csrf[:16])
-
-    # Gemeinsame POST-Header (wie Strava's axios-Instanz)
-    api_headers = {
-        **HEADERS,
-        "Accept":        "application/json",
-        "accept":        "application/json",
-        "x-csrf-token":  csrf,          # lowercase! (Strava-Standard)
-        "Referer":       f"{BASE_URL}/login",
-        "Origin":        BASE_URL,
-    }
-
-    # 2. Step 1: E-Mail einreichen → otp_state holen
-    log.info("Step 1: Email einreichen …")
-    r1 = session.post(
-        f"{BASE_URL}/session",
-        files=_multipart({
-            "authenticity_token": csrf,
-            "email":              EMAIL,
-            "logging_in":         "true",
-            "auth_version":       "v2",
-        }),
-        headers=api_headers,
-        allow_redirects=False,
-        timeout=15,
-    )
-    log.info("Step 1 → %s", r1.status_code)
-    log.debug("Step 1 Body: %s", r1.text[:300])
-
-    otp_state = None
-    try:
-        d1 = r1.json()
-        log.info("Step 1 JSON: %s", d1)
-        otp_state = d1.get("otp_state")
-    except Exception:
-        pass
-
-    # 3. Step 2: Passwort einreichen
-    log.info("Step 2: Passwort einreichen …")
-    payload2 = {
-        "authenticity_token": csrf,
-        "password":           PASSWORD,
-        "remember_me":        "on",
-        "auth_version":       "v2",
-    }
-    if otp_state:
-        payload2["otp_state"] = otp_state
-
-    r2 = session.post(
-        f"{BASE_URL}/session",
-        files=_multipart(payload2),
-        headers=api_headers,
-        allow_redirects=False,
-        timeout=15,
-    )
-    log.info("Step 2 → %s", r2.status_code)
-    log.debug("Step 2 Headers: %s", dict(r2.headers))
-    log.debug("Step 2 Body: %s", r2.text[:400])
-
-    # 4. Redirect auflösen
-    redirect_url = None
-
-    if r2.status_code in (301, 302, 303):
-        loc = r2.headers.get("Location", "/dashboard")
-        redirect_url = loc if loc.startswith("http") else BASE_URL + loc
-        log.info("HTTP-Redirect → %s", redirect_url)
-    elif r2.status_code == 200:
-        try:
-            d2 = r2.json()
-            log.info("Step 2 JSON: %s", str(d2)[:200])
-            loc = d2.get("redirect_url") or d2.get("redirectUrl") or d2.get("location")
-            if loc:
-                redirect_url = loc if loc.startswith("http") else BASE_URL + loc
-        except Exception:
-            pass
-
-    if not redirect_url:
-        redirect_url = f"{BASE_URL}/dashboard"
-        log.warning("Kein Redirect – Fallback: %s", redirect_url)
-
-    # 5. Redirect GET → Session-Cookie endgültig setzen
-    final = session.get(
-        redirect_url,
-        headers={**HEADERS, "Accept": "text/html,*/*", "Referer": f"{BASE_URL}/login"},
-        allow_redirects=True,
-        timeout=15,
-    )
-    log.info("Final URL: %s | Status: %s", final.url, final.status_code)
-
-    if "/login" in final.url:
-        raise PermissionError(
-            f"Login fehlgeschlagen – Email/Passwort prüfen.\nFinal URL: {final.url}"
-        )
-
-    log.info("✅ Eingeloggt! URL: %s", final.url)
-    return session
+def check_session(session: requests.Session) -> bool:
+    """Returns True if the session cookie is still valid."""
+    r = session.get(f"{BASE_URL}/dashboard",
+                    headers={**HEADERS, "Accept": "text/html,*/*"},
+                    allow_redirects=True, timeout=15)
+    return "/login" not in r.url
 
 
 def get_feed(session: requests.Session) -> list:
@@ -217,27 +135,46 @@ def get_feed(session: requests.Session) -> list:
         raise RuntimeError(f"Feed kein JSON:\n{resp.text[:400]}")
     if isinstance(data, list):
         return data
+    # New format: {"entries": [...], "pagination": {...}}
     return data.get("entries", data.get("feed", data.get("activities", [])))
 
 
-def _extract_activity_id(entry):
+# ---------------------------------------------------------------------------
+# Kudos
+# ---------------------------------------------------------------------------
+
+def _extract_activity_id(entry) -> int | None:
+    # New feed format: entry.activity.id
+    v = entry.get("activity", {}).get("id")
+    if v:
+        return int(v)
+    # Legacy fallback
     for key in ("activity_id", "id", "object_id"):
         v = entry.get(key)
         if v:
             return int(v)
-    v = entry.get("activity", {}).get("id")
-    return int(v) if v else None
+    return None
 
 
 def _already_kudosed(entry) -> bool:
     act = entry.get("activity", entry)
+    # New format: kudosAndComments.hasKudoed / canKudo
+    kac = act.get("kudosAndComments", {})
+    if kac.get("hasKudoed"):
+        return True
+    if not kac.get("canKudo") and kac:
+        return True  # own activity or unavailable
+    # Legacy fallback
     return bool(act.get("kudosed") or act.get("has_kudoed") or entry.get("kudosed"))
 
 
-def give_kudos_to_feed(session, entries) -> tuple:
+def give_kudos_to_feed(session: requests.Session, entries: list) -> tuple:
     log.info("Hole CSRF vom Dashboard …")
-    dash = session.get(f"{BASE_URL}/dashboard", timeout=15)
-    csrf = _get_csrf_token(dash.text)
+    dash = session.get(f"{BASE_URL}/dashboard",
+                       headers={**HEADERS, "Accept": "text/html,*/*"}, timeout=15)
+    if "/login" in dash.url:
+        raise PermissionError("Session abgelaufen – bitte --set-session ausführen.")
+    csrf = _get_csrf(dash.text)
 
     given = skipped = 0
     for entry in entries:
@@ -253,7 +190,7 @@ def give_kudos_to_feed(session, entries) -> tuple:
             continue
 
         r = session.post(
-            f"{BASE_URL}/activities/{act_id}/kudos",
+            f"{BASE_URL}/feed/activity/{act_id}/kudo",
             headers={
                 **HEADERS,
                 "x-csrf-token":     csrf,
@@ -277,16 +214,67 @@ def give_kudos_to_feed(session, entries) -> tuple:
     return given, skipped
 
 
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
 if __name__ == "__main__":
+    # --set-session <value>
+    if "--set-session" in sys.argv:
+        idx = sys.argv.index("--set-session")
+        if idx + 1 >= len(sys.argv):
+            print("Verwendung: python kudos_bot.py --set-session <_strava4_session-Cookie-Wert>")
+            print()
+            print("So findest du den Cookie:")
+            print("  1. Im Browser bei strava.com einloggen")
+            print("  2. F12 → Application → Cookies → https://www.strava.com")
+            print("  3. Wert von '_strava4_session' kopieren")
+            sys.exit(1)
+        cookie_val = sys.argv[idx + 1]
+        save_session_cookie(cookie_val)
+        # Verify
+        session = build_session(cookie_val)
+        if check_session(session):
+            log.info("✅ Session gültig!")
+        else:
+            log.error("❌ Session ungültig – Cookie nochmals prüfen.")
+            sys.exit(1)
+        sys.exit(0)
+
+    # Normal run
+    cookie = load_session_cookie()
+    if not cookie:
+        log.error(
+            "Kein Session-Cookie gefunden.\n"
+            "Einmalig ausführen:\n"
+            "  python kudos_bot.py --set-session <_strava4_session-Cookie-Wert>\n"
+            "\n"
+            "Den Cookie findest du im Browser:\n"
+            "  F12 → Application → Cookies → https://www.strava.com → _strava4_session"
+        )
+        sys.exit(1)
+
+    session = build_session(cookie)
+
     try:
-        session = create_session()
+        if not check_session(session):
+            log.error(
+                "🔒 Session abgelaufen.\n"
+                "Neu einloggen und Cookie aktualisieren:\n"
+                "  python kudos_bot.py --set-session <neuer_cookie_wert>"
+            )
+            sys.exit(1)
+
         entries = get_feed(session)
-        log.info("%d Einträge.", len(entries))
+        log.info("%d Einträge im Feed.", len(entries))
+
         if not entries:
-            log.warning("Feed leer.")
+            log.warning("Feed leer – evtl. gibt es nichts Neues.")
             sys.exit(0)
+
         given, skipped = give_kudos_to_feed(session, entries)
         log.info("Fertig. ✅ %d Kudos | ⏭ %d Skipped", given, skipped)
+
     except PermissionError as e:
         log.error("🔒 %s", e)
         sys.exit(1)

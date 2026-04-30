@@ -71,15 +71,15 @@ def send_telegram(text: str):
     try:
         r = requests.post(
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "HTML"},
+            json={"chat_id": TG_CHAT_ID, "text": text},
             timeout=10,
         )
         if r.ok:
-            log.info("📲 Telegram-Nachricht gesendet.")
+            log.info("Telegram-Nachricht gesendet.")
         else:
-            log.warning("⚠️ Telegram Fehler: %s", r.text[:200])
+            log.warning("Telegram Fehler: %s", r.text[:200])
     except Exception as e:
-        log.warning("⚠️ Telegram nicht erreichbar: %s", e)
+        log.warning("Telegram nicht erreichbar: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -113,10 +113,10 @@ def build_session(cookie_value: str) -> requests.Session:
 
 def _get_csrf(html: str) -> str:
     for pat in [
-        r'<meta\s+name=["\']csrf-token["\']\s+content=["\']([^"\']+)["\']',
-        r'<meta\s+content=["\']([^"\']+)["\']\s+name=["\']csrf-token["\']',
-        r'<meta\s+name=["\']csrf["\']\s+content=["\']([^"\']+)["\']',
-        r'<meta\s+content=["\']([^"\']+)["\']\s+name=["\']csrf["\']',
+        r'<meta\s+name=["\'"]csrf-token["\']\s+content=["\'"]([^"\']+)["\'"]',
+        r'<meta\s+content=["\'"]([^"\']+)["\']\s+name=["\'"]csrf-token["\'"]',
+        r'<meta\s+name=["\'"]csrf["\']\s+content=["\'"]([^"\']+)["\'"]',
+        r'<meta\s+content=["\'"]([^"\']+)["\']\s+name=["\'"]csrf["\'"]',
     ]:
         m = re.search(pat, html)
         if m:
@@ -136,7 +136,7 @@ def check_session(session: requests.Session) -> bool:
 
 
 def get_feed(session: requests.Session) -> list:
-    log.info("Lade Friend Feed …")
+    log.info("Lade Friend Feed ...")
     resp = session.get(
         f"{BASE_URL}/dashboard/feed",
         params={"feed_type": "following", "num_entries": FEED_LIMIT},
@@ -187,7 +187,7 @@ def _already_kudosed(entry) -> bool:
 
 
 def give_kudos_to_feed(session: requests.Session, entries: list) -> tuple:
-    log.info("Hole CSRF vom Dashboard …")
+    log.info("Hole CSRF vom Dashboard ...")
     dash = session.get(f"{BASE_URL}/dashboard",
                        headers={**HEADERS, "Accept": "text/html,*/*"}, timeout=15)
     if "/login" in dash.url:
@@ -221,18 +221,18 @@ def give_kudos_to_feed(session: requests.Session, entries: list) -> tuple:
             timeout=10,
         )
         if r.status_code in (200, 201, 204):
-            log.info("✅ Kudos: %s – %s", athlete, name)
-            kudosed_names.append(f"{athlete} – {name}")
+            log.info("Kudos: %s - %s", athlete, name)
+            kudosed_names.append(f"{athlete} - {name}")
             given += 1
             time.sleep(DELAY)
         elif r.status_code == 429:
-            log.warning("⚠️ Rate Limit – stoppe.")
+            log.warning("Rate Limit – stoppe.")
             break
         elif r.status_code == 401:
-            log.warning("🔒 Privat: %s", act_id)
+            log.warning("Privat: %s", act_id)
             skipped += 1
         else:
-            log.warning("❌ %s bei %s: %s", r.status_code, act_id, r.text[:100])
+            log.warning("%s bei %s: %s", r.status_code, act_id, r.text[:100])
             errors += 1
 
     return given, skipped, errors, kudosed_names
@@ -253,9 +253,9 @@ if __name__ == "__main__":
         save_session_cookie(cookie_val)
         session = build_session(cookie_val)
         if check_session(session):
-            log.info("✅ Session gültig!")
+            log.info("Session gueltig!")
         else:
-            log.error("❌ Session ungültig – Cookie nochmals prüfen.")
+            log.error("Session ungueltig – Cookie nochmals pruefen.")
             sys.exit(1)
         sys.exit(0)
 
@@ -263,12 +263,12 @@ if __name__ == "__main__":
     cookie = load_session_cookie()
     if not cookie:
         msg = (
-            "❌ Kein Session-Cookie gefunden.\n"
-            "Einmalig ausführen:\n"
+            "Kein Session-Cookie gefunden.\n"
+            "Einmalig ausfuehren:\n"
             "  python kudos_bot.py --set-session <_strava4_session-Cookie-Wert>"
         )
         log.error(msg)
-        send_telegram(f"🔒 <b>Strava Kudos Bot</b>\n{msg}")
+        send_telegram(f"Strava Kudos Bot\n\n{msg}")
         sys.exit(1)
 
     session = build_session(cookie)
@@ -277,59 +277,59 @@ if __name__ == "__main__":
     try:
         if not check_session(session):
             msg = (
-                "🔒 Session abgelaufen.\n"
+                "Session abgelaufen.\n"
                 "Neu einloggen und Cookie aktualisieren:\n"
                 "  python kudos_bot.py --set-session <neuer_cookie_wert>"
             )
             log.error(msg)
             send_telegram(
-                f"🏃 <b>Strava Kudos Bot – {ts}</b>\n\n"
-                f"🔒 <b>Session abgelaufen!</b>\n"
+                f"Strava Kudos Bot - {ts}\n\n"
+                f"Session abgelaufen.\n"
                 f"Cookie muss erneuert werden:\n"
-                f"<code>python kudos_bot.py --set-session &lt;cookie&gt;</code>"
+                f"python kudos_bot.py --set-session <cookie>"
             )
             sys.exit(1)
 
         entries = get_feed(session)
         total   = len(entries)
-        log.info("%d Einträge im Feed.", total)
+        log.info("%d Eintraege im Feed.", total)
 
         if not entries:
             log.warning("Feed leer.")
             send_telegram(
-                f"🏃 <b>Strava Kudos Bot – {ts}</b>\n\n"
-                f"📢 Feed leer – nichts Neues heute."
+                f"Strava Kudos Bot - {ts}\n\n"
+                f"Feed leer - nichts Neues heute."
             )
             sys.exit(0)
 
         given, skipped, errors, names = give_kudos_to_feed(session, entries)
-        log.info("Fertig. ✅ %d Kudos | ⏭ %d Skipped | ❌ %d Errors", given, skipped, errors)
+        log.info("Fertig. %d Kudos | %d Skipped | %d Errors", given, skipped, errors)
 
         # Telegram-Nachricht bauen
         lines = [
-            f"🏃 <b>Strava Kudos Bot – {ts}</b>",
+            f"Strava Kudos Bot - {ts}",
             "",
-            f"📄 <b>Feed:</b> {total} Aktivitäten gefunden",
-            f"👍 <b>Kudos gegeben:</b> {given}",
-            f"⏭ <b>Übersprungen:</b> {skipped} (bereits geliked / privat)",
+            f"Feed: {total} Aktivitaeten gefunden",
+            f"Kudos gegeben: {given}",
+            f"Uebersprungen: {skipped} (bereits geliked / privat)",
         ]
         if errors:
-            lines.append(f"❌ <b>Fehler:</b> {errors}")
+            lines.append(f"Fehler: {errors}")
         if names:
             lines.append("")
-            lines.append("🏅 <b>Geliked:</b>")
-            for n in names[:10]:  # max 10 Namen
-                lines.append(f"  • {n}")
+            lines.append("Geliked:")
+            for n in names[:10]:
+                lines.append(f"- {n}")
             if len(names) > 10:
-                lines.append(f"  … und {len(names) - 10} weitere")
+                lines.append(f"- ... und {len(names) - 10} weitere")
 
         send_telegram("\n".join(lines))
 
     except PermissionError as e:
-        log.error("🔒 %s", e)
-        send_telegram(f"🏃 <b>Strava Kudos Bot</b>\n🔒 {e}")
+        log.error("Session-Fehler: %s", e)
+        send_telegram(f"Strava Kudos Bot\n\nSession-Fehler: {e}")
         sys.exit(1)
     except Exception as e:
-        log.error("❌ %s", e)
-        send_telegram(f"🏃 <b>Strava Kudos Bot</b>\n❌ Fehler: {e}")
+        log.error("Fehler: %s", e)
+        send_telegram(f"Strava Kudos Bot\n\nFehler: {e}")
         raise

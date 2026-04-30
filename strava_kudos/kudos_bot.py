@@ -8,8 +8,8 @@ Setup (einmalig, wenn Session abläuft):
   3. Wert von '_strava4_session' kopieren
   4. python kudos_bot.py --set-session WERT_HIER_EINFÜGEN
 
-Cronjob (alle 30 Min):
-  */30 * * * * cd /home/pi/Serbo_bot/strava_kudos && \
+Cronjob (täglich 08:00 Uhr):
+  0 8 * * * cd /home/pi/Serbo_bot/strava_kudos && \\
     /home/pi/Serbo_bot/.venv/bin/python kudos_bot.py >> kudos.log 2>&1
 """
 
@@ -20,6 +20,7 @@ import json
 import time
 import logging
 from pathlib import Path
+from datetime import datetime
 
 import requests
 from dotenv import load_dotenv
@@ -33,6 +34,10 @@ SESSION_FILE  = BASE_DIR / "session.json"
 BASE_URL   = "https://www.strava.com"
 FEED_LIMIT = 30
 DELAY      = 2.0
+
+# Telegram
+TG_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN")
+TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 HEADERS = {
     "User-Agent": (
@@ -55,20 +60,39 @@ log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Telegram
+# ---------------------------------------------------------------------------
+
+def send_telegram(text: str):
+    """Sendet eine Nachricht an den konfigurierten Telegram-Chat."""
+    if not TG_TOKEN or not TG_CHAT_ID:
+        log.debug("Telegram nicht konfiguriert – überspringe Benachrichtigung.")
+        return
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            json={"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "HTML"},
+            timeout=10,
+        )
+        if r.ok:
+            log.info("📲 Telegram-Nachricht gesendet.")
+        else:
+            log.warning("⚠️ Telegram Fehler: %s", r.text[:200])
+    except Exception as e:
+        log.warning("⚠️ Telegram nicht erreichbar: %s", e)
+
+
+# ---------------------------------------------------------------------------
 # Session management
 # ---------------------------------------------------------------------------
 
 def load_session_cookie() -> str:
-    """Load _strava4_session cookie from session.json or .env."""
     if SESSION_FILE.exists():
         data = json.loads(SESSION_FILE.read_text())
         cookie = data.get("_strava4_session", "")
         if cookie:
             return cookie
-    cookie = os.getenv("STRAVA_SESSION_COOKIE", "")
-    if cookie:
-        return cookie
-    return ""
+    return os.getenv("STRAVA_SESSION_COOKIE", "")
 
 
 def save_session_cookie(value: str):
@@ -105,7 +129,6 @@ def _get_csrf(html: str) -> str:
 # ---------------------------------------------------------------------------
 
 def check_session(session: requests.Session) -> bool:
-    """Returns True if the session cookie is still valid."""
     r = session.get(f"{BASE_URL}/dashboard",
                     headers={**HEADERS, "Accept": "text/html,*/*"},
                     allow_redirects=True, timeout=15)
@@ -135,7 +158,6 @@ def get_feed(session: requests.Session) -> list:
         raise RuntimeError(f"Feed kein JSON:\n{resp.text[:400]}")
     if isinstance(data, list):
         return data
-    # New format: {"entries": [...], "pagination": {...}}
     return data.get("entries", data.get("feed", data.get("activities", [])))
 
 
@@ -144,11 +166,9 @@ def get_feed(session: requests.Session) -> list:
 # ---------------------------------------------------------------------------
 
 def _extract_activity_id(entry) -> int | None:
-    # New feed format: entry.activity.id
     v = entry.get("activity", {}).get("id")
     if v:
         return int(v)
-    # Legacy fallback
     for key in ("activity_id", "id", "object_id"):
         v = entry.get(key)
         if v:
@@ -158,13 +178,11 @@ def _extract_activity_id(entry) -> int | None:
 
 def _already_kudosed(entry) -> bool:
     act = entry.get("activity", entry)
-    # New format: kudosAndComments.hasKudoed / canKudo
     kac = act.get("kudosAndComments", {})
     if kac.get("hasKudoed"):
         return True
     if not kac.get("canKudo") and kac:
-        return True  # own activity or unavailable
-    # Legacy fallback
+        return True
     return bool(act.get("kudosed") or act.get("has_kudoed") or entry.get("kudosed"))
 
 
@@ -176,7 +194,9 @@ def give_kudos_to_feed(session: requests.Session, entries: list) -> tuple:
         raise PermissionError("Session abgelaufen – bitte --set-session ausführen.")
     csrf = _get_csrf(dash.text)
 
-    given = skipped = 0
+    given = skipped = errors = 0
+    kudosed_names = []
+
     for entry in entries:
         act_id = _extract_activity_id(entry)
         if not act_id:
@@ -202,6 +222,7 @@ def give_kudos_to_feed(session: requests.Session, entries: list) -> tuple:
         )
         if r.status_code in (200, 201, 204):
             log.info("✅ Kudos: %s – %s", athlete, name)
+            kudosed_names.append(f"{athlete} – {name}")
             given += 1
             time.sleep(DELAY)
         elif r.status_code == 429:
@@ -209,9 +230,12 @@ def give_kudos_to_feed(session: requests.Session, entries: list) -> tuple:
             break
         elif r.status_code == 401:
             log.warning("🔒 Privat: %s", act_id)
+            skipped += 1
         else:
             log.warning("❌ %s bei %s: %s", r.status_code, act_id, r.text[:100])
-    return given, skipped
+            errors += 1
+
+    return given, skipped, errors, kudosed_names
 
 
 # ---------------------------------------------------------------------------
@@ -224,15 +248,9 @@ if __name__ == "__main__":
         idx = sys.argv.index("--set-session")
         if idx + 1 >= len(sys.argv):
             print("Verwendung: python kudos_bot.py --set-session <_strava4_session-Cookie-Wert>")
-            print()
-            print("So findest du den Cookie:")
-            print("  1. Im Browser bei strava.com einloggen")
-            print("  2. F12 → Application → Cookies → https://www.strava.com")
-            print("  3. Wert von '_strava4_session' kopieren")
             sys.exit(1)
         cookie_val = sys.argv[idx + 1]
         save_session_cookie(cookie_val)
-        # Verify
         session = build_session(cookie_val)
         if check_session(session):
             log.info("✅ Session gültig!")
@@ -244,40 +262,74 @@ if __name__ == "__main__":
     # Normal run
     cookie = load_session_cookie()
     if not cookie:
-        log.error(
-            "Kein Session-Cookie gefunden.\n"
+        msg = (
+            "❌ Kein Session-Cookie gefunden.\n"
             "Einmalig ausführen:\n"
-            "  python kudos_bot.py --set-session <_strava4_session-Cookie-Wert>\n"
-            "\n"
-            "Den Cookie findest du im Browser:\n"
-            "  F12 → Application → Cookies → https://www.strava.com → _strava4_session"
+            "  python kudos_bot.py --set-session <_strava4_session-Cookie-Wert>"
         )
+        log.error(msg)
+        send_telegram(f"🔒 <b>Strava Kudos Bot</b>\n{msg}")
         sys.exit(1)
 
     session = build_session(cookie)
+    ts = datetime.now().strftime("%d.%m.%Y %H:%M")
 
     try:
         if not check_session(session):
-            log.error(
+            msg = (
                 "🔒 Session abgelaufen.\n"
                 "Neu einloggen und Cookie aktualisieren:\n"
                 "  python kudos_bot.py --set-session <neuer_cookie_wert>"
             )
+            log.error(msg)
+            send_telegram(
+                f"🏃 <b>Strava Kudos Bot – {ts}</b>\n\n"
+                f"🔒 <b>Session abgelaufen!</b>\n"
+                f"Cookie muss erneuert werden:\n"
+                f"<code>python kudos_bot.py --set-session &lt;cookie&gt;</code>"
+            )
             sys.exit(1)
 
         entries = get_feed(session)
-        log.info("%d Einträge im Feed.", len(entries))
+        total   = len(entries)
+        log.info("%d Einträge im Feed.", total)
 
         if not entries:
-            log.warning("Feed leer – evtl. gibt es nichts Neues.")
+            log.warning("Feed leer.")
+            send_telegram(
+                f"🏃 <b>Strava Kudos Bot – {ts}</b>\n\n"
+                f"📢 Feed leer – nichts Neues heute."
+            )
             sys.exit(0)
 
-        given, skipped = give_kudos_to_feed(session, entries)
-        log.info("Fertig. ✅ %d Kudos | ⏭ %d Skipped", given, skipped)
+        given, skipped, errors, names = give_kudos_to_feed(session, entries)
+        log.info("Fertig. ✅ %d Kudos | ⏭ %d Skipped | ❌ %d Errors", given, skipped, errors)
+
+        # Telegram-Nachricht bauen
+        lines = [
+            f"🏃 <b>Strava Kudos Bot – {ts}</b>",
+            "",
+            f"📄 <b>Feed:</b> {total} Aktivitäten gefunden",
+            f"👍 <b>Kudos gegeben:</b> {given}",
+            f"⏭ <b>Übersprungen:</b> {skipped} (bereits geliked / privat)",
+        ]
+        if errors:
+            lines.append(f"❌ <b>Fehler:</b> {errors}")
+        if names:
+            lines.append("")
+            lines.append("🏅 <b>Geliked:</b>")
+            for n in names[:10]:  # max 10 Namen
+                lines.append(f"  • {n}")
+            if len(names) > 10:
+                lines.append(f"  … und {len(names) - 10} weitere")
+
+        send_telegram("\n".join(lines))
 
     except PermissionError as e:
         log.error("🔒 %s", e)
+        send_telegram(f"🏃 <b>Strava Kudos Bot</b>\n🔒 {e}")
         sys.exit(1)
     except Exception as e:
         log.error("❌ %s", e)
+        send_telegram(f"🏃 <b>Strava Kudos Bot</b>\n❌ Fehler: {e}")
         raise

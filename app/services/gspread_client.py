@@ -646,13 +646,19 @@ def write_dienstplan(
     wunsch_notizen: dict[str, list[tuple[date, str, bool]]] | None = None,
     ma_soll:        dict[str, float] | None = None,
     springer:       list[str] | None = None,
+    **kwargs,  # ignoriert unbekannte Parameter (z.B. offen_details) ohne Fehler
 ) -> str:
     """
     Schreibt den Dienstplan ins Google Sheet.
 
     Springer werden am ENDE der normalen Mitarbeiter-Spalten eingereiht.
     Sie werden NICHT in Soll/Ist/Differenz einbezogen.
+
+    Unbekannte Keyword-Argumente (z.B. offen_details) werden stillschweigend ignoriert.
     """
+    if kwargs:
+        logger.debug("write_dienstplan: ignorierte kwargs: %s", list(kwargs.keys()))
+
     erster     = tage[0]
     monat_name = _MONATE_LANG[erster.month]
     base_name  = tab_name if tab_name else f"{_MONATE_KURZ[erster.month]}_{erster.year}"

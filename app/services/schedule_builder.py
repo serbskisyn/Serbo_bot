@@ -423,7 +423,8 @@ class DienstplanGenerator:
         Niedrigerer Score = bevorzugt.
 
         Faktoren:
-        1. Stunden-Delta (Gewicht 3.0): MA mit hohem Minus stark bevorzugen
+        1. Stunden-Delta relativ (Gewicht 30.0): MA mit hohem relativem Minus bevorzugen
+           → Vollzeitkräfte werden fair priorisiert, da delta / soll_stunden normiert
         2. Schichtart-Fairness (Gewicht 10.0): unterrepräsentierte Schicht bevorzugen
         3. Konsekutive Arbeitstage (Gewicht 0.5): weniger Tage am Stück bevorzugen
         4. Nachtblock-Fairness (Gewicht 2.0): weniger Nachtblöcke bevorzugen
@@ -433,8 +434,10 @@ class DienstplanGenerator:
         gesamt = s.gesamt_schichten
         score = 0.0
 
-        # 1. Stunden-Delta — STARK gewichtet (war 0.8, jetzt 3.0)
-        score -= s.stunden_delta * 3.0
+        # 1. Relatives Stunden-Delta — normiert auf Soll-Stunden
+        # Verhindert, dass Teilzeitkräfte wegen kleinerem absolutem Delta bevorzugt werden
+        delta_relativ = s.stunden_delta / max(s.ma.soll_stunden, 1.0)
+        score -= delta_relativ * 30.0
 
         # 2. Schichtart-Fairness
         if gesamt > 0:
@@ -798,21 +801,34 @@ class DienstplanGenerator:
                 self.offen.pop(tag, None)
 
         # --- Pass 3: Stunden-Ausgleich ---
-        # MA mit sehr hohem Minus bekommen zusätzliche Schichten auf freien Slots
+        # MA mit Stunden-Minus bekommen zusätzliche Schichten auf freien Slots
         self._pass_stunden_ausgleich()
 
     def _pass_stunden_ausgleich(self):
         """
-        Pass 3: MA deren Ist-Stunden < 70% der Soll-Stunden sind,
+        Pass 3: MA deren Ist-Stunden mehr als 2h unter Soll liegen,
         bekommen auf freien Slots nachträglich Schichten zugewiesen.
         Bevorzugt abwechselnde Schichtarten (FD/SD).
+
+        FIX: Tages-Kapazität wird geprüft — max. PFLICHT[FD/SD] pro Tag,
+        damit Pass 3 nie mehr als 2 FD oder 2 SD an einem Tag setzt.
         """
         for tag in self.tage:
-            # MA mit hohem Stunden-Minus sortiert (größtes Minus zuerst)
+            # Tages-Kapazitäts-Zähler: wie viele FD/SD sind an diesem Tag bereits gesetzt?
+            bereits_fd = sum(
+                1 for m in self.ma_liste
+                if self.plan[m.name].get(tag) == Dienst.FRUEH
+            )
+            bereits_sd = sum(
+                1 for m in self.ma_liste
+                if self.plan[m.name].get(tag) == Dienst.SPAET
+            )
+
+            # MA mit Stunden-Minus (> 2h Schwelle, niedrig genug für Vollzeit und Teilzeit)
             beduerft = [
                 ma for ma in self.ma_liste
                 if not ma.ist_springer
-                and self.states[ma.name].stunden_delta > self.states[ma.name].ma.soll_stunden * 0.30
+                and self.states[ma.name].stunden_delta > 2.0
                 and self.plan[ma.name].get(tag) is None
             ]
             if not beduerft:
@@ -834,8 +850,17 @@ class DienstplanGenerator:
                     praeferenz = sorted(ratios, key=lambda d: ratios[d])
 
                 for dienst in praeferenz:
+                    # Tages-Kapazität prüfen: nicht über PFLICHT-Limit hinaus setzen
+                    if dienst == Dienst.FRUEH and bereits_fd >= PFLICHT[Dienst.FRUEH]:
+                        continue
+                    if dienst == Dienst.SPAET and bereits_sd >= PFLICHT[Dienst.SPAET]:
+                        continue
                     if self._kann_dienst(ma.name, tag, dienst, locker=True):
                         self._setze_dienst(ma.name, tag, dienst)
+                        if dienst == Dienst.FRUEH:
+                            bereits_fd += 1
+                        elif dienst == Dienst.SPAET:
+                            bereits_sd += 1
                         break
 
     def _fill_frei(self):

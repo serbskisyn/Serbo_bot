@@ -784,12 +784,16 @@ def write_dienstplan(
         soll_row.append("")
     soll_row.append("")
 
+    # Differenz = ist - soll + carry  (positiv = Überstunden, negativ = Fehlstunden)
+    # Konsistent mit schedule_builder.py: stunden_delta = soll - ist (positiv = noch offen)
+    # Im Sheet zeigen wir ist - soll (positiv = Überstunden), Farbe grün/rot entsprechend
     diff_row    = ["Differenz"]
     diff_values: dict[str, float | str] = {}
     for ma_name in ma_regulaer:
         ist_val  = ist_values.get(ma_name, 0.0)
         soll_val = soll_values.get(ma_name, 0.0)
         carry    = vormonat_diff.get(ma_name, 0.0)
+        # carry aus Vormonat hat gleiches Vorzeichen (ist - soll), direkt addierbar
         diff     = round(ist_val - soll_val + carry, 1) if (soll_val != 0.0 or ist_val != 0.0) else 0.0
         diff_values[ma_name] = diff
         diff_row.append(diff)
@@ -888,6 +892,7 @@ def write_dienstplan(
     requests.append(_bg_request(ws.id, diff_row_0, 0, *_SUMMARY_LABEL_BG))
     for i, ma_name in enumerate(ma_regulaer):
         diff_val = diff_values.get(ma_name, 0.0)
+        # grün = Überstunden (ist > soll), rot = Fehlstunden (ist < soll)
         rgb = _SUMMARY_POS_BG if (isinstance(diff_val, (int, float)) and diff_val >= 0) else _SUMMARY_NEG_BG
         requests.append(_bg_request(ws.id, diff_row_0, i + 1, *rgb))
 

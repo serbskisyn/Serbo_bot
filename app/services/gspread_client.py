@@ -714,13 +714,6 @@ def write_dienstplan(
 
     ws.update("A4", data_rows)
 
-    # --- Vormonat-Differenz (Carry-over) nur für reguläre MA ---
-    vormonat_diff: dict[str, float] = {ma: 0.0 for ma in ma_regulaer}
-    try:
-        vormonat_diff = read_vormonat_differenz(sh, erster, ma_regulaer)
-    except Exception as e:
-        logger.warning("Vormonat-Differenz nicht lesbar: %s — setze 0", e)
-
     # --- Zusammenfassungs-Block ---
     # Layout:
     # summary_start+0:  FREI-Zeile
@@ -784,17 +777,14 @@ def write_dienstplan(
         soll_row.append("")
     soll_row.append("")
 
-    # Differenz = ist - soll + carry  (positiv = Überstunden, negativ = Fehlstunden)
-    # Konsistent mit schedule_builder.py: stunden_delta = soll - ist (positiv = noch offen)
-    # Im Sheet zeigen wir ist - soll (positiv = Überstunden), Farbe grün/rot entsprechend
+    # Differenz = ist - soll (kein Carry-over aus Vormonat)
+    # positiv = Überstunden, negativ = Fehlstunden
     diff_row    = ["Differenz"]
     diff_values: dict[str, float | str] = {}
     for ma_name in ma_regulaer:
         ist_val  = ist_values.get(ma_name, 0.0)
         soll_val = soll_values.get(ma_name, 0.0)
-        carry    = vormonat_diff.get(ma_name, 0.0)
-        # carry aus Vormonat hat gleiches Vorzeichen (ist - soll), direkt addierbar
-        diff     = round(ist_val - soll_val + carry, 1) if (soll_val != 0.0 or ist_val != 0.0) else 0.0
+        diff     = round(ist_val - soll_val, 1) if (soll_val != 0.0 or ist_val != 0.0) else 0.0
         diff_values[ma_name] = diff
         diff_row.append(diff)
     for _ in springer:

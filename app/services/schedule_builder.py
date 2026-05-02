@@ -19,9 +19,9 @@ Regeln (harte Regeln = [H], weiche Regeln = [W]):
 - [H] Nach einem vollständigen Nachtblock (>= 3 Nächte): mind. 2 Pflicht-Freitags
 - [H] Innerhalb eines Nachtblocks darf keine andere Schichtart eingeplant werden
 - [H] MA mit laufendem Nachtblock MÜSSEN diesen fortsetzen (Block-Vollendung)
+- [H] Mindestens ein freies Wochenende pro Monat (Sa+So beide frei)
 - [W] Fairness: Gleichmäßige Verteilung aller Schichtarten über alle MA
 - [W] Gleichmäßige Verteilung der Nachtblöcke über alle MA
-- [W] Mindestens ein freies Wochenende pro Monat
 """
 from __future__ import annotations
 
@@ -118,8 +118,12 @@ class Mitarbeiter:
     def __post_init__(self):
         self.wochenstunden = round(self.tagesstunden * 5, 1)
 
-    def berechne_soll(self, arbeitstage_monat: int):
-        self.soll_stunden = round((self.wochenstunden / 5) * arbeitstage_monat, 1)
+    def berechne_soll(self, arbeitstage_monat: int, kalender_tage_monat: int):
+        """
+        Soll-Stunden auf Basis von Kalendertagen (7-Tage-Betrieb).
+        FIX: war /5 * Werktage → korrekt: /7 * Kalendertage
+        """
+        self.soll_stunden = round((self.wochenstunden / 7) * kalender_tage_monat, 1)
 
 
 @dataclass
@@ -330,6 +334,49 @@ class DienstplanGenerator:
             return self.states[ma_name].vormonat_letzter == Dienst.NACHT
         return self.plan[ma_name].get(vortag) == Dienst.NACHT
 
+    def _wochenende_muss_frei_sein(self, ma_name: str, tag: date) -> bool:
+        """
+        [H] Schützt das letzte noch mögliche freie Wochenende im Monat.
+
+        Gibt True zurück (= Slot sperren) wenn:
+        1. 'tag' ist ein Samstag oder Sonntag
+        2. Der MA hat noch kein vollständiges freies WE (Sa+So beide frei)
+        3. Es gibt kein anderes WE im Monat mehr das noch frei werden könnte
+           (d.h. beide Tage noch nicht belegt mit Arbeitsdienst)
+        """
+        if tag.weekday() not in (5, 6):
+            return False
+
+        # Samstag dieses Wochenendes ermitteln
+        sa_dieses_we = tag if tag.weekday() == 5 else tag - timedelta(days=1)
+        so_dieses_we = sa_dieses_we + timedelta(days=1)
+
+        # Hat MA bereits ein vollständiges freies WE in der Vergangenheit?
+        for t in self.tage:
+            if t.weekday() == 5 and t < sa_dieses_we:
+                so = t + timedelta(days=1)
+                if so <= self.tage[-1]:
+                    sa_d = self.plan[ma_name].get(t)
+                    so_d = self.plan[ma_name].get(so)
+                    if (sa_d not in self.ARBEITSDIENSTE and
+                            so_d not in self.ARBEITSDIENSTE):
+                        return False  # Bereits ein freies WE gesichert
+
+        # Gibt es ein zukünftiges WE (nach diesem) das noch komplett frei werden kann?
+        for t in self.tage:
+            if t.weekday() == 5 and t > sa_dieses_we:
+                so = t + timedelta(days=1)
+                if so <= self.tage[-1]:
+                    sa_d = self.plan[ma_name].get(t)
+                    so_d = self.plan[ma_name].get(so)
+                    # Beide Tage noch nicht mit Arbeitsdienst belegt?
+                    if (sa_d not in self.ARBEITSDIENSTE and
+                            so_d not in self.ARBEITSDIENSTE):
+                        return False  # Zukünftiges WE noch rettbar
+
+        # Kein freies WE bisher und kein anderes mehr möglich → dieses WE schützen
+        return True
+
     def _kann_frueh(self, ma_name: str, tag: date, locker: bool = False) -> bool:
         if not self._kann_arbeiten(ma_name, tag):
             return False
@@ -348,6 +395,9 @@ class DienstplanGenerator:
         # [H] Kein FD während aktiven Nachtblocks
         if self._ist_in_aktivem_nacht_block(ma_name, tag):
             return False
+        # [H] WE-Schutz: letztes mögliches freies Wochenende nicht belegen
+        if self._wochenende_muss_frei_sein(ma_name, tag):
+            return False
         # [W] Max 3 FD in Folge (im lockeren Modus bis 4)
         limit = 4 if locker else 3
         if self._in_folge(ma_name, tag, Dienst.FRUEH) >= limit:
@@ -362,6 +412,9 @@ class DienstplanGenerator:
             return False
         # [H] Kein SD während aktiven Nachtblocks
         if self._ist_in_aktivem_nacht_block(ma_name, tag):
+            return False
+        # [H] WE-Schutz: letztes mögliches freies Wochenende nicht belegen
+        if self._wochenende_muss_frei_sein(ma_name, tag):
             return False
         # [W] Max 3 SD in Folge (im lockeren Modus bis 4)
         limit = 4 if locker else 3
@@ -409,12 +462,9 @@ class DienstplanGenerator:
         self.plan[ma_name][tag] = dienst
         if dienst in self.ARBEITSDIENSTE:
             self.states[ma_name].add_schicht(dienst)
-            # Nach Nacht-Setzen: prüfe ob Block abgeschlossen werden muss
             if dienst == Dienst.NACHT:
                 block_len = self._akt_nacht_block_len(ma_name, tag + timedelta(days=1))
-                # Wenn morgen max erreicht → Puffer vormerken (wird in _plan_nacht_tag gesetzt)
         else:
-            # Nicht-Arbeitsdienst → Nachtblock abschließen
             block_len = self.states[ma_name].akt_nacht_block
             self.states[ma_name].add_schicht(dienst)
 
@@ -435,7 +485,6 @@ class DienstplanGenerator:
         score = 0.0
 
         # 1. Relatives Stunden-Delta — normiert auf Soll-Stunden
-        # Verhindert, dass Teilzeitkräfte wegen kleinerem absolutem Delta bevorzugt werden
         delta_relativ = s.stunden_delta / max(s.ma.soll_stunden, 1.0)
         score -= delta_relativ * 30.0
 
@@ -537,8 +586,9 @@ class DienstplanGenerator:
         return self.plan
 
     def _init_states(self):
+        kalender_tage = len(self.tage)  # FIX: Kalendertage für 7-Tage-Betrieb
         for ma in self.ma_liste:
-            ma.berechne_soll(self.arbeitstage_monat)
+            ma.berechne_soll(self.arbeitstage_monat, kalender_tage)
             self.states[ma.name] = PlanungState(ma=ma)
 
     def _set_abwesenheiten(self):
@@ -570,9 +620,7 @@ class DienstplanGenerator:
             letzter = tage_plan.get(vortag)
             s.letzter_dienst = letzter
             s.vormonat_letzter = letzter
-            # Vormonat-Nachtblock: war letzter Dienst Nacht?
             if letzter == Dienst.NACHT:
-                # Wieviele Nächte am Ende des Vormonats?
                 nb = 0
                 for i in range(1, NACHT_BLOCK_MAX + 1):
                     check = erster - timedelta(days=i)
@@ -593,9 +641,6 @@ class DienstplanGenerator:
         Prioritäten:
         A) MA die MÜSSEN (laufender Block, noch nicht abgeschlossen)
         B) MA die KÖNNEN und einen neuen Block starten (fairste zuerst)
-
-        Nach dem Setzen: prüft ob Block jetzt >= MIN → Puffer setzen wenn
-        der nächste Tag kein Nacht mehr wird.
         """
         bedarf = PFLICHT[Dienst.NACHT]
         bereits = sum(
@@ -605,7 +650,6 @@ class DienstplanGenerator:
         if bereits >= bedarf:
             return bereits
 
-        # Gruppe A: müssen Nacht fortsetzen (harte Pflicht)
         muss_ma = []
         kann_ma = []
 
@@ -617,7 +661,6 @@ class DienstplanGenerator:
             elif self._kann_nacht(ma.name, tag):
                 kann_ma.append(ma)
 
-        # Gruppe A zuerst (Pflicht)
         muss_ma.sort(key=lambda ma: self._score(ma.name, Dienst.NACHT, tag))
         for ma in muss_ma:
             if bereits >= bedarf:
@@ -625,7 +668,6 @@ class DienstplanGenerator:
             self._setze_dienst(ma.name, tag, Dienst.NACHT)
             bereits += 1
 
-        # Gruppe B: neue Blöcke starten
         kann_ma.sort(key=lambda ma: self._score(ma.name, Dienst.NACHT, tag))
         for ma in kann_ma:
             if bereits >= bedarf:
@@ -633,26 +675,20 @@ class DienstplanGenerator:
             self._setze_dienst(ma.name, tag, Dienst.NACHT)
             bereits += 1
 
-        # Puffer setzen: für jeden MA der heute Nacht hat und dessen Block endet
         for ma in self.ma_liste:
             if self.plan[ma.name].get(tag) != Dienst.NACHT:
                 continue
             morgen = tag + timedelta(days=1)
             if morgen > self.tage[-1]:
-                # Monatsende: Block-Abschluss
                 block_len = self._akt_nacht_block_len(ma.name, morgen)
                 if block_len >= NACHT_BLOCK_MIN:
                     self._setze_nacht_puffer(ma.name, morgen)
                 continue
-            # Morgen kein Nacht mehr geplant UND Block >= MIN → Puffer
             morgen_d = self.plan[ma.name].get(morgen)
             if morgen_d != Dienst.NACHT and morgen_d is not None:
-                # Block wird unterbrochen → Puffer prüfen
                 block_len = self._akt_nacht_block_len(ma.name, morgen)
                 if block_len >= NACHT_BLOCK_MIN:
-                    # Puffer bereits gesetzt durch späteres Datum, nichts tun
                     pass
-            # Block-Max erreicht → nach morgen Puffer setzen
             block_len = self._akt_nacht_block_len(ma.name, morgen)
             if block_len >= NACHT_BLOCK_MAX:
                 self._setze_nacht_puffer(ma.name, morgen)
@@ -680,9 +716,7 @@ class DienstplanGenerator:
                         block_len += 1
                 else:
                     if in_block:
-                        # Block endet hier
                         if block_len >= NACHT_BLOCK_MIN:
-                            # Prüfe ob Puffer bereits gesetzt
                             puffer_ok = all(
                                 tag + timedelta(days=offset) in self._nacht_puffer[ma.name]
                                 for offset in range(NACHT_PUFFER_TAGE)
@@ -706,7 +740,6 @@ class DienstplanGenerator:
 
         # --- Pass 1: Normaler Durchlauf (strenge Regeln) ---
         for tag in self.tage:
-            # 1) Nacht
             nacht_besetzt = self._plan_nacht_tag(tag)
 
             fehlend_nacht = PFLICHT[Dienst.NACHT] - nacht_besetzt
@@ -715,7 +748,6 @@ class DienstplanGenerator:
                 for _ in range(fehlend_nacht):
                     self.offen[tag].append(Dienst.OFFEN_ND)
 
-            # 2) FD und SD (streng, max 3 in Folge)
             for dienst in [Dienst.FRUEH, Dienst.SPAET]:
                 bedarf = PFLICHT[dienst]
                 bereits = sum(
@@ -738,18 +770,15 @@ class DienstplanGenerator:
                     self._setze_dienst(ma.name, tag, dienst)
                     bereits += 1
 
-                # Fehlende merken (werden in Pass 2 nochmal versucht)
                 fehlend = bedarf - bereits
                 if fehlend > 0:
                     self.offen.setdefault(tag, [])
                     for _ in range(fehlend):
                         self.offen[tag].append(offen_map[dienst])
 
-        # Puffer nachfinalisieren
         self._finalisiere_nacht_puffer()
 
         # --- Pass 2: Lockerer Durchlauf für noch offene FD/SD ---
-        # Versucht MA die im 1. Pass durch Soft-Rules blockiert waren
         tage_mit_fd_offen = [
             tag for tag in self.tage
             if any(d == Dienst.OFFEN_FD for d in self.offen.get(tag, []))
@@ -773,7 +802,6 @@ class DienstplanGenerator:
                     break
                 self._setze_dienst(ma.name, tag, Dienst.FRUEH)
                 gesetzt += 1
-            # Offene Liste aktualisieren
             for _ in range(gesetzt):
                 if Dienst.OFFEN_FD in self.offen.get(tag, []):
                     self.offen[tag].remove(Dienst.OFFEN_FD)
@@ -801,20 +829,15 @@ class DienstplanGenerator:
                 self.offen.pop(tag, None)
 
         # --- Pass 3: Stunden-Ausgleich ---
-        # MA mit Stunden-Minus bekommen zusätzliche Schichten auf freien Slots
         self._pass_stunden_ausgleich()
 
     def _pass_stunden_ausgleich(self):
         """
         Pass 3: MA deren Ist-Stunden mehr als 2h unter Soll liegen,
         bekommen auf freien Slots nachträglich Schichten zugewiesen.
-        Bevorzugt abwechselnde Schichtarten (FD/SD).
-
-        FIX: Tages-Kapazität wird geprüft — max. PFLICHT[FD/SD] pro Tag,
-        damit Pass 3 nie mehr als 2 FD oder 2 SD an einem Tag setzt.
+        Tages-Kapazität wird geprüft — max. PFLICHT[FD/SD] pro Tag.
         """
         for tag in self.tage:
-            # Tages-Kapazitäts-Zähler: wie viele FD/SD sind an diesem Tag bereits gesetzt?
             bereits_fd = sum(
                 1 for m in self.ma_liste
                 if self.plan[m.name].get(tag) == Dienst.FRUEH
@@ -824,7 +847,6 @@ class DienstplanGenerator:
                 if self.plan[m.name].get(tag) == Dienst.SPAET
             )
 
-            # MA mit Stunden-Minus (> 2h Schwelle, niedrig genug für Vollzeit und Teilzeit)
             beduerft = [
                 ma for ma in self.ma_liste
                 if not ma.ist_springer
@@ -837,7 +859,6 @@ class DienstplanGenerator:
             beduerft.sort(key=lambda ma: -self.states[ma.name].stunden_delta)
 
             for ma in beduerft:
-                # Bevorzuge die Schichtart die der MA am wenigsten hatte
                 s = self.states[ma.name]
                 gesamt = s.gesamt_schichten
                 if gesamt == 0:
@@ -850,7 +871,6 @@ class DienstplanGenerator:
                     praeferenz = sorted(ratios, key=lambda d: ratios[d])
 
                 for dienst in praeferenz:
-                    # Tages-Kapazität prüfen: nicht über PFLICHT-Limit hinaus setzen
                     if dienst == Dienst.FRUEH and bereits_fd >= PFLICHT[Dienst.FRUEH]:
                         continue
                     if dienst == Dienst.SPAET and bereits_sd >= PFLICHT[Dienst.SPAET]:
@@ -870,7 +890,7 @@ class DienstplanGenerator:
                     if self.plan[ma.name].get(tag) is None:
                         self.plan[ma.name][tag] = Dienst.FREI
 
-        # Wochenend-Check
+        # Wochenend-Check (nur noch als Validation-Log, Hard-Rule greift bereits oben)
         for ma in self.ma_liste:
             if ma.ist_springer:
                 continue
@@ -940,7 +960,6 @@ class DienstplanGenerator:
                         f"{ma.name} {tag.strftime('%d.%m')}: Spät→Früh verboten"
                     )
 
-        # Nachtblock-Validierung
         for ma in self.ma_liste:
             if ma.ist_springer:
                 continue
@@ -958,7 +977,6 @@ class DienstplanGenerator:
                             f"{ma.name} ab {tag.strftime('%d.%m')}: "
                             f"Nachtblock zu kurz ({block_len}/{NACHT_BLOCK_MIN})"
                         )
-                    # Puffer prüfen
                     puffer_start = self.tage[j] if j < len(self.tage) else None
                     if puffer_start and block_len >= NACHT_BLOCK_MIN:
                         for offset in range(NACHT_PUFFER_TAGE):

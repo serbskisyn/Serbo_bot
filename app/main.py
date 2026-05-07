@@ -11,10 +11,13 @@ from app.services.news_cache import start_background_scheduler
 from app.bot.schedule_dialog import get_schedule_handler
 from app.bot.debug_handler import get_debug_handler
 from app.bot.daily_news_job import register_daily_news_job
+from app.bot.bot_context import set_bot
 
 
 async def _post_init(application) -> None:
     logger = logging.getLogger(__name__)
+    # Bot-Instanz global registrieren (fuer Feed-Health Alerts aus Background-Tasks)
+    set_bot(application.bot)
     logger.info("News-Cache Background-Scheduler wird gestartet...")
     start_background_scheduler()
     register_daily_news_job(application)

@@ -1,10 +1,11 @@
 """
 Täglicher News-Push via Telegram JobQueue.
 Läuft jeden Morgen um NEWS_DAILY_PUSH_HOUR:NEWS_DAILY_PUSH_MINUTE (Europe/Berlin).
-Schickt die News nur an den ersten User aus NEWS_DAILY_PUSH_USER_IDS.
+Zeitzone wird automatisch auf Sommer- und Winterzeit angepasst.
 """
 import logging
-from datetime import time, timezone, timedelta
+from datetime import time
+from zoneinfo import ZoneInfo
 
 from telegram.ext import Application
 
@@ -17,8 +18,7 @@ from app.config import (
 
 logger = logging.getLogger(__name__)
 
-BERLIN_OFFSET = timedelta(hours=2)  # CEST (Sommer); Winter: hours=1
-CEST = timezone(BERLIN_OFFSET)
+BERLIN = ZoneInfo("Europe/Berlin")  # Automatischer Sommer/Winterzeit-Wechsel
 
 
 async def _send_daily_news(context) -> None:
@@ -32,7 +32,6 @@ async def _send_daily_news(context) -> None:
     logger.info("Daily News Push gestartet | user=%d", user_id)
 
     try:
-        # fetch_news_for_user gibt list[str] zurück — ein Block pro Verein
         blocks: list[str] = await fetch_news_for_user(user_id, force_refresh=False)
         total_chunks = 0
         for block in blocks:
@@ -68,8 +67,7 @@ def _split(text: str, limit: int = 4000) -> list[str]:
 def register_daily_news_job(app: Application) -> None:
     """
     Registriert den täglichen News-Push in der JobQueue.
-    Falls job_queue nicht verfügbar ist (fehlendes [job-queue] Extra),
-    wird nur eine Warnung geloggt — der Bot startet trotzdem.
+    Verwendet ZoneInfo("Europe/Berlin") — kein manueller Sommer/Winterzeit-Wechsel nötig.
     """
     if not NEWS_DAILY_PUSH_USER_IDS:
         logger.info("NEWS_DAILY_PUSH_USER_IDS leer — kein Daily Push registriert.")
@@ -86,7 +84,7 @@ def register_daily_news_job(app: Application) -> None:
         hour=NEWS_DAILY_PUSH_HOUR,
         minute=NEWS_DAILY_PUSH_MINUTE,
         second=0,
-        tzinfo=CEST,
+        tzinfo=BERLIN,
     )
 
     app.job_queue.run_daily(
@@ -95,7 +93,7 @@ def register_daily_news_job(app: Application) -> None:
         name="daily_news_push",
     )
     logger.info(
-        "Daily News Push registriert: täglich %02d:%02d CEST — user=%d",
+        "Daily News Push registriert: täglich %02d:%02d Europe/Berlin — user=%d",
         NEWS_DAILY_PUSH_HOUR,
         NEWS_DAILY_PUSH_MINUTE,
         NEWS_DAILY_PUSH_USER_IDS[0],

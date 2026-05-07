@@ -19,7 +19,7 @@ ALLOWED_USER_IDS: set[int] = set(
 RATE_LIMIT_MAX_REQUESTS: int = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", 10))
 RATE_LIMIT_WINDOW_SECONDS: int = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", 60))
 
-# ── News Cache ────────────────────────────────────────────────────────────────────────────────
+# ── News Cache ────────────────────────────────────────────────────────────────
 NEWS_CACHE_DB_PATH: str = os.getenv("NEWS_CACHE_DB_PATH", "app/data/news_cache.db")
 
 _raw_favorites = os.getenv("NEWS_FAVORITE_CLUBS", "Borussia Dortmund,Dynamo Dresden")
@@ -32,39 +32,40 @@ NEWS_SCHEDULER_JITTER_MINUTES: int = int(os.getenv("NEWS_SCHEDULER_JITTER_MINUTE
 NEWS_CACHE_MAX_AGE_HOURS: int = int(os.getenv("NEWS_CACHE_MAX_AGE_HOURS", 48))
 NEWS_STALE_LABEL_HOURS: int = int(os.getenv("NEWS_STALE_LABEL_HOURS", 4))
 
-# ── Daily News Push ──────────────────────────────────────────────────────────────────────────
+# ── Daily News Push ───────────────────────────────────────────────────────────
 NEWS_DAILY_PUSH_HOUR:   int = int(os.getenv("NEWS_DAILY_PUSH_HOUR",   6))
 NEWS_DAILY_PUSH_MINUTE: int = int(os.getenv("NEWS_DAILY_PUSH_MINUTE", 30))
 
-# Kommaseparierte Liste von Telegram-User-IDs die den täglichen Push erhalten
-# Standard: gleiche IDs wie ALLOWED_USER_IDS (alle autorisierten User)
 _push_ids_raw = os.getenv("NEWS_DAILY_PUSH_USER_IDS", "")
 if _push_ids_raw.strip():
     NEWS_DAILY_PUSH_USER_IDS: list[int] = [
         int(x) for x in _push_ids_raw.split(",") if x.strip()
     ]
 else:
-    # Fallback: alle ALLOWED_USER_IDS bekommen den Push
     NEWS_DAILY_PUSH_USER_IDS: list[int] = list(ALLOWED_USER_IDS)
 
-# ── Google Sheets / Dienstplan ───────────────────────────────────────────────────────────────────
+# ── Admin Alert ───────────────────────────────────────────────────────────────
+# Telegram-Chat-ID fuer System-Alerts (Feed-Health, Fehler etc.)
+# Setzen via .env: ADMIN_CHAT_ID=123456789
+# Fallback: erster Eintrag aus ALLOWED_USER_IDS (meist der Bot-Owner)
+_admin_raw = os.getenv("ADMIN_CHAT_ID", "")
+if _admin_raw.strip():
+    ADMIN_CHAT_ID: int | None = int(_admin_raw.strip())
+else:
+    ADMIN_CHAT_ID: int | None = next(iter(ALLOWED_USER_IDS), None)
+
+# ── Google Sheets / Dienstplan ────────────────────────────────────────────────
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 
-# Dienstplan-Sheet (Tabs: Urlaub_CLI, 2026, Info)
 SCHEDULE_URLAUB_SHEET_ID = os.getenv(
     "SCHEDULE_URLAUB_SHEET_ID", "1M9WTVPlP-ivvmW_SsPSzQLIHBDwnGdFyoqgeHR7QUZE"
 )
-
-# Wunsch-Sheet (Tab: Formularantworten 1)
 SCHEDULE_WUNSCH_SHEET_ID = os.getenv(
     "SCHEDULE_WUNSCH_SHEET_ID", "1a1IcfdnfyU-MdLjzCajC2LH5thbHw5WTN9Q1O1kInt8"
 )
-
-# Krankenstand-Sheet (Tab: Krankenstand) — Spalten: Name | Beginn | Ende
 SCHEDULE_KRANK_SHEET_ID = os.getenv(
     "SCHEDULE_KRANK_SHEET_ID", "1BO4LwgNm9YWHyrYqy6N9kaDgoj1pA7xpcYZVkWlNkLc"
 )
-
 SCHEDULE_OUTPUT_SHEET_ID = os.getenv(
     "SCHEDULE_OUTPUT_SHEET_ID", "1nMF24sf-HNvgJRMvQeZ3lTSf6qiGTvsHXedWjFpckkQ"
 )

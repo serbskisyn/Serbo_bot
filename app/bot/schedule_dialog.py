@@ -1,5 +1,9 @@
 """
 schedule_dialog.py — Telegram ConversationHandler für /dienstplan
+
+Refactored: Die gesamte Daten-Lade- und Generierungslogik ist in den
+ScheduleOrchestrator ausgelagert. Dieser Handler ist nur noch für den
+Dialog (Monat fragen, Krank entgegennehmen, Bestätigung) zuständig.
 """
 from __future__ import annotations
 
@@ -13,38 +17,13 @@ from telegram.ext import (
     ContextTypes, filters,
 )
 
-from app.services.schedule_builder import (
-    DienstplanGenerator,
-    Mitarbeiter,
-    Abwesenheit,
-    Wunschschicht,
-)
-from app.config import (
-    SCHEDULE_URLAUB_SHEET_ID,
-    SCHEDULE_WUNSCH_SHEET_ID,
-    SCHEDULE_KRANK_SHEET_ID,
-    SCHEDULE_OUTPUT_SHEET_ID,
-)
+from app.services.schedule_builder import Abwesenheit, Wunschschicht
+from app.agents.schedule.orchestrator import ScheduleOrchestrator
+from app.config import SCHEDULE_OUTPUT_SHEET_ID
 
 logger = logging.getLogger(__name__)
 
 MONAT, KRANKTAGE, BESTAETIGUNG = range(3)
-
-# Fallback falls Sheet nicht ladbar
-MITARBEITER_FALLBACK: dict[str, float] = {
-    "Heike":     7.0,
-    "Silke":     8.0,
-    "Ariane":    7.0,
-    "Jasmin":    7.0,
-    "Maria":     7.0,
-    "Linus":     7.0,
-    "Celina":    6.0,
-    "Geraldine": 8.0,
-    "Svitlana":  7.0,
-    "Elvira":    7.0,
-    "Romy":      6.0,
-    "Annika":    7.0,
-}
 
 MONATE_DE = {
     "januar": 1, "februar": 2, "maerz": 3, "märz": 3, "april": 4,
@@ -160,147 +139,30 @@ async def handle_kranktage(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return KRANKTAGE
 
 
-def _build_wunsch_notizen(
-    generator: DienstplanGenerator,
-) -> dict[str, list[tuple[date, str, bool]]]:
-    notizen: dict[str, list[tuple[date, str, bool]]] = {}
-    for ma_name, wuensche in generator._wunsch_index.items():
-        for wdatum, wdienst in wuensche:
-            geplant  = generator.plan.get(ma_name, {}).get(wdatum)
-            erfuellt = (geplant == wdienst)
-            notizen.setdefault(ma_name, []).append(
-                (wdatum, wdienst.value, erfuellt)
-            )
-    return notizen
-
-
 async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     monat     = context.user_data["monat"]
     jahr      = context.user_data["jahr"]
     kranktage: list[Abwesenheit] = context.user_data.get("kranktage", [])
 
-    await update.message.reply_text("⏳ Lade Mitarbeiter, Urlaubsdaten, Krankenstand und Wunschschichten …")
+    async def status(msg: str):
+        await update.message.reply_text(msg)
 
-    # ── Mitarbeiter aus Sheet laden ───────────────────────────────────────────
-    ma_liste: list[Mitarbeiter] = []
-    try:
-        from app.services.gspread_client import read_mitarbeiter
-        ma_liste = read_mitarbeiter(SCHEDULE_OUTPUT_SHEET_ID, "Mitarbeiterübersicht")
-        namen_str = ", ".join(ma.name for ma in ma_liste)
-        await update.message.reply_text(
-            f"👥 {len(ma_liste)} Mitarbeiter geladen: {namen_str}"
-        )
-    except Exception as e:
-        logger.warning("Mitarbeiterliste nicht ladbar (%s) — Fallback aktiv", e)
-        await update.message.reply_text(
-            f"⚠️ Mitarbeiterliste nicht ladbar: {e}\nNutze Fallback-Liste."
-        )
-        ma_liste = [
-            Mitarbeiter(name=name, tagesstunden=std)
-            for name, std in MITARBEITER_FALLBACK.items()
-        ]
+    orchestrator = ScheduleOrchestrator(status_cb=status)
+    ergebnis = await orchestrator.run(monat=monat, jahr=jahr, manuell_krank=kranktage)
 
-    # Springer-Namen ermitteln (tagesstunden == 0)
-    springer_namen: list[str] = [ma.name for ma in ma_liste if ma.ist_springer]
-    if springer_namen:
-        await update.message.reply_text(
-            f"🔄 Springer erkannt: {', '.join(springer_namen)}\n"
-            "   → Werden im Plan angezeigt (nur Urlaub/Krank), "
-            "aber nicht automatisch eingeplant."
-        )
+    gen = ergebnis.gen
 
-    bekannte_namen = {ma.name for ma in ma_liste}
+    # Report ausgeben
+    report = gen.get_report()
+    # Kontroll-Zusammenfassung anhängen
+    report += "\n\n" + ergebnis.kontroll.zusammenfassung()
+    for chunk in _chunk_text(report, 4000):
+        await update.message.reply_text(f"```\n{chunk}\n```", parse_mode="Markdown")
 
-    abwesenheiten: list[Abwesenheit] = list(kranktage)
-
-    # ── Vormonats-Plan laden (für _init_aus_vormonat + Zusammenfassung) ───────
-    vormonat_plan: dict = {}
-    erster_des_monats = date(jahr, monat, 1)
-    try:
-        from app.services.gspread_client import read_vormonat_plan
-        vormonat_plan = read_vormonat_plan(SCHEDULE_OUTPUT_SHEET_ID, erster_des_monats)
-        if vormonat_plan:
-            await update.message.reply_text(
-                f"🗂️ Vormonats-Plan geladen ({len(vormonat_plan)} MA)."
-            )
-        else:
-            await update.message.reply_text("ℹ️ Kein Vormonats-Tab gefunden — Plan ohne Vormonat.")
-    except Exception as e:
-        logger.warning("Vormonats-Plan nicht ladbar: %s", e)
-        await update.message.reply_text(f"⚠️ Vormonats-Plan nicht ladbar: {e}")
-
-    # ── Urlaub ──────────────────────────────────────────────────
-    try:
-        from app.services.gspread_client import read_abwesenheiten
-        ab_urlaub = read_abwesenheiten(SCHEDULE_URLAUB_SHEET_ID, "Urlaub_CLI")
-        abwesenheiten.extend(ab_urlaub)
-        logger.info("Urlaub geladen: %d Einträge", len(ab_urlaub))
-    except Exception as e:
-        logger.warning("Urlaub laden fehlgeschlagen: %s", e)
-        await update.message.reply_text(f"⚠️ Urlaubsdaten nicht ladbar: {e}")
-
-    # ── Krankenstand aus Sheet ──────────────────────────────────────────
-    if SCHEDULE_KRANK_SHEET_ID:
-        try:
-            from app.services.gspread_client import read_krankenstand
-            ab_krank = read_krankenstand(SCHEDULE_KRANK_SHEET_ID, "Krankenstand")
-            abwesenheiten.extend(ab_krank)
-            if ab_krank:
-                namen_krank = list({a.name for a in ab_krank})
-                await update.message.reply_text(
-                    f"🤒 Krankenstand geladen: {len(ab_krank)} Tage "
-                    f"({', '.join(namen_krank)})"
-                )
-            else:
-                await update.message.reply_text("ℹ️ Kein Krankenstand im Sheet eingetragen.")
-        except Exception as e:
-            logger.warning("Krankenstand laden fehlgeschlagen: %s", e)
-            await update.message.reply_text(f"⚠️ Krankenstand nicht ladbar: {e}")
-
-    # ── Wunschschichten ──────────────────────────────────────────────
-    wunschschichten: list[Wunschschicht] = []
-    try:
-        from app.services.gspread_client import read_wunschschichten
-        wunschschichten = read_wunschschichten(
-            spreadsheet_id=SCHEDULE_WUNSCH_SHEET_ID,
-            tab_name="Formularantworten 1",
-            monat=monat,
-            jahr=jahr,
-            bekannte_namen=bekannte_namen,
-        )
-        if wunschschichten:
-            personen = list({w.name for w in wunschschichten})
-            await update.message.reply_text(
-                f"🙋 {len(wunschschichten)} Wunschschichten von "
-                f"{len(personen)} Personen geladen: {', '.join(personen)}"
-            )
-        else:
-            await update.message.reply_text("ℹ️ Keine Wunschschichten für diesen Monat gefunden.")
-    except Exception as e:
-        logger.warning("Wunschschichten laden fehlgeschlagen: %s", e)
-        await update.message.reply_text(f"⚠️ Wunschschichten nicht ladbar: {e}")
-
-    # ── Plan generieren ───────────────────────────────────────────────
-    try:
-        gen = DienstplanGenerator(
-            mitarbeiter_liste=ma_liste,
-            abwesenheiten=abwesenheiten,
-            jahr=jahr,
-            monat=monat,
-            vormonat_plan=vormonat_plan,
-            wunschschichten=wunschschichten,
-        )
-        plan   = gen.generate()
-        report = gen.get_report()
-        for chunk in _chunk_text(report, 4000):
-            await update.message.reply_text(f"```\n{chunk}\n```", parse_mode="Markdown")
-        context.user_data["gen"]             = gen
-        context.user_data["plan"]            = plan
-        context.user_data["springer_namen"]  = springer_namen
-    except Exception as e:
-        logger.exception("Generierung fehlgeschlagen")
-        await update.message.reply_text(f"❌ Fehler bei der Planerstellung: {e}")
-        return ConversationHandler.END
+    context.user_data["gen"]            = gen
+    context.user_data["plan"]           = gen.plan
+    context.user_data["springer_namen"] = ergebnis.springer_namen
+    context.user_data["ergebnis"]       = ergebnis
 
     keyboard = [["✅ In Google Sheets übertragen", "❌ Abbrechen"]]
     await update.message.reply_text(
@@ -308,6 +170,18 @@ async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE
         reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True),
     )
     return BESTAETIGUNG
+
+
+def _build_wunsch_notizen(gen) -> dict:
+    notizen: dict = {}
+    for ma_name, wuensche in gen._wunsch_index.items():
+        for wdatum, wdienst in wuensche:
+            geplant  = gen.plan.get(ma_name, {}).get(wdatum)
+            erfuellt = (geplant == wdienst)
+            notizen.setdefault(ma_name, []).append(
+                (wdatum, wdienst.value, erfuellt)
+            )
+    return notizen
 
 
 async def handle_bestaetigung(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -318,19 +192,16 @@ async def handle_bestaetigung(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text("⏳ Schreibe in Google Sheets …", reply_markup=ReplyKeyboardRemove())
     try:
         from app.services.gspread_client import write_dienstplan
-        gen             = context.user_data["gen"]
-        plan            = context.user_data["plan"]
-        springer_namen  = context.user_data.get("springer_namen", [])
-        wunsch_notizen  = _build_wunsch_notizen(gen)
+        gen            = context.user_data["gen"]
+        plan           = context.user_data["plan"]
+        springer_namen = context.user_data.get("springer_namen", [])
+        wunsch_notizen = _build_wunsch_notizen(gen)
 
-        # Soll-Stunden aus Generator-States bauen (nur reguläre MA)
         ma_soll = {
             ma.name: gen.states[ma.name].ma.soll_stunden
             for ma in gen.ma_liste
             if not ma.ist_springer
         }
-
-        # Offene Dienste (vollständig, für Springer-Tabelle)
         offen_details = {
             tag: [d.value for d in dienste]
             for tag, dienste in gen.offen.items()

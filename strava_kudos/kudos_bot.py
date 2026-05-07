@@ -198,12 +198,15 @@ def give_kudos_to_feed(session: requests.Session, entries: list) -> tuple:
     kudosed_names = []
 
     for entry in entries:
+        if entry.get("entity") not in ("Activity", None):
+            continue
         act_id = _extract_activity_id(entry)
         if not act_id:
             continue
         act     = entry.get("activity", entry)
-        athlete = act.get("athlete", {}).get("display_name", "?")
-        name    = act.get("name", "Activity")
+        ath     = act.get("athlete") or {}
+        athlete = ath.get("athleteName") or ath.get("display_name") or "?"
+        name    = act.get("activityName") or act.get("name") or "Activity"
 
         if _already_kudosed(entry):
             skipped += 1

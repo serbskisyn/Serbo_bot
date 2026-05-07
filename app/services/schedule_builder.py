@@ -74,7 +74,13 @@ FARBEN: dict[str, str] = {
     Dienst.OFFEN_ND:    "FFC000",
 }
 
+# PFLICHT = Mindestbesetzung pro Tag (Garantie, nicht Deckel!)
 PFLICHT = {Dienst.FRUEH: 2, Dienst.SPAET: 2, Dienst.NACHT: 2}
+
+# MAX_FD_SD_PRO_TAG = Obergrenze für FD/SD im Stunden-Ausgleich (Pass 3).
+# Höher als PFLICHT → erlaubt 3-5 MA auf gleiche Schicht wenn Stunden-Defizit besteht.
+# Equivalent zum manuellen Plan: Mindestbesetzung ≠ Maximalbesetzung.
+MAX_FD_SD_PRO_TAG: int = 5
 
 FEIERTAGE_BERLIN: dict[tuple[int, int], str] = {
     (1,  1):  "Neujahr",
@@ -828,14 +834,20 @@ class DienstplanGenerator:
             if not self.offen.get(tag):
                 self.offen.pop(tag, None)
 
-        # --- Pass 3: Stunden-Ausgleich ---
+        # --- Pass 3: Stunden-Ausgleich (Option B) ---
         self._pass_stunden_ausgleich()
 
     def _pass_stunden_ausgleich(self):
         """
         Pass 3: MA deren Ist-Stunden mehr als 2h unter Soll liegen,
         bekommen auf freien Slots nachträglich Schichten zugewiesen.
-        Tages-Kapazität wird geprüft — max. PFLICHT[FD/SD] pro Tag.
+
+        OPTION B FIX:
+        - PFLICHT[FD/SD] = Mindestbesetzung (bereits in Pass 1 garantiert)
+        - MAX_FD_SD_PRO_TAG = Obergrenze für diesen Pass (default 5)
+        - Damit können bis zu MAX_FD_SD_PRO_TAG MA auf dieselbe Schicht —
+          analog zum manuellen Plan, der ebenfalls >2 MA pro Schichtart setzt.
+        - MA werden nach größtem Stunden-Defizit priorisiert.
         """
         for tag in self.tage:
             bereits_fd = sum(
@@ -859,6 +871,10 @@ class DienstplanGenerator:
             beduerft.sort(key=lambda ma: -self.states[ma.name].stunden_delta)
 
             for ma in beduerft:
+                # Beide Schichtarten bereits am Maximum → Tag voll
+                if bereits_fd >= MAX_FD_SD_PRO_TAG and bereits_sd >= MAX_FD_SD_PRO_TAG:
+                    break
+
                 s = self.states[ma.name]
                 gesamt = s.gesamt_schichten
                 if gesamt == 0:
@@ -871,9 +887,10 @@ class DienstplanGenerator:
                     praeferenz = sorted(ratios, key=lambda d: ratios[d])
 
                 for dienst in praeferenz:
-                    if dienst == Dienst.FRUEH and bereits_fd >= PFLICHT[Dienst.FRUEH]:
+                    # Option B: Deckel ist MAX_FD_SD_PRO_TAG, nicht PFLICHT
+                    if dienst == Dienst.FRUEH and bereits_fd >= MAX_FD_SD_PRO_TAG:
                         continue
-                    if dienst == Dienst.SPAET and bereits_sd >= PFLICHT[Dienst.SPAET]:
+                    if dienst == Dienst.SPAET and bereits_sd >= MAX_FD_SD_PRO_TAG:
                         continue
                     if self._kann_dienst(ma.name, tag, dienst, locker=True):
                         self._setze_dienst(ma.name, tag, dienst)
@@ -953,7 +970,7 @@ class DienstplanGenerator:
                 vortag_d = (
                     self.plan[ma.name].get(vortag)
                     if vortag >= self.tage[0]
-                    else self.states[ma.name].vormonat_letzter
+                    else self.states[ma_name].vormonat_letzter
                 )
                 if vortag_d == Dienst.SPAET and self.plan[ma.name].get(tag) == Dienst.FRUEH:
                     self.violations.append(

@@ -1,4 +1,5 @@
 import io
+import asyncio
 import logging
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -13,6 +14,9 @@ from app.agents.runner import run as agent_run
 from app.agents.football_news_agent import fetch_news_for_user
 from app.bot.schedule_dialog import get_schedule_handler
 from app.bot.debug_handler import get_debug_handler
+from strava_kudos.kudos_bot import (
+    load_session_cookie, build_session, check_session, get_feed, give_kudos_to_feed
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +77,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/forget — Mein Gedächtnis löschen\n"
         f"/news — Aktuelle News deiner Lieblingsclubs\n"
         f"/news fresh — News sofort neu laden (Live-Fetch)\n"
+        f"/strava — Strava Kudos an alle Aktivitäten im Feed vergeben\n"
         f"/dienstplan — Dienstplan erstellen\n"
         f"/debugwunsch — Sheet-Struktur prüfen (Diagnose)"
     )
@@ -129,6 +134,63 @@ async def news_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown",
                 disable_web_page_preview=True,
             )
+
+
+async def strava_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_allowed(user_id):
+        await update.message.reply_text("⛔ Kein Zugriff.")
+        return
+
+    await update.message.reply_text("🏃 Starte Strava Kudos-Bot…")
+
+    def _run_kudos() -> str:
+        from datetime import datetime
+        cookie = load_session_cookie()
+        if not cookie:
+            return (
+                "❌ Kein Session-Cookie gefunden.\n"
+                "Einmalig ausführen:\n"
+                "  python kudos_bot.py --set-session <_strava4_session-Cookie-Wert>"
+            )
+        session = build_session(cookie)
+        ts = datetime.now().strftime("%d.%m.%Y %H:%M")
+        if not check_session(session):
+            return (
+                f"🔒 Session abgelaufen ({ts}).\n"
+                "Cookie erneuern:\n"
+                "  python kudos_bot.py --set-session <neuer_cookie_wert>"
+            )
+        entries = get_feed(session)
+        total = len(entries)
+        if not entries:
+            return f"🏃 Strava Kudos – {ts}\n\n📢 Feed leer – nichts Neues."
+        given, skipped, errors, names = give_kudos_to_feed(session, entries)
+        lines = [
+            f"🏃 Strava Kudos – {ts}",
+            "",
+            f"📄 Feed: {total} Aktivitäten",
+            f"👍 Kudos gegeben: {given}",
+            f"⏭ Übersprungen: {skipped}",
+        ]
+        if errors:
+            lines.append(f"❌ Fehler: {errors}")
+        if names:
+            lines.append("")
+            lines.append("🏅 Geliked:")
+            for n in names[:10]:
+                lines.append(f"  • {n}")
+            if len(names) > 10:
+                lines.append(f"  … und {len(names) - 10} weitere")
+        return "\n".join(lines)
+
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(None, _run_kudos)
+    except Exception as e:
+        logger.exception("Strava Kudos Fehler")
+        result = f"❌ Fehler beim Ausführen des Kudos-Bots: {e}"
+
+    await update.message.reply_text(result)
 
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -194,6 +256,7 @@ def register_handlers(application):
     application.add_handler(CommandHandler("memory", memory_handler))
     application.add_handler(CommandHandler("forget", forget_handler))
     application.add_handler(CommandHandler("news", news_handler))
+    application.add_handler(CommandHandler("strava", strava_handler))
     application.add_handler(MessageHandler(filters.VOICE, voice_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 

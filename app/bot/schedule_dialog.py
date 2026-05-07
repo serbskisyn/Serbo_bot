@@ -330,6 +330,12 @@ async def handle_bestaetigung(update: Update, context: ContextTypes.DEFAULT_TYPE
             if not ma.ist_springer
         }
 
+        # Offene Dienste (vollständig, für Springer-Tabelle)
+        offen_details = {
+            tag: [d.value for d in dienste]
+            for tag, dienste in gen.offen.items()
+        }
+
         tab = write_dienstplan(
             spreadsheet_id=SCHEDULE_OUTPUT_SHEET_ID,
             plan=plan,
@@ -338,6 +344,7 @@ async def handle_bestaetigung(update: Update, context: ContextTypes.DEFAULT_TYPE
             wunsch_notizen=wunsch_notizen,
             ma_soll=ma_soll,
             springer=springer_namen,
+            offen_details=offen_details,
         )
         await update.message.reply_text(
             f"✅ Dienstplan in Tab *{tab}* geschrieben!\n"

@@ -19,7 +19,7 @@ Regeln (harte Regeln = [H], weiche Regeln = [W]):
 - [H] Nach einem vollständigen Nachtblock (>= 3 Nächte): mind. 2 Pflicht-Freitags
 - [H] Innerhalb eines Nachtblocks darf keine andere Schichtart eingeplant werden
 - [H] MA mit laufendem Nachtblock MÜSSEN diesen fortsetzen (Block-Vollendung)
-- [H] Mindestens ein freies Wochenende pro Monat (Sa+So beide frei)
+- [H] Mindestens MIN_FREIE_WOCHENENDEN freie Wochenenden pro Monat (Sa+So beide frei)
 - [W] Fairness: Gleichmäßige Verteilung aller Schichtarten über alle MA
 - [W] Gleichmäßige Verteilung der Nachtblöcke über alle MA
 """
@@ -81,6 +81,11 @@ PFLICHT = {Dienst.FRUEH: 2, Dienst.SPAET: 2, Dienst.NACHT: 2}
 # Höher als PFLICHT → erlaubt 3-5 MA auf gleiche Schicht wenn Stunden-Defizit besteht.
 # Equivalent zum manuellen Plan: Mindestbesetzung ≠ Maximalbesetzung.
 MAX_FD_SD_PRO_TAG: int = 5
+
+# FIX 1: Mindestanzahl freier Wochenenden pro MA pro Monat.
+# WE-Schutz greift NUR wenn MA noch < MIN_FREIE_WOCHENENDEN gesichert hat
+# UND kein anderes WE im Monat mehr rettbar ist.
+MIN_FREIE_WOCHENENDEN: int = 1
 
 FEIERTAGE_BERLIN: dict[tuple[int, int], str] = {
     (1,  1):  "Neujahr",
@@ -323,13 +328,18 @@ class DienstplanGenerator:
         return tag in self._nacht_puffer[ma_name]
 
     def _setze_nacht_puffer(self, ma_name: str, ab_tag: date):
-        """Setzt 2 Pflicht-Freitags nach Nachtblock-Ende."""
+        """
+        FIX 2: Setzt 2 Pflicht-Freitags nach Nachtblock-Ende —
+        aber NUR auf Slots die noch leer (None) sind.
+        Bereits als FREI markierte Slots (z.B. durch WE-Schutz) werden
+        nicht doppelt gesperrt, damit keine Doppel-Sperrungen entstehen.
+        """
         for offset in range(1, NACHT_PUFFER_TAGE + 1):
             p_tag = ab_tag + timedelta(days=offset - 1)
             if p_tag > self.tage[-1]:
                 break
             self._nacht_puffer[ma_name].add(p_tag)
-            # Slot überschreiben falls noch leer
+            # FIX 2: Slot nur überschreiben wenn noch wirklich leer
             if self.plan[ma_name].get(p_tag) is None:
                 self.plan[ma_name][p_tag] = Dienst.FREI
 
@@ -340,15 +350,42 @@ class DienstplanGenerator:
             return self.states[ma_name].vormonat_letzter == Dienst.NACHT
         return self.plan[ma_name].get(vortag) == Dienst.NACHT
 
+    def _zaehle_gesicherte_freie_we(self, ma_name: str, bis_exkl: date) -> int:
+        """
+        Zählt vollständige freie Wochenenden (Sa+So beide nicht Arbeit)
+        die bereits in der Vergangenheit (vor bis_exkl) gesichert sind.
+        Ein WE gilt als gesichert wenn beide Tage NICHT in ARBEITSDIENSTE fallen
+        (also FREI, None, Urlaub, Krank etc.).
+        """
+        count = 0
+        for t in self.tage:
+            if t.weekday() == 5 and t < bis_exkl:
+                so = t + timedelta(days=1)
+                if so > self.tage[-1]:
+                    continue
+                sa_d = self.plan[ma_name].get(t)
+                so_d = self.plan[ma_name].get(so)
+                # Weder Sa noch So darf ein Arbeitsdienst sein
+                if (sa_d not in self.ARBEITSDIENSTE and
+                        so_d not in self.ARBEITSDIENSTE):
+                    count += 1
+        return count
+
     def _wochenende_muss_frei_sein(self, ma_name: str, tag: date) -> bool:
         """
-        [H] Schützt das letzte noch mögliche freie Wochenende im Monat.
+        FIX 1: [H] WE-Schutz mit MIN_FREIE_WOCHENENDEN als Parameter.
 
-        Gibt True zurück (= Slot sperren) wenn:
+        Gibt True zurück (= Slot sperren) wenn ALLE folgenden Bedingungen zutreffen:
         1. 'tag' ist ein Samstag oder Sonntag
-        2. Der MA hat noch kein vollständiges freies WE (Sa+So beide frei)
-        3. Es gibt kein anderes WE im Monat mehr das noch frei werden könnte
-           (d.h. beide Tage noch nicht belegt mit Arbeitsdienst)
+        2. MA hat bisher weniger als MIN_FREIE_WOCHENENDEN gesicherte freie WE
+        3. Dieses WE ist das LETZTE noch rettbare freie WE im Monat
+           (kein anderes zukünftiges WE hat noch beide Tage ohne Arbeitsdienst)
+
+        Wichtige Änderung gegenüber Vorgängerversion:
+        - Alte Logik sperrte alle WE ab dem ersten "letzten möglichen" →
+          blockierte 5-8 Tage/MA zu viel
+        - Neue Logik: WE wird nur gesperrt wenn es das EINZIG VERBLIEBENE
+          rettbare WE ist UND das Soll noch nicht erfüllt ist
         """
         if tag.weekday() not in (5, 6):
             return False
@@ -357,30 +394,25 @@ class DienstplanGenerator:
         sa_dieses_we = tag if tag.weekday() == 5 else tag - timedelta(days=1)
         so_dieses_we = sa_dieses_we + timedelta(days=1)
 
-        # Hat MA bereits ein vollständiges freies WE in der Vergangenheit?
-        for t in self.tage:
-            if t.weekday() == 5 and t < sa_dieses_we:
-                so = t + timedelta(days=1)
-                if so <= self.tage[-1]:
-                    sa_d = self.plan[ma_name].get(t)
-                    so_d = self.plan[ma_name].get(so)
-                    if (sa_d not in self.ARBEITSDIENSTE and
-                            so_d not in self.ARBEITSDIENSTE):
-                        return False  # Bereits ein freies WE gesichert
+        # Bereits genug freie WE gesichert?
+        bereits_gesichert = self._zaehle_gesicherte_freie_we(ma_name, sa_dieses_we)
+        if bereits_gesichert >= MIN_FREIE_WOCHENENDEN:
+            return False  # Soll bereits erfüllt, kein Schutz nötig
 
         # Gibt es ein zukünftiges WE (nach diesem) das noch komplett frei werden kann?
         for t in self.tage:
             if t.weekday() == 5 and t > sa_dieses_we:
                 so = t + timedelta(days=1)
-                if so <= self.tage[-1]:
-                    sa_d = self.plan[ma_name].get(t)
-                    so_d = self.plan[ma_name].get(so)
-                    # Beide Tage noch nicht mit Arbeitsdienst belegt?
-                    if (sa_d not in self.ARBEITSDIENSTE and
-                            so_d not in self.ARBEITSDIENSTE):
-                        return False  # Zukünftiges WE noch rettbar
+                if so > self.tage[-1]:
+                    continue
+                sa_d = self.plan[ma_name].get(t)
+                so_d = self.plan[ma_name].get(so)
+                # Beide Tage noch nicht mit Arbeitsdienst belegt?
+                if (sa_d not in self.ARBEITSDIENSTE and
+                        so_d not in self.ARBEITSDIENSTE):
+                    return False  # Zukünftiges WE noch rettbar → dieses freigeben
 
-        # Kein freies WE bisher und kein anderes mehr möglich → dieses WE schützen
+        # Dieses WE ist das letzte rettbare UND Soll noch nicht erfüllt → sperren
         return True
 
     def _kann_frueh(self, ma_name: str, tag: date, locker: bool = False) -> bool:
@@ -401,7 +433,7 @@ class DienstplanGenerator:
         # [H] Kein FD während aktiven Nachtblocks
         if self._ist_in_aktivem_nacht_block(ma_name, tag):
             return False
-        # [H] WE-Schutz: letztes mögliches freies Wochenende nicht belegen
+        # [H] WE-Schutz: nur letztes mögliches freies Wochenende sperren
         if self._wochenende_muss_frei_sein(ma_name, tag):
             return False
         # [W] Max 3 FD in Folge (im lockeren Modus bis 4)
@@ -419,7 +451,7 @@ class DienstplanGenerator:
         # [H] Kein SD während aktiven Nachtblocks
         if self._ist_in_aktivem_nacht_block(ma_name, tag):
             return False
-        # [H] WE-Schutz: letztes mögliches freies Wochenende nicht belegen
+        # [H] WE-Schutz: nur letztes mögliches freies Wochenende sperren
         if self._wochenende_muss_frei_sein(ma_name, tag):
             return False
         # [W] Max 3 SD in Folge (im lockeren Modus bis 4)
@@ -970,7 +1002,7 @@ class DienstplanGenerator:
                 vortag_d = (
                     self.plan[ma.name].get(vortag)
                     if vortag >= self.tage[0]
-                    else self.states[ma_name].vormonat_letzter
+                    else self.states[ma.name].vormonat_letzter
                 )
                 if vortag_d == Dienst.SPAET and self.plan[ma.name].get(tag) == Dienst.FRUEH:
                     self.violations.append(

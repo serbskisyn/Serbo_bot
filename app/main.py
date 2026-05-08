@@ -13,6 +13,7 @@ from app.bot.handlers import (
     error_handler, reset_handler, memory_handler, forget_handler,
     news_handler, strava_handler, claude_handler, claudex_handler,
     ja_handler, nein_handler, health_handler,
+    termine_handler, kalender1_handler, kalender2_handler,
 )
 from app.services.news_cache import start_background_scheduler
 from app.bot.schedule_dialog import get_schedule_handler
@@ -21,6 +22,7 @@ from app.bot.daily_news_job import register_daily_news_job
 from app.bot.bot_context import set_bot
 from app.bot.session_summary import create_daily_summaries
 from app.services.health_check import send_daily_health_check
+from app.bot.gcal_reminder_job import register_gcal_reminder_job
 
 _BERLIN = ZoneInfo("Europe/Berlin")
 
@@ -51,6 +53,8 @@ async def _post_init(application) -> None:
     )
     logger.info("Daily Session Summaries registriert: %02d:%02d Europe/Berlin", SESSION_SUMMARY_HOUR, SESSION_SUMMARY_MINUTE)
 
+    register_gcal_reminder_job(application)
+
 
 def main():
     setup_logging()
@@ -77,7 +81,10 @@ def main():
     app.add_handler(CommandHandler("claudex", claudex_handler))
     app.add_handler(CommandHandler("ja",      ja_handler))
     app.add_handler(CommandHandler("nein",    nein_handler))
-    app.add_handler(CommandHandler("health",  health_handler))
+    app.add_handler(CommandHandler("health",    health_handler))
+    app.add_handler(CommandHandler("termine",   termine_handler))
+    app.add_handler(CommandHandler("kalender1", kalender1_handler))
+    app.add_handler(CommandHandler("kalender2", kalender2_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_handler(MessageHandler(filters.VOICE, voice_handler))
     app.add_error_handler(error_handler)

@@ -85,6 +85,14 @@ SESSION_SUMMARY_MIN_MESSAGES: int = int(os.getenv("SESSION_SUMMARY_MIN_MESSAGES"
 HEALTH_CHECK_HOUR: int = int(os.getenv("HEALTH_CHECK_HOUR", 7))
 HEALTH_CHECK_MINUTE: int = int(os.getenv("HEALTH_CHECK_MINUTE", 0))
 
+# ── Google Calendar ───────────────────────────────────────────────────────────
+GCAL_TOKEN_1: str = os.getenv("GCAL_TOKEN_1", "")           # Gmail token path
+GCAL_TOKEN_2: str = os.getenv("GCAL_TOKEN_2", "")           # Workspace token path
+GCAL_CALENDAR_ID_1: str = os.getenv("GCAL_CALENDAR_ID_1", "primary")
+GCAL_CALENDAR_ID_2: str = os.getenv("GCAL_CALENDAR_ID_2", "primary")
+GCAL_REMINDER_MINUTES: int = int(os.getenv("GCAL_REMINDER_MINUTES", "15"))
+GCAL_CHECK_INTERVAL_MINUTES: int = int(os.getenv("GCAL_CHECK_INTERVAL_MINUTES", "5"))
+
 
 def validate_config():
     missing = []

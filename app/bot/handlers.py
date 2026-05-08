@@ -8,10 +8,11 @@ from app.services.speech_to_text import transcribe_voice
 from app.security.injection_guard import is_injection_async
 from app.security.rate_limiter import is_rate_limited
 from app.bot.conversation import get_history, add_message, clear_history
-from app.bot.memory import add_direct, add_indirect, get_memory_prompt, clear_memory, format_memory_overview
+from app.bot.memory import add_direct, add_indirect, clear_memory, format_memory_overview
 from app.bot.whitelist import is_allowed
 from app.agents.runner import run as agent_run
 from app.agents.football_news_agent import fetch_news_for_user
+from app.services.claude_runner import run_claude, run_claude_agent
 from app.bot.schedule_dialog import get_schedule_handler
 from app.bot.debug_handler import get_debug_handler
 from strava_kudos.kudos_bot import (
@@ -78,6 +79,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/news — Aktuelle News deiner Lieblingsclubs\n"
         f"/news fresh — News sofort neu laden (Live-Fetch)\n"
         f"/strava — Strava Kudos an alle Aktivitäten im Feed vergeben\n"
+        f"/claude <Anfrage> — Claude Code CLI (nur Text)\n"
+        f"/claudex <Aufgabe> — Claude Agent mit Tool-Zugriff (Dateien, Git)\n"
         f"/dienstplan — Dienstplan erstellen\n"
         f"/debugwunsch — Sheet-Struktur prüfen (Diagnose)"
     )
@@ -193,6 +196,53 @@ async def strava_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(result)
 
 
+async def claude_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_allowed(user_id):
+        await update.message.reply_text("⛔ Kein Zugriff.")
+        return
+
+    limited, retry_after = is_rate_limited(user_id)
+    if limited:
+        await update.message.reply_text(f"⏳ Zu viele Nachrichten. Bitte {retry_after}s warten.")
+        return
+
+    prompt = " ".join(context.args or []).strip()
+    if not prompt:
+        await update.message.reply_text("Verwendung: /claude <deine Anfrage>")
+        return
+
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    result = await run_claude(prompt)
+
+    for chunk in _split_message(result):
+        await update.message.reply_text(chunk)
+
+
+async def claudex_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_allowed(user_id):
+        await update.message.reply_text("⛔ Kein Zugriff.")
+        return
+
+    limited, retry_after = is_rate_limited(user_id)
+    if limited:
+        await update.message.reply_text(f"⏳ Zu viele Nachrichten. Bitte {retry_after}s warten.")
+        return
+
+    prompt = " ".join(context.args or []).strip()
+    if not prompt:
+        await update.message.reply_text("Verwendung: /claudex <Aufgabe>\n\nClaude hat vollen Tool-Zugriff: Dateien lesen/schreiben, Git, Bash.")
+        return
+
+    await update.message.reply_text("🤖 Claude Agent läuft…")
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    result = await run_claude_agent(prompt)
+
+    for chunk in _split_message(result):
+        await update.message.reply_text(chunk)
+
+
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_text = update.message.text
@@ -247,19 +297,5 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _process_message(user_id, text, update, context)
 
 
-def register_handlers(application):
-    from telegram.ext import CommandHandler, MessageHandler, filters
-    application.add_handler(get_schedule_handler())
-    application.add_handler(get_debug_handler())          # /debugwunsch
-    application.add_handler(CommandHandler("start", start_handler))
-    application.add_handler(CommandHandler("reset", reset_handler))
-    application.add_handler(CommandHandler("memory", memory_handler))
-    application.add_handler(CommandHandler("forget", forget_handler))
-    application.add_handler(CommandHandler("news", news_handler))
-    application.add_handler(CommandHandler("strava", strava_handler))
-    application.add_handler(MessageHandler(filters.VOICE, voice_handler))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-
 async def error_handler(update, context):
-    import logging
-    logging.getLogger(__name__).error("Error: %s", context.error, exc_info=context.error)
+    logger.error("Error: %s", context.error, exc_info=context.error)

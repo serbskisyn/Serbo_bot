@@ -2,9 +2,7 @@
   "_comment": "Club-Konfiguration fuer den News Bot. Felder: aliases (Keyword-Matching), feeds (RSS-URLs), exclude_keywords (Rauschfilter).",
   "borussia dortmund": {
     "aliases": ["bvb", "dortmund"],
-    "feeds": [
-      "https://www.transfermarkt.de/borussia-dortmund/rss/verein/16"
-    ],
+    "feeds": [],
     "exclude_keywords": [
       "bvb ii", "bvb 2", "dortmund ii", "dortmund 2",
       "u23", "u21", "u19", "u17", "nachwuchs", "jugend",
@@ -14,81 +12,59 @@
       "3. liga", "dritte liga", "regionalliga"
     ]
   },
-  "fc bayern m\u00fcnchen": {
+  "fc bayern münchen": {
     "aliases": ["bayern", "fcb", "fc bayern"],
-    "feeds": [
-      "https://www.transfermarkt.de/fc-bayern-munchen/rss/verein/27"
-    ],
+    "feeds": [],
     "exclude_keywords": []
   },
   "rb leipzig": {
     "aliases": ["leipzig", "rbl"],
-    "feeds": [
-      "https://www.transfermarkt.de/rb-leipzig/rss/verein/23826"
-    ],
+    "feeds": [],
     "exclude_keywords": []
   },
   "bayer leverkusen": {
     "aliases": ["leverkusen"],
-    "feeds": [
-      "https://www.transfermarkt.de/bayer-04-leverkusen/rss/verein/15"
-    ],
+    "feeds": [],
     "exclude_keywords": []
   },
   "eintracht frankfurt": {
     "aliases": ["frankfurt", "sge"],
-    "feeds": [
-      "https://www.transfermarkt.de/eintracht-frankfurt/rss/verein/24"
-    ],
+    "feeds": [],
     "exclude_keywords": []
   },
   "vfb stuttgart": {
     "aliases": ["stuttgart", "vfb"],
-    "feeds": [
-      "https://www.transfermarkt.de/vfb-stuttgart/rss/verein/79"
-    ],
+    "feeds": [],
     "exclude_keywords": []
   },
   "sc freiburg": {
     "aliases": ["freiburg"],
-    "feeds": [
-      "https://www.transfermarkt.de/sport-club-freiburg/rss/verein/17"
-    ],
+    "feeds": [],
     "exclude_keywords": []
   },
   "real madrid": {
     "aliases": ["real madrid", "madrid"],
-    "feeds": [
-      "https://www.transfermarkt.de/real-madrid/rss/verein/418"
-    ],
+    "feeds": [],
     "exclude_keywords": []
   },
   "fc barcelona": {
     "aliases": ["barcelona", "barca"],
-    "feeds": [
-      "https://www.transfermarkt.de/fc-barcelona/rss/verein/131"
-    ],
+    "feeds": [],
     "exclude_keywords": []
   },
   "manchester city": {
     "aliases": ["man city", "city"],
-    "feeds": [
-      "https://www.transfermarkt.de/manchester-city/rss/verein/281"
-    ],
+    "feeds": [],
     "exclude_keywords": []
   },
   "manchester united": {
     "aliases": ["man united", "united", "man utd"],
-    "feeds": [
-      "https://www.transfermarkt.de/manchester-united/rss/verein/985"
-    ],
+    "feeds": [],
     "exclude_keywords": []
   },
   "liverpool fc": {
     "aliases": ["liverpool"],
-    "feeds": [
-      "https://www.transfermarkt.de/fc-liverpool/rss/verein/31"
-    ],
+    "feeds": [],
     "exclude_keywords": []
   },
   "dynamo dresden": {
@@ -99,7 +75,7 @@
     ],
     "exclude_keywords": []
   },
-  "borussia m\u00f6nchengladbach": {
+  "borussia mönchengladbach": {
     "aliases": ["gladbach", "bmg"],
     "feeds": [],
     "exclude_keywords": []

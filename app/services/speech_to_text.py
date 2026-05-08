@@ -15,7 +15,7 @@ def get_whisper_model():
         logger.info("Whisper-Modell geladen.")
     return _whisper_model
 
-async def transcribe_voice(ogg_bytes: bytes) -> str:
+async def transcribe_voice(ogg_bytes: bytes) -> str | None:
     try:
         from pydub import AudioSegment  # lazy import
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -5,7 +5,7 @@ from app.utils.logging_setup import setup_logging
 from app.bot.handlers import (
     start_handler, text_handler, voice_handler,
     error_handler, reset_handler, memory_handler, forget_handler,
-    news_handler, strava_handler
+    news_handler, strava_handler, claude_handler, claudex_handler
 )
 from app.services.news_cache import start_background_scheduler
 from app.bot.schedule_dialog import get_schedule_handler
@@ -44,6 +44,8 @@ def main():
     app.add_handler(CommandHandler("forget", forget_handler))
     app.add_handler(CommandHandler("news",   news_handler))
     app.add_handler(CommandHandler("strava", strava_handler))
+    app.add_handler(CommandHandler("claude", claude_handler))
+    app.add_handler(CommandHandler("claudex", claudex_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_handler(MessageHandler(filters.VOICE, voice_handler))
     app.add_error_handler(error_handler)

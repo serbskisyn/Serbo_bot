@@ -55,7 +55,6 @@ RSS_FEEDS = [
     ("spox.com",        "https://feeds.feedburner.com/spox-sport/"),
     ("spiegel.de",      "https://www.spiegel.de/sport/fussball/index.rss"),
     ("sueddeutsche.de", "https://rss.sueddeutsche.de/rss/Sport"),
-    ("transfermarkt.de","https://www.transfermarkt.de/rss/news"),
 ]
 
 
@@ -286,6 +285,9 @@ def _parse_feed(
 ) -> list[NewsItem]:
     items = []
     is_google_feed = source_name == "Google News"
+    if not xml_text or not xml_text.strip():
+        logger.warning(f"RSS Feed leer ({source_name}): leere Antwort")
+        return []
     try:
         root    = ET.fromstring(xml_text)
         channel = root.find("channel") or root

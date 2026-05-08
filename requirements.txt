@@ -8,3 +8,4 @@ aiosqlite==0.21.0
 langgraph-checkpoint-sqlite==2.0.10
 matplotlib==3.9.2
 tavily-python==0.5.0
+edge-tts>=6.1.10

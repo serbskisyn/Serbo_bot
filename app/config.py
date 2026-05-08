@@ -10,6 +10,7 @@ BOT_NAME           = os.getenv("BOT_NAME", "MeinAgent")
 LOG_LEVEL          = os.getenv("LOG_LEVEL", "INFO")
 TAVILY_API_KEY     = os.getenv("TAVILY_API_KEY")
 GNEWS_API_KEY      = os.getenv("GNEWS_API_KEY", "")
+BRAVE_API_KEY      = os.getenv("BRAVE_API_KEY", "")
 
 ALLOWED_USER_IDS: set[int] = set(
     int(x) for x in os.getenv("ALLOWED_USER_IDS", "").split(",") if x.strip()
@@ -69,6 +70,20 @@ SCHEDULE_KRANK_SHEET_ID = os.getenv(
 SCHEDULE_OUTPUT_SHEET_ID = os.getenv(
     "SCHEDULE_OUTPUT_SHEET_ID", "1nMF24sf-HNvgJRMvQeZ3lTSf6qiGTvsHXedWjFpckkQ"
 )
+
+
+# ── TTS ──────────────────────────────────────────────────────────────────────
+TTS_ENABLED: bool = os.getenv("TTS_ENABLED", "true").lower() == "true"
+TTS_VOICE: str = os.getenv("TTS_VOICE", "de-DE-KatjaNeural")
+
+# ── Session Summaries ─────────────────────────────────────────────────────────
+SESSION_SUMMARY_HOUR: int = int(os.getenv("SESSION_SUMMARY_HOUR", 23))
+SESSION_SUMMARY_MINUTE: int = int(os.getenv("SESSION_SUMMARY_MINUTE", 0))
+SESSION_SUMMARY_MIN_MESSAGES: int = int(os.getenv("SESSION_SUMMARY_MIN_MESSAGES", 6))
+
+# ── Health Check ──────────────────────────────────────────────────────────────
+HEALTH_CHECK_HOUR: int = int(os.getenv("HEALTH_CHECK_HOUR", 7))
+HEALTH_CHECK_MINUTE: int = int(os.getenv("HEALTH_CHECK_MINUTE", 0))
 
 
 def validate_config():

@@ -1,10 +1,12 @@
 import io
 import asyncio
 import logging
+from collections import deque
 from telegram import Update
 from telegram.ext import ContextTypes
 from app.services.openrouter_client import extract_facts
 from app.services.speech_to_text import transcribe_voice
+from app.services.tts import synthesize as tts_synthesize
 from app.security.injection_guard import is_injection_async
 from app.security.rate_limiter import is_rate_limited
 from app.bot.conversation import get_history, add_message, clear_history
@@ -13,17 +15,26 @@ from app.bot.whitelist import is_allowed
 from app.agents.runner import run as agent_run
 from app.agents.football_news_agent import fetch_news_for_user
 from app.services.claude_runner import run_claude, run_claude_agent
+from app.services.health_check import run_health_check
 from app.bot.schedule_dialog import get_schedule_handler
 from app.bot.debug_handler import get_debug_handler
+from app.config import TTS_ENABLED, TTS_VOICE
 from strava_kudos.kudos_bot import (
     load_session_cookie, build_session, check_session, get_feed, give_kudos_to_feed
 )
 
 logger = logging.getLogger(__name__)
 
+MAX_INPUT_CHARS = 2000
+
+# Punkt 3: Telegram-Retry-Schutz — bereits gesehene update_ids
+_seen_update_ids: deque[int] = deque(maxlen=200)
+
+# Punkt 7: HITL-Bestätigung für /claudex
+_claudex_pending: dict[int, str] = {}
+
 
 def _split_message(text: str, limit: int = 4000) -> list[str]:
-    """Splittet langen Text an Zeilenumbruechen unter dem Limit."""
     if len(text) <= limit:
         return [text]
     chunks = []
@@ -42,7 +53,7 @@ def _split_message(text: str, limit: int = 4000) -> list[str]:
     return chunks
 
 
-async def _process_message(user_id: int, text: str, update: Update, context) -> None:
+async def _process_message(user_id: int, text: str, update: Update, context) -> str | None:
     history = get_history(user_id)
     result = await agent_run(user_id, text, history)
 
@@ -51,7 +62,7 @@ async def _process_message(user_id: int, text: str, update: Update, context) -> 
         add_message(user_id, "user", text)
         add_message(user_id, "assistant", "[Chart generiert]")
         await update.message.reply_photo(photo=io.BytesIO(png_bytes))
-        return
+        return None
 
     response = result if isinstance(result, str) else result.get("response", "")
     add_message(user_id, "user", text)
@@ -62,6 +73,7 @@ async def _process_message(user_id: int, text: str, update: Update, context) -> 
     for fact in facts.get("indirect", []):
         add_indirect(user_id, fact)
     await update.message.reply_text(response)
+    return response
 
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -81,6 +93,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/strava — Strava Kudos an alle Aktivitäten im Feed vergeben\n"
         f"/claude <Anfrage> — Claude Code CLI (nur Text)\n"
         f"/claudex <Aufgabe> — Claude Agent mit Tool-Zugriff (Dateien, Git)\n"
+        f"/health — System-Status prüfen\n"
         f"/dienstplan — Dienstplan erstellen\n"
         f"/debugwunsch — Sheet-Struktur prüfen (Diagnose)"
     )
@@ -127,7 +140,6 @@ async def news_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
-    # fetch_news_for_user gibt list[str] zurück — ein Block pro Verein
     blocks: list[str] = await fetch_news_for_user(user_id, force_refresh=force_refresh)
 
     for block in blocks:
@@ -220,6 +232,7 @@ async def claude_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def claudex_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Punkt 7: Zeigt HITL-Bestätigung bevor Claude mit vollen Tools läuft."""
     user_id = update.effective_user.id
     if not is_allowed(user_id):
         await update.message.reply_text("⛔ Kein Zugriff.")
@@ -232,21 +245,62 @@ async def claudex_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     prompt = " ".join(context.args or []).strip()
     if not prompt:
-        await update.message.reply_text("Verwendung: /claudex <Aufgabe>\n\nClaude hat vollen Tool-Zugriff: Dateien lesen/schreiben, Git, Bash.")
+        await update.message.reply_text(
+            "Verwendung: /claudex <Aufgabe>\n\nClaude hat vollen Tool-Zugriff: Dateien lesen/schreiben, Git, Bash."
+        )
         return
 
+    _claudex_pending[user_id] = prompt
+    preview = prompt[:300] + ("…" if len(prompt) > 300 else "")
+    await update.message.reply_text(
+        f"🤖 *Claude Agent soll ausführen:*\n\n`{preview}`\n\n"
+        "Bestätigen mit /ja — Abbrechen mit /nein",
+        parse_mode="Markdown",
+    )
+
+
+async def ja_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_allowed(user_id):
+        return
+    prompt = _claudex_pending.pop(user_id, None)
+    if not prompt:
+        await update.message.reply_text("Nichts zu bestätigen.")
+        return
     await update.message.reply_text("🤖 Claude Agent läuft…")
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     result = await run_claude_agent(prompt)
-
     for chunk in _split_message(result):
         await update.message.reply_text(chunk)
 
 
+async def nein_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    _claudex_pending.pop(user_id, None)
+    await update.message.reply_text("❌ Abgebrochen.")
+
+
+async def health_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_allowed(user_id):
+        await update.message.reply_text("⛔ Kein Zugriff.")
+        return
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    report = await run_health_check()
+    await update.message.reply_text(report, parse_mode="Markdown")
+
+
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    user_text = update.message.text
+    user_text = update.message.text or ""
     logger.info("Textnachricht von User %d", user_id)
+
+    # Punkt 3: Dedup
+    uid = update.update_id
+    if uid in _seen_update_ids:
+        logger.debug("Doppelte update_id %d ignoriert", uid)
+        return
+    _seen_update_ids.append(uid)
 
     if not is_allowed(user_id):
         logger.warning("Unauthorized user | user=%d", user_id)
@@ -257,6 +311,12 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if limited:
         logger.warning("Rate limit exceeded | user=%d", user_id)
         await update.message.reply_text(f"⏳ Zu viele Nachrichten. Bitte {retry_after}s warten.")
+        return
+
+    # Punkt 2: Null-Byte-Strip + Längen-Limit
+    user_text = user_text.replace("\x00", "").strip()
+    if len(user_text) > MAX_INPUT_CHARS:
+        await update.message.reply_text(f"⚠️ Nachricht zu lang (max {MAX_INPUT_CHARS} Zeichen).")
         return
 
     if await is_injection_async(user_text):
@@ -271,6 +331,13 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info("Sprachnachricht von User %d", user_id)
+
+    # Punkt 3: Dedup
+    uid = update.update_id
+    if uid in _seen_update_ids:
+        logger.debug("Doppelte update_id %d ignoriert", uid)
+        return
+    _seen_update_ids.append(uid)
 
     if not is_allowed(user_id):
         await update.message.reply_text("⛔ Kein Zugriff.")
@@ -292,9 +359,29 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Transkription fehlgeschlagen: {e}")
         return
 
+    if not text:
+        await update.message.reply_text("❌ Transkription leer.")
+        return
+
+    # Punkt 2: Längen-Limit
+    text = text.replace("\x00", "").strip()
+    if len(text) > MAX_INPUT_CHARS:
+        text = text[:MAX_INPUT_CHARS]
+
     await update.message.reply_text(f"🎤 Transkribiert: _{text}_", parse_mode="Markdown")
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-    await _process_message(user_id, text, update, context)
+
+    # Punkt 5: TTS — Antwort generieren und als Audio zurückschicken
+    response = await _process_message(user_id, text, update, context)
+    if TTS_ENABLED and response:
+        audio_bytes = await tts_synthesize(response, voice=TTS_VOICE)
+        if audio_bytes:
+            await update.message.reply_audio(
+                audio=io.BytesIO(audio_bytes),
+                filename="antwort.mp3",
+                read_timeout=30,
+                write_timeout=30,
+            )
 
 
 async def error_handler(update, context):

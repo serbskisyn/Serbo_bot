@@ -1,3 +1,4 @@
+import httpx
 import logging
 from tavily import AsyncTavilyClient
 from app import config
@@ -5,11 +6,37 @@ from app import config
 logger = logging.getLogger(__name__)
 
 
+async def _search_brave(query: str, max_results: int) -> list[dict]:
+    if not config.BRAVE_API_KEY:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                params={"q": query, "count": max_results},
+                headers={
+                    "Accept": "application/json",
+                    "Accept-Encoding": "gzip",
+                    "X-Subscription-Token": config.BRAVE_API_KEY,
+                },
+            )
+            r.raise_for_status()
+            results = []
+            for item in r.json().get("web", {}).get("results", []):
+                results.append({
+                    "title": item.get("title", ""),
+                    "url": item.get("url", ""),
+                    "snippet": item.get("description", ""),
+                })
+            logger.info("Brave Search: '%s' → %d Ergebnisse", query, len(results))
+            return results
+    except Exception as e:
+        logger.warning("Brave Search Fehler: %s", e)
+        return []
+
+
 async def search(query: str, max_results: int = 5) -> list[dict]:
-    """
-    Tavily Search — speziell für LLM-Agenten optimiert.
-    Gibt Liste von {title, url, snippet} zurück.
-    """
+    """Tavily primär, Brave als Fallback wenn Tavily leer oder Fehler."""
     try:
         client = AsyncTavilyClient(api_key=config.TAVILY_API_KEY)
         response = await client.search(
@@ -17,19 +44,18 @@ async def search(query: str, max_results: int = 5) -> list[dict]:
             max_results=max_results,
             search_depth="basic",
         )
-        results = []
-        for r in response.get("results", []):
-            results.append({
-                "title": r.get("title", ""),
-                "url": r.get("url", ""),
-                "snippet": r.get("content", ""),
-            })
-        logger.info(f"Tavily Search: '{query}' → {len(results)} Ergebnisse")
-        return results
-
+        results = [
+            {"title": r.get("title", ""), "url": r.get("url", ""), "snippet": r.get("content", "")}
+            for r in response.get("results", [])
+        ]
+        if results:
+            logger.info("Tavily Search: '%s' → %d Ergebnisse", query, len(results))
+            return results
+        logger.warning("Tavily lieferte keine Ergebnisse, versuche Brave")
     except Exception as e:
-        logger.error(f"Tavily Search Fehler: {e}")
-        return []
+        logger.warning("Tavily Search Fehler: %s — versuche Brave", e)
+
+    return await _search_brave(query, max_results)
 
 
 def format_results(results: list[dict]) -> str:

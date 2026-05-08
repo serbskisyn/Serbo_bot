@@ -55,6 +55,7 @@ RSS_FEEDS = [
     ("spox.com",        "https://feeds.feedburner.com/spox-sport/"),
     ("spiegel.de",      "https://www.spiegel.de/sport/fussball/index.rss"),
     ("sueddeutsche.de", "https://rss.sueddeutsche.de/rss/Sport"),
+    ("transfermarkt.de","https://www.transfermarkt.de/rss/news"),
 ]
 
 
@@ -413,7 +414,15 @@ async def fetch_club_news(
     extra_exclude = ClubConfig.get_exclude_keywords(club_name)
     club_feeds    = ClubConfig.get_feeds(club_name)
 
-    async with httpx.AsyncClient(headers={"User-Agent": "Mozilla/5.0"}) as client:
+    async with httpx.AsyncClient(headers={
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "de-DE,de;q=0.9",
+    }) as client:
 
         # Layer 1: GNews API
         gnews_items = await _fetch_gnews(client, club_name, extra_exclude, tracker)

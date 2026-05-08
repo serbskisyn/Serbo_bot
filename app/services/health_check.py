@@ -69,7 +69,7 @@ async def _chk_news_cache() -> tuple[bool, str]:
         row = await cur.fetchone()
         count = row[0] if row else 0
         cur2 = await db.execute(
-            "SELECT MAX(cached_at) FROM cache_meta"
+            "SELECT MAX(last_refresh) FROM cache_meta"
         )
         row2 = await cur2.fetchone()
         last = row2[0] if row2 and row2[0] else "unbekannt"

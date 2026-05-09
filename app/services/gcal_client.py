@@ -22,20 +22,25 @@ def _get_service():
     if _service:
         return _service
 
+    creds = None
     json_str = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
     if json_str:
-        info = json.loads(json_str)
-        if "private_key" in info:
-            info["private_key"] = info["private_key"].replace("\\n", "\n")
-        creds = Credentials.from_service_account_info(info, scopes=SCOPES)
-    else:
-        # Fallback: credentials.json Datei
+        try:
+            info = json.loads(json_str)
+            if "private_key" in info:
+                info["private_key"] = info["private_key"].replace("\\n", "\n")
+            creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+        except Exception as e:
+            logger.warning("GOOGLE_SERVICE_ACCOUNT_JSON parse fehlgeschlagen (%s) — Fallback auf credentials.json", e)
+
+    if creds is None:
         creds_path = Path("credentials.json")
         if not creds_path.exists():
             raise FileNotFoundError(
-                "GOOGLE_SERVICE_ACCOUNT_JSON nicht gesetzt und credentials.json nicht gefunden."
+                "Keine Google-Credentials verfügbar (env fehlerhaft, credentials.json nicht gefunden)."
             )
         creds = Credentials.from_service_account_file(str(creds_path), scopes=SCOPES)
+        logger.info("Google Calendar: credentials.json geladen")
 
     _service = build('calendar', 'v3', credentials=creds, cache_discovery=False)
     return _service

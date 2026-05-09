@@ -91,7 +91,7 @@ async def _chk_logdir() -> tuple[bool, str]:
     test = _LOG_DIR / ".health_write_test"
     test.write_text("ok")
     test.unlink()
-    return True, str(_LOG_DIR)
+    return True, "beschreibbar"
 
 
 CHECKS = [
@@ -119,7 +119,8 @@ async def run_health_check() -> str:
         else:
             ok, msg = result
         icon = "✅" if ok else "❌"
-        lines.append(f"{icon} *{name}*: {msg}")
+        safe_msg = msg.replace("_", "\\_")
+        lines.append(f"{icon} *{name}*: {safe_msg}")
         if not ok:
             all_ok = False
 

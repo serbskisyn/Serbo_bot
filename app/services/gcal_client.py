@@ -1,4 +1,6 @@
+import json
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -6,8 +8,6 @@ from zoneinfo import ZoneInfo
 
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
-
-from app.config import GOOGLE_SERVICE_ACCOUNT_JSON
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +21,22 @@ def _get_service():
     global _service
     if _service:
         return _service
-    creds_path = Path(GOOGLE_SERVICE_ACCOUNT_JSON)
-    if not creds_path.exists():
-        raise FileNotFoundError(
-            f"Service Account JSON nicht gefunden: {creds_path}\n"
-            "GOOGLE_SERVICE_ACCOUNT_JSON in .env setzen."
-        )
-    creds = Credentials.from_service_account_file(str(creds_path), scopes=SCOPES)
+
+    json_str = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+    if json_str:
+        info = json.loads(json_str)
+        if "private_key" in info:
+            info["private_key"] = info["private_key"].replace("\\n", "\n")
+        creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+    else:
+        # Fallback: credentials.json Datei
+        creds_path = Path("credentials.json")
+        if not creds_path.exists():
+            raise FileNotFoundError(
+                "GOOGLE_SERVICE_ACCOUNT_JSON nicht gesetzt und credentials.json nicht gefunden."
+            )
+        creds = Credentials.from_service_account_file(str(creds_path), scopes=SCOPES)
+
     _service = build('calendar', 'v3', credentials=creds, cache_discovery=False)
     return _service
 

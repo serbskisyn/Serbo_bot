@@ -6,6 +6,8 @@ from app.config import (
     validate_config, TELEGRAM_BOT_TOKEN,
     SESSION_SUMMARY_HOUR, SESSION_SUMMARY_MINUTE,
     HEALTH_CHECK_HOUR, HEALTH_CHECK_MINUTE,
+    GCAL_DAILY_SUMMARY_HOUR, GCAL_DAILY_SUMMARY_MINUTE,
+    GCAL_CALENDAR_ID_1, GCAL_CALENDAR_ID_2,
 )
 from app.utils.logging_setup import setup_logging
 from app.bot.handlers import (
@@ -22,7 +24,7 @@ from app.bot.daily_news_job import register_daily_news_job
 from app.bot.bot_context import set_bot
 from app.bot.session_summary import create_daily_summaries
 from app.services.health_check import send_daily_health_check
-from app.bot.gcal_reminder_job import register_gcal_reminder_job
+from app.bot.gcal_reminder_job import register_gcal_reminder_job, send_daily_calendar_summary
 
 _BERLIN = ZoneInfo("Europe/Berlin")
 
@@ -54,6 +56,14 @@ async def _post_init(application) -> None:
     logger.info("Daily Session Summaries registriert: %02d:%02d Europe/Berlin", SESSION_SUMMARY_HOUR, SESSION_SUMMARY_MINUTE)
 
     register_gcal_reminder_job(application)
+
+    if GCAL_CALENDAR_ID_1 or GCAL_CALENDAR_ID_2:
+        jq.run_daily(
+            callback=send_daily_calendar_summary,
+            time=time(hour=GCAL_DAILY_SUMMARY_HOUR, minute=GCAL_DAILY_SUMMARY_MINUTE, tzinfo=_BERLIN),
+            name="daily_calendar_summary",
+        )
+        logger.info("Tages-Kalenderübersicht registriert: %02d:%02d Europe/Berlin", GCAL_DAILY_SUMMARY_HOUR, GCAL_DAILY_SUMMARY_MINUTE)
 
 
 def main():

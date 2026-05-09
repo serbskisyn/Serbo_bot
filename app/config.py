@@ -91,6 +91,8 @@ GCAL_CALENDAR_ID_1: str = os.getenv("GCAL_CALENDAR_ID_1", "")
 GCAL_CALENDAR_ID_2: str = os.getenv("GCAL_CALENDAR_ID_2", "")
 GCAL_REMINDER_MINUTES: int = int(os.getenv("GCAL_REMINDER_MINUTES", "15"))
 GCAL_CHECK_INTERVAL_MINUTES: int = int(os.getenv("GCAL_CHECK_INTERVAL_MINUTES", "5"))
+GCAL_DAILY_SUMMARY_HOUR: int = int(os.getenv("GCAL_DAILY_SUMMARY_HOUR", "6"))
+GCAL_DAILY_SUMMARY_MINUTE: int = int(os.getenv("GCAL_DAILY_SUMMARY_MINUTE", "30"))
 
 
 def validate_config():

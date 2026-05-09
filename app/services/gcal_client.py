@@ -4,39 +4,42 @@ from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request
+from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
+
+from app.config import GOOGLE_SERVICE_ACCOUNT_JSON
 
 logger = logging.getLogger(__name__)
 
 SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
 _BERLIN = ZoneInfo("Europe/Berlin")
 
+_service = None
 
-def _get_service(token_path: str):
-    path = Path(token_path)
-    if not path.exists():
+
+def _get_service():
+    global _service
+    if _service:
+        return _service
+    creds_path = Path(GOOGLE_SERVICE_ACCOUNT_JSON)
+    if not creds_path.exists():
         raise FileNotFoundError(
-            f"Token nicht gefunden: {path.name}\n"
-            "Einmalig ausführen: python scripts/authorize_gcal.py --account 1"
+            f"Service Account JSON nicht gefunden: {creds_path}\n"
+            "GOOGLE_SERVICE_ACCOUNT_JSON in .env setzen."
         )
-    creds = Credentials.from_authorized_user_file(str(path), SCOPES)
-    if creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-        path.write_text(creds.to_json())
-        logger.info("Google-Token erneuert: %s", path.name)
-    return build('calendar', 'v3', credentials=creds, cache_discovery=False)
+    creds = Credentials.from_service_account_file(str(creds_path), scopes=SCOPES)
+    _service = build('calendar', 'v3', credentials=creds, cache_discovery=False)
+    return _service
 
 
 def get_events(
-    token_path: str,
-    calendar_id: str = 'primary',
+    calendar_id: str,
     start: Optional[datetime] = None,
     end: Optional[datetime] = None,
     max_results: int = 25,
 ) -> list[dict]:
-    svc = _get_service(token_path)
+    """Fetch events from a calendar shared with the service account."""
+    svc = _get_service()
     now = datetime.now(timezone.utc)
     time_min = (start or now).isoformat()
     time_max = (end or now + timedelta(hours=24)).isoformat()

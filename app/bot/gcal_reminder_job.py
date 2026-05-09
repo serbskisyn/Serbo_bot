@@ -3,12 +3,11 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from app.config import (
-    GCAL_TOKEN_1, GCAL_CALENDAR_ID_1,
-    GCAL_TOKEN_2, GCAL_CALENDAR_ID_2,
+    GCAL_CALENDAR_ID_1, GCAL_CALENDAR_ID_2,
     GCAL_REMINDER_MINUTES, GCAL_CHECK_INTERVAL_MINUTES,
     ALLOWED_USER_IDS,
 )
-from app.services.gcal_client import get_events, format_event, get_event_start_utc
+from app.services.gcal_client import get_events, format_event
 from app.bot.bot_context import get_bot
 
 logger = logging.getLogger(__name__)
@@ -23,24 +22,23 @@ async def _check_and_notify(context) -> None:
         return
 
     now = datetime.now(timezone.utc)
-    # Match events whose start falls within the next job window
     window_start = now + timedelta(minutes=GCAL_REMINDER_MINUTES - 1)
     window_end = now + timedelta(minutes=GCAL_REMINDER_MINUTES + GCAL_CHECK_INTERVAL_MINUTES)
 
-    calendars: list[tuple[str, str, str]] = []
-    if GCAL_TOKEN_1:
-        calendars.append((GCAL_TOKEN_1, GCAL_CALENDAR_ID_1, "Kalender 1"))
-    if GCAL_TOKEN_2:
-        calendars.append((GCAL_TOKEN_2, GCAL_CALENDAR_ID_2, "Kalender 2"))
+    calendars: list[tuple[str, str]] = []
+    if GCAL_CALENDAR_ID_1:
+        calendars.append((GCAL_CALENDAR_ID_1, "Kalender 1"))
+    if GCAL_CALENDAR_ID_2:
+        calendars.append((GCAL_CALENDAR_ID_2, "Kalender 2"))
 
     if not calendars:
         return
 
     loop = asyncio.get_event_loop()
-    for token_path, calendar_id, label in calendars:
+    for calendar_id, label in calendars:
         try:
             events = await loop.run_in_executor(
-                None, get_events, token_path, calendar_id, window_start, window_end
+                None, get_events, calendar_id, window_start, window_end
             )
         except Exception as e:
             logger.warning("Reminder fetch fehlgeschlagen (%s): %s", label, e)
@@ -76,8 +74,8 @@ def register_gcal_reminder_job(app) -> None:
         logger.warning("JobQueue nicht verfügbar — Kalender-Erinnerungen deaktiviert.")
         return
 
-    if not GCAL_TOKEN_1 and not GCAL_TOKEN_2:
-        logger.info("Keine GCAL_TOKEN_* gesetzt — Kalender-Erinnerungen deaktiviert.")
+    if not GCAL_CALENDAR_ID_1 and not GCAL_CALENDAR_ID_2:
+        logger.info("Keine GCAL_CALENDAR_ID_* gesetzt — Kalender-Erinnerungen deaktiviert.")
         return
 
     app.job_queue.run_repeating(

@@ -22,8 +22,7 @@ from app.bot.schedule_dialog import get_schedule_handler
 from app.bot.debug_handler import get_debug_handler
 from app.config import (
     TTS_ENABLED, TTS_VOICE,
-    GCAL_TOKEN_1, GCAL_CALENDAR_ID_1,
-    GCAL_TOKEN_2, GCAL_CALENDAR_ID_2,
+    GCAL_CALENDAR_ID_1, GCAL_CALENDAR_ID_2,
 )
 from app.bot.gcal_state import get_active_calendar, set_active_calendar
 from app.services.gcal_client import get_events, format_event
@@ -401,10 +400,8 @@ _WEEKDAYS_DE = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Sams
 _MONTHS_DE = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"]
 
 
-def _cal_token_and_id(cal_num: int) -> tuple[str, str]:
-    if cal_num == 1:
-        return GCAL_TOKEN_1, GCAL_CALENDAR_ID_1
-    return GCAL_TOKEN_2, GCAL_CALENDAR_ID_2
+def _cal_id(cal_num: int) -> str:
+    return GCAL_CALENDAR_ID_1 if cal_num == 1 else GCAL_CALENDAR_ID_2
 
 
 def _cal_label(cal_num: int) -> str:
@@ -435,13 +432,13 @@ async def termine_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mode_label = "heute"
 
     cal_num = get_active_calendar(user_id)
-    token_path, calendar_id = _cal_token_and_id(cal_num)
+    calendar_id = _cal_id(cal_num)
 
-    if not token_path:
+    if not calendar_id:
         await update.message.reply_text(
             "❌ Kein Kalender konfiguriert.\n"
-            "GCAL_TOKEN_1 oder GCAL_TOKEN_2 in .env setzen\n"
-            "und `python scripts/authorize_gcal.py --account 1` ausführen."
+            "GCAL_CALENDAR_ID_1 (und optional GCAL_CALENDAR_ID_2) in .env setzen.\n"
+            "Vorher: Kalender in Google Calendar mit serbo-bot@goldkind.iam.gserviceaccount.com teilen."
         )
         return
 
@@ -452,7 +449,7 @@ async def termine_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         start_utc = day_start.astimezone(timezone.utc)
         end_utc = day_end.astimezone(timezone.utc)
         events = await loop.run_in_executor(
-            None, get_events, token_path, calendar_id, start_utc, end_utc
+            None, get_events, calendar_id, start_utc, end_utc
         )
     except FileNotFoundError as e:
         await update.message.reply_text(f"❌ {e}")
@@ -486,8 +483,8 @@ async def kalender1_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(user_id):
         await update.message.reply_text("⛔ Kein Zugriff.")
         return
-    if not GCAL_TOKEN_1:
-        await update.message.reply_text("❌ GCAL_TOKEN_1 nicht konfiguriert.")
+    if not GCAL_CALENDAR_ID_1:
+        await update.message.reply_text("❌ GCAL_CALENDAR_ID_1 nicht konfiguriert.")
         return
     set_active_calendar(user_id, 1)
     await update.message.reply_text("✅ Aktiver Kalender: *Kalender 1 (Gmail)*", parse_mode="Markdown")
@@ -498,8 +495,8 @@ async def kalender2_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(user_id):
         await update.message.reply_text("⛔ Kein Zugriff.")
         return
-    if not GCAL_TOKEN_2:
-        await update.message.reply_text("❌ GCAL_TOKEN_2 nicht konfiguriert.")
+    if not GCAL_CALENDAR_ID_2:
+        await update.message.reply_text("❌ GCAL_CALENDAR_ID_2 nicht konfiguriert.")
         return
     set_active_calendar(user_id, 2)
     await update.message.reply_text("✅ Aktiver Kalender: *Kalender 2 (Workspace)*", parse_mode="Markdown")

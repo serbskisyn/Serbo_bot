@@ -5,18 +5,15 @@ on:
     - cron: '0 0 * * *'  # täglich um 00:00 UTC
   workflow_dispatch:      # manueller Start weiterhin möglich
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   test:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v5.5.0
         with:
           python-version: "3.11"
 

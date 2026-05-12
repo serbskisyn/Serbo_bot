@@ -16,7 +16,7 @@ from app.bot.memory import add_direct, add_indirect, clear_memory, format_memory
 from app.bot.whitelist import is_allowed
 from app.agents.runner import run as agent_run
 from app.agents.football_news_agent import fetch_news_for_user
-from app.services.claude_runner import run_claude, run_claude_agent
+from app.services.claude_runner import run_claude, run_claude_agent, run_claude_agent_continue, WORKDIR
 from app.services.health_check import run_health_check
 from app.bot.schedule_dialog import get_schedule_handler
 from app.bot.debug_handler import get_debug_handler
@@ -37,8 +37,8 @@ MAX_INPUT_CHARS = 2000
 # Punkt 3: Telegram-Retry-Schutz — bereits gesehene update_ids
 _seen_update_ids: deque[int] = deque(maxlen=200)
 
-# Punkt 7: HITL-Bestätigung für /claudex
-_claudex_pending: dict[int, str] = {}
+# Claudex-Sessions: user_id → ursprüngliche Aufgabenbeschreibung
+_claudex_sessions: dict[int, str] = {}
 
 
 def _split_message(text: str, limit: int = 4000) -> list[str]:
@@ -99,7 +99,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/news fresh — News sofort neu laden (Live-Fetch)\n"
         f"/strava — Strava Kudos an alle Aktivitäten im Feed vergeben\n"
         f"/claude <Anfrage> — Claude Code CLI (nur Text)\n"
-        f"/claudex <Aufgabe> — Claude Agent mit Tool-Zugriff (Dateien, Git)\n"
+        f"/claudex <Aufgabe> — Claude Agent Session (Dateien, Git, Bash)\n"
+        f"  └ /fertig [commit] — Session beenden · /nein — abbrechen\n"
         f"/health — System-Status prüfen\n"
         f"/dienstplan — Dienstplan erstellen\n"
         f"/debugwunsch — Sheet-Struktur prüfen (Diagnose)\n\n"
@@ -243,7 +244,6 @@ async def claude_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def claudex_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Punkt 7: Zeigt HITL-Bestätigung bevor Claude mit vollen Tools läuft."""
     user_id = update.effective_user.id
     if not is_allowed(user_id):
         await update.message.reply_text("⛔ Kein Zugriff.")
@@ -256,39 +256,89 @@ async def claudex_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     prompt = " ".join(context.args or []).strip()
     if not prompt:
-        await update.message.reply_text(
-            "Verwendung: /claudex <Aufgabe>\n\nClaude hat vollen Tool-Zugriff: Dateien lesen/schreiben, Git, Bash."
-        )
+        if user_id in _claudex_sessions:
+            task = _claudex_sessions[user_id]
+            await update.message.reply_text(
+                f"🤖 *Session aktiv:* _{task[:120]}_\n\n"
+                "Weitere Nachrichten direkt eingeben.\n"
+                "/fertig — Session beenden\n"
+                "/fertig commit — beenden + committen\n"
+                "/nein — abbrechen",
+                parse_mode="Markdown",
+            )
+        else:
+            await update.message.reply_text(
+                "Verwendung: /claudex <Aufgabe>\n\n"
+                "Claude hat vollen Tool-Zugriff (Dateien, Git, Bash).\n"
+                "Folgenachrichten setzen die Session fort.\n"
+                "/fertig [commit] beendet sie."
+            )
         return
 
-    _claudex_pending[user_id] = prompt
-    preview = prompt[:300] + ("…" if len(prompt) > 300 else "")
-    await update.message.reply_text(
-        f"🤖 *Claude Agent soll ausführen:*\n\n`{preview}`\n\n"
-        "Bestätigen mit /ja — Abbrechen mit /nein",
-        parse_mode="Markdown",
-    )
-
-
-async def ja_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if not is_allowed(user_id):
-        return
-    prompt = _claudex_pending.pop(user_id, None)
-    if not prompt:
-        await update.message.reply_text("Nichts zu bestätigen.")
-        return
-    await update.message.reply_text("🤖 Claude Agent läuft…")
+    _claudex_sessions[user_id] = prompt
+    await update.message.reply_text("🤖 Claude Agent startet…")
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     result = await run_claude_agent(prompt)
     for chunk in _split_message(result):
         await update.message.reply_text(chunk)
+    await update.message.reply_text(
+        "💬 *Session aktiv* — weitere Nachrichten direkt eingeben.\n"
+        "/fertig · /fertig commit · /nein",
+        parse_mode="Markdown",
+    )
+
+
+async def claudex_fertig_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_allowed(user_id):
+        return
+
+    task = _claudex_sessions.pop(user_id, None)
+    if task is None:
+        await update.message.reply_text("Keine aktive Claudex-Session.")
+        return
+
+    do_commit = "commit" in [a.lower() for a in (context.args or [])]
+    if not do_commit:
+        await update.message.reply_text("✅ Claudex-Session beendet.")
+        return
+
+    await update.message.reply_text("📦 Committe Änderungen…")
+
+    proc_add = await asyncio.create_subprocess_exec(
+        "git", "add", "-A",
+        cwd=str(WORKDIR),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    await proc_add.communicate()
+
+    commit_msg = f"claudex: {task[:72]}"
+    proc_commit = await asyncio.create_subprocess_exec(
+        "git", "commit", "-m", commit_msg,
+        cwd=str(WORKDIR),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc_commit.communicate()
+    out = stdout.decode(errors="replace")
+    err = stderr.decode(errors="replace")
+
+    if proc_commit.returncode == 0:
+        first_line = out.strip().split("\n")[0]
+        await update.message.reply_text(f"✅ Committed: `{first_line}`", parse_mode="Markdown")
+    elif "nothing to commit" in out or "nothing to commit" in err:
+        await update.message.reply_text("✅ Session beendet — keine Änderungen zu committen.")
+    else:
+        await update.message.reply_text(f"⚠️ Commit fehlgeschlagen:\n{err.strip()[:400]}")
 
 
 async def nein_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    _claudex_pending.pop(user_id, None)
-    await update.message.reply_text("❌ Abgebrochen.")
+    if _claudex_sessions.pop(user_id, None) is not None:
+        await update.message.reply_text("❌ Claudex-Session abgebrochen.")
+    else:
+        await update.message.reply_text("❌ Abgebrochen.")
 
 
 async def health_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -333,6 +383,14 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await is_injection_async(user_text):
         logger.warning("Injection attempt | user=%d", user_id)
         await update.message.reply_text("⚠️ Ungültige Eingabe erkannt.")
+        return
+
+    # Aktive Claudex-Session: Nachricht direkt an Claude Agent weiterleiten
+    if user_id in _claudex_sessions:
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+        result = await run_claude_agent_continue(user_text)
+        for chunk in _split_message(result):
+            await update.message.reply_text(chunk)
         return
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")

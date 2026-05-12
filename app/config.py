@@ -95,6 +95,13 @@ GCAL_DAILY_SUMMARY_HOUR: int = int(os.getenv("GCAL_DAILY_SUMMARY_HOUR", "6"))
 GCAL_DAILY_SUMMARY_MINUTE: int = int(os.getenv("GCAL_DAILY_SUMMARY_MINUTE", "30"))
 
 
+# ── Lead Qualifying Agent ─────────────────────────────────────────────────────
+SERP_API_KEY: str = os.getenv("SERP_API_KEY", "")
+NORTHDATA_API_KEY: str = os.getenv("NORTHDATA_API_KEY", "")
+LEAD_QUALIFYING_HOUR: int = int(os.getenv("LEAD_QUALIFYING_HOUR", "8"))
+LEAD_QUALIFYING_MINUTE: int = int(os.getenv("LEAD_QUALIFYING_MINUTE", "0"))
+
+
 def validate_config():
     missing = []
     if not TELEGRAM_BOT_TOKEN:

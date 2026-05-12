@@ -25,6 +25,7 @@ from app.bot.bot_context import set_bot
 from app.bot.session_summary import create_daily_summaries
 from app.services.health_check import send_daily_health_check
 from app.bot.gcal_reminder_job import register_gcal_reminder_job, send_daily_calendar_summary
+from app.agents.schedule.lead_qualifying_agent import register_lead_qualifying_job
 
 _BERLIN = ZoneInfo("Europe/Berlin")
 
@@ -56,6 +57,7 @@ async def _post_init(application) -> None:
     logger.info("Daily Session Summaries registriert: %02d:%02d Europe/Berlin", SESSION_SUMMARY_HOUR, SESSION_SUMMARY_MINUTE)
 
     register_gcal_reminder_job(application)
+    register_lead_qualifying_job(application)
 
     if GCAL_CALENDAR_ID_1 or GCAL_CALENDAR_ID_2:
         jq.run_daily(

@@ -42,7 +42,7 @@ async def run_claude_agent(prompt: str, timeout: int = 300) -> str:
     logger.info("Claude Agent gestartet | prompt=%r", prompt[:80])
     try:
         proc = await asyncio.create_subprocess_exec(
-            CLAUDE_BIN, "--print", "--dangerouslySkipPermissions",
+            CLAUDE_BIN, "--print", "--dangerously-skip-permissions",
             "--output-format", "text", prompt,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

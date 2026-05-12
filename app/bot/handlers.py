@@ -41,6 +41,29 @@ _seen_update_ids: deque[int] = deque(maxlen=200)
 _claudex_sessions: dict[int, str] = {}
 
 
+async def _typing_keepalive(bot, chat_id: int, interval: float = 4.0):
+    """Sendet alle `interval` Sekunden eine Typing-Action bis die Task gecancelt wird."""
+    while True:
+        try:
+            await bot.send_chat_action(chat_id=chat_id, action="typing")
+        except Exception:
+            pass
+        await asyncio.sleep(interval)
+
+
+async def _run_with_typing(bot, chat_id: int, coro):
+    """Führt ein Coroutine aus und hält den Typing-Indikator am Leben."""
+    keepalive = asyncio.create_task(_typing_keepalive(bot, chat_id))
+    try:
+        return await coro
+    finally:
+        keepalive.cancel()
+        try:
+            await keepalive
+        except asyncio.CancelledError:
+            pass
+
+
 def _split_message(text: str, limit: int = 4000) -> list[str]:
     if len(text) <= limit:
         return [text]
@@ -236,9 +259,9 @@ async def claude_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Verwendung: /claude <deine Anfrage>")
         return
 
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-    result = await run_claude(prompt)
-
+    result = await _run_with_typing(
+        context.bot, update.effective_chat.id, run_claude(prompt)
+    )
     for chunk in _split_message(result):
         await update.message.reply_text(chunk)
 
@@ -277,8 +300,9 @@ async def claudex_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     _claudex_sessions[user_id] = prompt
     await update.message.reply_text("🤖 Claude Agent startet…")
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-    result = await run_claude_agent(prompt)
+    result = await _run_with_typing(
+        context.bot, update.effective_chat.id, run_claude_agent(prompt)
+    )
     for chunk in _split_message(result):
         await update.message.reply_text(chunk)
     await update.message.reply_text(
@@ -387,8 +411,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Aktive Claudex-Session: Nachricht direkt an Claude Agent weiterleiten
     if user_id in _claudex_sessions:
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-        result = await run_claude_agent_continue(user_text)
+        result = await _run_with_typing(
+            context.bot, update.effective_chat.id, run_claude_agent_continue(user_text)
+        )
         for chunk in _split_message(result):
             await update.message.reply_text(chunk)
         return

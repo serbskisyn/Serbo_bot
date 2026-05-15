@@ -45,7 +45,7 @@ async def _post(path: str, params: dict | None = None) -> dict | None:
 async def fetch_crypto_status() -> str:
     data = await _get("/status")
     if not data:
-        return "⚠️ Trade Engine nicht erreichbar (Port 8081)."
+        return "🔴 *Trade Engine offline* (Port 8081 nicht erreichbar)."
 
     crypto = data.get("crypto", {})
     stats  = data.get("stats", {})
@@ -54,17 +54,25 @@ async def fetch_crypto_status() -> str:
         return "⚠️ Kraken nicht konfiguriert."
 
     positions = crypto.get("positions", [])
-    now = datetime.now(ET).strftime("%d.%m.%Y %H:%M")
+    acc       = crypto.get("account", {})
+    btc_bal   = float(acc.get("balance", 0)) if acc else None
+    now       = datetime.now(ET).strftime("%d.%m.%Y %H:%M")
 
     lines = [
-        f"🪙 *Crypto Trading — {now}*\n",
-        f"📈 *Offene Positionen: {len(positions)}*",
+        f"🪙 *Crypto Trading — {now}*",
+        f"🟢 Trade Engine läuft  |  Kraken 24/7",
     ]
+    if btc_bal is not None:
+        lines.append(f"💰 Kontostand: `{btc_bal:.6f} BTC`")
+    lines.append("")
+
+    lines.append(f"📈 *Offene Positionen: {len(positions)}*")
     for p in positions:
-        entry = float(p.get("entry_price", 0))
-        peak  = float(p.get("peak_price", 0))
+        entry    = float(p.get("entry_price", 0))
+        side_raw = p.get("side", "long")
+        side_tag = "🔴 SHORT" if side_raw == "short" else "🟢 LONG"
         lines.append(
-            f"  • `{p['symbol']}` | Einstieg: `{entry:.6f}` | "
+            f"  • `{p['symbol']}` {side_tag} | Einstieg: `{entry:.6f}` | "
             f"Candles: {p.get('candles_held', 0)} | "
             f"Trailing: {'✅' if p.get('trailing_active') else '⏳'}"
         )

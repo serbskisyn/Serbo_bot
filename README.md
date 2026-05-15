@@ -1,6 +1,6 @@
-# Serbo Bot — Telegram AI Assistant
+# Serbo Bot — Telegram AI Assistant + Trading Platform
 
-A modular, production-grade Telegram bot running on a Raspberry Pi. Powered by LLMs via OpenRouter with a full multi-agent LangGraph architecture, 4-layer news aggregation, constraint-based shift scheduling, Strava automation, and direct Claude Code CLI access via Telegram commands.
+A modular, production-grade Telegram bot running on a Raspberry Pi. Powered by LLMs via OpenRouter with a full multi-agent LangGraph architecture, 4-layer news aggregation, constraint-based shift scheduling, Strava automation, LLM-driven crypto trading (Freqtrade), US-stock trading (Alpaca), and direct Claude Code CLI access via Telegram commands.
 
 ---
 
@@ -28,6 +28,12 @@ A modular, production-grade Telegram bot running on a Raspberry Pi. Powered by L
 | ✅ | Club configuration — `config/clubs.json` with aliases, feeds, exclude keywords |
 | ✅ | Retry/Backoff — exponential backoff (2^n s) on 429/502/503 for all feeds |
 | ✅ | Strava Kudos — `/strava` command, session-cookie auth, auto-likes feed |
+| ✅ | **Freqtrade Crypto Bot** — LLM-driven strategy on Kraken (10 pairs, 15-min candles) |
+| ✅ | **Alpaca US-Aktien Bot** — LLM-driven trades on 9 US-Aktien/ETFs (SPY, AAPL, NVDA …) |
+| ✅ | Sentiment-Modul — Fear & Greed Index, Polymarket Gamma API, Tavily News je Symbol |
+| ✅ | Scheduled Scans — Crypto 24/7, US-Stocks Mo–Fr 10:00–15:45 ET (alle 15 Min) |
+| ✅ | Trailing Stop — aktiviert ab +2%, Trail 1% |
+| 🔜 | **Trade Engine** — unified custom engine (Crypto + Stocks), ersetzt Freqtrade |
 | ✅ | Shift scheduler — 3-shift nursing schedule with 8 hard + 3 soft constraints |
 | ✅ | Schedule orchestrator — 5 sub-agents + KontrollAgent + multi-pass refinement |
 | ✅ | Google Sheets integration — staff, vacation, sick leave, wishes, output |
@@ -94,6 +100,11 @@ User (Telegram — text / voice / command)
 | `/claudex <task>` | Claude Agent with full tool access — can read/write files, run git, commit |
 | `/dienstplan` | Interactive 3-step shift schedule builder |
 | `/debugwunsch` | Diagnose Google Sheets structure (admin) |
+| `/tradebot` | Freqtrade Crypto-Bot: status, profit, trades, start/stop/reload |
+| `/stocks` | Alpaca US-Aktien: Status & Positionen |
+| `/stocks scan` | Manuellen LLM-Scan aller Watchlist-Symbole auslösen |
+| `/health` / `/check` | System-Health-Check (Bot, APIs, Services) |
+| `/termine` | Nächste Google-Calendar-Termine |
 
 ---
 
@@ -618,6 +629,7 @@ POST /activities/{id}/kudos  →  give kudos
 
 ## Roadmap
 
+### Erledigt
 - [x] LangGraph multi-agent architecture
 - [x] LLM-based supervisor routing (confidence + topic-carry)
 - [x] Football safety net (club + term → always football)
@@ -641,9 +653,29 @@ POST /activities/{id}/kudos  →  give kudos
 - [x] Schedule orchestrator — 5 sub-agents + KontrollAgent + multi-pass refinement
 - [x] Google Sheets integration (staff, vacation, sick leave, wishes, output)
 - [x] Claude Code CLI integration (`/claude`, `/claudex`)
+- [x] **Freqtrade Crypto Trading Bot** — LLM-Strategie, Sentiment-Filter, 10 Pairs
+- [x] **Alpaca US-Aktien Bot** — 9 Symbole, LLM-Signale, Scheduled Scans Mo–Fr
+- [x] Sentiment-Modul — Fear & Greed, Polymarket Gamma API, Tavily News
+
+### Trade Engine (Unified — ersetzt Freqtrade in ~2 Wochen)
+
+> Ziel: eigener Trading-Service der Crypto (Kraken/ccxt) und US-Aktien (Alpaca) in einer einheitlichen Engine vereint — unabhängig von Freqtrade, vollständig über Serbo_bot steuerbar.
+
+- [ ] **#1** Projektstruktur & Config anlegen (`/home/pi/trade_engine/`)
+- [ ] **#2** Exchange-Abstraktionsschicht (Kraken via ccxt + Alpaca via alpaca-py, gemeinsame Base-Klasse)
+- [ ] **#3** Trade Manager — Position-Tracking (SQLite), Stop-Loss, Trailing Stop (+2% → 1% Trail)
+- [ ] **#4** LLM-Strategie — Indikatoren (RSI/EMA/BB), LLM-Entscheidung, Sentiment-Integration
+- [ ] **#5** Scanner & Scheduler — Crypto 24/7 (15-Min-Takt), Stocks Mo–Fr 10:00–15:45 ET
+- [ ] **#6** REST-API (FastAPI, Port 8081) — `/status`, `/positions`, `/scan`, `/stats` für Serbo_bot
+- [ ] **#7** Systemd-Service & Deployment (`trade_engine.service`)
+- [ ] **#8** Serbo_bot: `/tradebot` + `/stocks` auf Trade Engine umstellen (nach 2 Wochen Laufzeit)
+- [ ] **#9** Freqtrade abschalten nach stabiler Trade Engine
+
+### Weitere Ideen
 - [ ] Football News fact-check + quality score
 - [ ] Multi-language support (EN/DE toggle per user)
 - [ ] Webhook mode (instead of polling) for lower latency
+- [ ] Scrapling-Integration für resilientes Scraping (Strava, Finanznews, Anti-Bot-Bypass)
 
 ---
 

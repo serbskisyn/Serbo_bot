@@ -26,6 +26,7 @@ from app.bot.session_summary import create_daily_summaries
 from app.services.health_check import send_daily_health_check
 from app.bot.gcal_reminder_job import register_gcal_reminder_job, send_daily_calendar_summary
 from app.agents.schedule.lead_qualifying_agent import register_lead_qualifying_job
+from app.bot.trading_job import tradebot_handler, register_trading_stats_job
 
 _BERLIN = ZoneInfo("Europe/Berlin")
 
@@ -58,6 +59,7 @@ async def _post_init(application) -> None:
 
     register_gcal_reminder_job(application)
     register_lead_qualifying_job(application)
+    register_trading_stats_job(application)
 
     if GCAL_CALENDAR_ID_1 or GCAL_CALENDAR_ID_2:
         jq.run_daily(
@@ -94,9 +96,11 @@ def main():
     app.add_handler(CommandHandler("fertig",  claudex_fertig_handler))
     app.add_handler(CommandHandler("nein",    nein_handler))
     app.add_handler(CommandHandler("health",    health_handler))
+    app.add_handler(CommandHandler("check",     health_handler))
     app.add_handler(CommandHandler("termine",   termine_handler))
     app.add_handler(CommandHandler("kalender1", kalender1_handler))
     app.add_handler(CommandHandler("kalender2", kalender2_handler))
+    app.add_handler(CommandHandler("tradebot", tradebot_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_handler(MessageHandler(filters.VOICE, voice_handler))
     app.add_error_handler(error_handler)

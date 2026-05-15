@@ -95,6 +95,13 @@ GCAL_DAILY_SUMMARY_HOUR: int = int(os.getenv("GCAL_DAILY_SUMMARY_HOUR", "6"))
 GCAL_DAILY_SUMMARY_MINUTE: int = int(os.getenv("GCAL_DAILY_SUMMARY_MINUTE", "30"))
 
 
+# ── Trading Bot ───────────────────────────────────────────────────────────────
+FREQTRADE_API_URL:      str = os.getenv("FREQTRADE_API_URL", "http://localhost:8080")
+FREQTRADE_API_USERNAME: str = os.getenv("FREQTRADE_API_USERNAME", "admin")
+FREQTRADE_API_PASSWORD: str = os.getenv("FREQTRADE_API_PASSWORD", "")
+TRADING_STATS_HOUR:     int = int(os.getenv("TRADING_STATS_HOUR", "8"))
+TRADING_STATS_MINUTE:   int = int(os.getenv("TRADING_STATS_MINUTE", "15"))
+
 # ── Lead Qualifying Agent ─────────────────────────────────────────────────────
 SERP_API_KEY: str = os.getenv("SERP_API_KEY", "")
 NORTHDATA_API_KEY: str = os.getenv("NORTHDATA_API_KEY", "")

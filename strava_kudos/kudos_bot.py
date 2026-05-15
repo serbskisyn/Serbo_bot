@@ -321,10 +321,8 @@ if __name__ == "__main__":
         if names:
             lines.append("")
             lines.append("🏅 Geliked:")
-            for n in names[:10]:
+            for n in names:
                 lines.append(f"  • {n}")
-            if len(names) > 10:
-                lines.append(f"  … und {len(names) - 10} weitere")
 
         send_telegram("\n".join(lines))
 

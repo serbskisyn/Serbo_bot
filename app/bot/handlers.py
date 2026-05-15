@@ -130,7 +130,15 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📅 *Kalender*\n"
         f"/termine [heute|morgen|woche] — Kalendertermine anzeigen\n"
         f"/kalender1 — Gmail-Kalender aktiv\n"
-        f"/kalender2 — Workspace-Kalender aktiv"
+        f"/kalender2 — Workspace-Kalender aktiv\n\n"
+        f"📈 *Trading Bot*\n"
+        f"/tradebot — Status, Wallet & P&L\n"
+        f"/tradebot pause — Neue Käufe stoppen\n"
+        f"/tradebot resume — Käufe wieder aktivieren\n"
+        f"/tradebot stop — Bot anhalten\n"
+        f"/tradebot start — Bot starten\n"
+        f"/tradebot help — Alle Trading-Befehle",
+        parse_mode="Markdown",
     )
 
 

@@ -10,7 +10,6 @@ from app.config import (
     OPENROUTER_API_KEY, TAVILY_API_KEY, BRAVE_API_KEY,
     ADMIN_CHAT_ID, NEWS_CACHE_DB_PATH,
 )
-from app.bot.bot_context import get_bot
 
 logger = logging.getLogger(__name__)
 
@@ -130,16 +129,15 @@ async def run_health_check() -> str:
 
 async def send_daily_health_check(context) -> None:
     if not ADMIN_CHAT_ID:
-        logger.warning("Health Check: ADMIN_CHAT_ID nicht gesetzt")
+        logger.warning("Health Check: ADMIN_CHAT_ID nicht gesetzt — bitte in .env setzen")
         return
     try:
         report = await run_health_check()
-        bot = get_bot()
-        if bot:
-            await bot.send_message(
-                chat_id=ADMIN_CHAT_ID,
-                text=report,
-                parse_mode="Markdown",
-            )
+        await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=report,
+            parse_mode="Markdown",
+        )
+        logger.info("Daily Health Check gesendet an chat_id=%s", ADMIN_CHAT_ID)
     except Exception as e:
         logger.error("Health Check senden fehlgeschlagen: %s", e)

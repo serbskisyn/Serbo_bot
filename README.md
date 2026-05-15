@@ -675,7 +675,7 @@ POST /activities/{id}/kudos  →  give kudos
 - [ ] Football News fact-check + quality score
 - [ ] Multi-language support (EN/DE toggle per user)
 - [ ] Webhook mode (instead of polling) for lower latency
-- [ ] Scrapling-Integration für resilientes Scraping (Strava, Finanznews, Anti-Bot-Bypass)
+- [ ] **Scrapling-Integration** — `StealthyFetcher` für Strava (ersetzt fragile Session-Cookies), `AsyncFetcher` für Finanz-News im Trade Engine Sentiment-Block (Anti-Bot-Bypass, TLS-Impersonation)
 
 ---
 

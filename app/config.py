@@ -110,6 +110,10 @@ ALPACA_STAKE_USD:  float = float(os.getenv("ALPACA_STAKE_USD", "50"))
 ALPACA_SCAN_HOUR:  int  = int(os.getenv("ALPACA_SCAN_HOUR", "16"))   # 16:00 CEST = 10:00 ET
 ALPACA_SCAN_MINUTE: int = int(os.getenv("ALPACA_SCAN_MINUTE", "0"))
 
+# ── Trade Engine ─────────────────────────────────────────────────────────────
+TRADE_ENGINE_URL:    str = os.getenv("TRADE_ENGINE_URL", "http://127.0.0.1:8081")
+TRADE_ENGINE_SECRET: str = os.getenv("TRADE_ENGINE_SECRET", "")
+
 # ── Lead Qualifying Agent ─────────────────────────────────────────────────────
 SERP_API_KEY: str = os.getenv("SERP_API_KEY", "")
 NORTHDATA_API_KEY: str = os.getenv("NORTHDATA_API_KEY", "")

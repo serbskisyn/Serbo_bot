@@ -10,3 +10,8 @@ __pycache__/
 *.mp3
 .DS_Store
 app/data/
+credentials.json
+logs/
+strava_kudos/session.json
+strava_kudos/tokens.json
+=6.0.0

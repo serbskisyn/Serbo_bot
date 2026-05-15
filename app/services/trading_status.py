@@ -169,7 +169,7 @@ def _format_report(state: str, status: list, profit: dict, balance: dict, trades
     lines.append(f"📈 *Offene Trades:* {len(status)}")
     for t in status:
         pair = t.get("pair", "?")
-        pnl = float(t.get("profit_pct", 0)) * 100
+        pnl = float(t.get("profit_pct", 0))
         sign = "+" if pnl >= 0 else ""
         dur = t.get("open_date", "")[:16]
         lines.append(f"  • {pair}: `{sign}{pnl:.2f}%` seit {dur}")
@@ -201,7 +201,7 @@ def _format_report(state: str, status: list, profit: dict, balance: dict, trades
         lines.append(f"🕐 *Letzte {min(len(closed), 5)} Trades*")
         for t in closed[-5:][::-1]:
             pair    = t.get("pair", "?")
-            pnl_pct = float(t.get("profit_pct", 0)) * 100
+            pnl_pct = float(t.get("profit_pct", 0))
             pnl_abs = float(t.get("profit_abs", 0))
             icon    = "✅" if pnl_pct >= 0 else "❌"
             sign    = "+" if pnl_pct >= 0 else ""

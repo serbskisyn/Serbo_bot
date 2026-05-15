@@ -95,12 +95,20 @@ GCAL_DAILY_SUMMARY_HOUR: int = int(os.getenv("GCAL_DAILY_SUMMARY_HOUR", "6"))
 GCAL_DAILY_SUMMARY_MINUTE: int = int(os.getenv("GCAL_DAILY_SUMMARY_MINUTE", "30"))
 
 
-# ── Trading Bot ───────────────────────────────────────────────────────────────
+# ── Trading Bot (Freqtrade / Crypto) ─────────────────────────────────────────
 FREQTRADE_API_URL:      str = os.getenv("FREQTRADE_API_URL", "http://localhost:8080")
 FREQTRADE_API_USERNAME: str = os.getenv("FREQTRADE_API_USERNAME", "admin")
 FREQTRADE_API_PASSWORD: str = os.getenv("FREQTRADE_API_PASSWORD", "")
 TRADING_STATS_HOUR:     int = int(os.getenv("TRADING_STATS_HOUR", "8"))
 TRADING_STATS_MINUTE:   int = int(os.getenv("TRADING_STATS_MINUTE", "15"))
+
+# ── Alpaca (US-Aktien) ────────────────────────────────────────────────────────
+ALPACA_API_KEY:    str  = os.getenv("ALPACA_API_KEY", "")
+ALPACA_SECRET_KEY: str  = os.getenv("ALPACA_SECRET_KEY", "")
+ALPACA_PAPER:      bool = os.getenv("ALPACA_PAPER", "false").lower() == "true"
+ALPACA_STAKE_USD:  float = float(os.getenv("ALPACA_STAKE_USD", "50"))
+ALPACA_SCAN_HOUR:  int  = int(os.getenv("ALPACA_SCAN_HOUR", "16"))   # 16:00 CEST = 10:00 ET
+ALPACA_SCAN_MINUTE: int = int(os.getenv("ALPACA_SCAN_MINUTE", "0"))
 
 # ── Lead Qualifying Agent ─────────────────────────────────────────────────────
 SERP_API_KEY: str = os.getenv("SERP_API_KEY", "")

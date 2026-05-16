@@ -1,11 +1,30 @@
 import asyncio
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 CLAUDE_BIN = "/home/pi/.local/bin/claude"
 WORKDIR = Path(__file__).parent.parent.parent  # /home/pi/Serbo_bot
+AUDIT_LOG = WORKDIR / "logs" / "claudex_audit.log"
+
+
+def _audit(tag: str, prompt: str, stdout: bytes, stderr: bytes,
+           exit_code: int | None) -> None:
+    """Schreibt Claudex-Aufruf an logs/claudex_audit.log. Fehler werden geloggt, nicht geraised."""
+    try:
+        AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).isoformat()
+        with AUDIT_LOG.open("a", encoding="utf-8") as f:
+            f.write(f"\n=== {ts} | {tag} | exit={exit_code} ===\n")
+            f.write(f"PROMPT: {prompt[:200]}\n")
+            if stdout:
+                f.write(f"STDOUT:\n{stdout.decode(errors='replace')[:4000]}\n")
+            if stderr:
+                f.write(f"STDERR:\n{stderr.decode(errors='replace')[:4000]}\n")
+    except Exception as e:
+        logger.warning("Audit-Log fehlgeschlagen: %s", e)
 
 
 async def run_claude(prompt: str, timeout: int = 120) -> str:
@@ -40,6 +59,8 @@ async def run_claude(prompt: str, timeout: int = 120) -> str:
 async def run_claude_agent_continue(prompt: str, timeout: int = 300) -> str:
     """Setzt die letzte Claude-Agent-Session fort (--continue)."""
     logger.info("Claude Agent (--continue) | prompt=%r", prompt[:80])
+    stdout, stderr = b"", b""
+    exit_code = None
     try:
         proc = await asyncio.create_subprocess_exec(
             CLAUDE_BIN, "--print", "--dangerously-skip-permissions",
@@ -49,14 +70,19 @@ async def run_claude_agent_continue(prompt: str, timeout: int = 300) -> str:
             cwd=str(WORKDIR),
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        exit_code = proc.returncode
     except asyncio.TimeoutError:
         proc.kill()
         await proc.communicate()
         logger.warning("Claude Agent (continue) Timeout nach %ds", timeout)
+        _audit("claudex_continue_TIMEOUT", prompt, stdout, stderr, None)
         return f"⏳ Claude Agent hat nach {timeout}s nicht geantwortet."
     except Exception as e:
         logger.exception("Claude Agent (continue) Fehler")
+        _audit("claudex_continue_ERROR", prompt, stdout, stderr, None)
         return f"❌ Fehler: {e}"
+
+    _audit("claudex_continue", prompt, stdout, stderr, exit_code)
 
     if proc.returncode != 0:
         err = stderr.decode(errors="replace")[:500]
@@ -71,6 +97,8 @@ async def run_claude_agent_continue(prompt: str, timeout: int = 300) -> str:
 async def run_claude_agent(prompt: str, timeout: int = 300) -> str:
     """Führt Claude mit vollem Tool-Zugriff aus (Dateien lesen/schreiben, Git, Bash)."""
     logger.info("Claude Agent gestartet | prompt=%r", prompt[:80])
+    stdout, stderr = b"", b""
+    exit_code = None
     try:
         proc = await asyncio.create_subprocess_exec(
             CLAUDE_BIN, "--print", "--dangerously-skip-permissions",
@@ -80,14 +108,19 @@ async def run_claude_agent(prompt: str, timeout: int = 300) -> str:
             cwd=str(WORKDIR),
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        exit_code = proc.returncode
     except asyncio.TimeoutError:
         proc.kill()
         await proc.communicate()
         logger.warning("Claude Agent Timeout nach %ds", timeout)
+        _audit("claudex_agent_TIMEOUT", prompt, stdout, stderr, None)
         return f"⏳ Claude Agent hat nach {timeout}s nicht geantwortet."
     except Exception as e:
         logger.exception("Claude Agent Fehler")
+        _audit("claudex_agent_ERROR", prompt, stdout, stderr, None)
         return f"❌ Fehler beim Starten von Claude Agent: {e}"
+
+    _audit("claudex_agent", prompt, stdout, stderr, exit_code)
 
     if proc.returncode != 0:
         err = stderr.decode(errors="replace")[:500]

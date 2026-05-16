@@ -129,3 +129,8 @@ def validate_config():
         missing.append("OPENROUTER_API_KEY")
     if missing:
         raise ValueError(f"Fehlende Umgebungsvariablen: {', '.join(missing)}")
+    if not TRADE_ENGINE_SECRET or TRADE_ENGINE_SECRET == "change_me":
+        raise ValueError(
+            "TRADE_ENGINE_SECRET fehlt oder steht auf 'change_me' — "
+            "muss mit dem API_SECRET der Trade Engine übereinstimmen."
+        )

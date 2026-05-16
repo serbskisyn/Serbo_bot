@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 MAX_INPUT_CHARS = 2000
 
 # Punkt 3: Telegram-Retry-Schutz — bereits gesehene update_ids
-_seen_update_ids: deque[int] = deque(maxlen=200)
+_seen_update_ids: deque[int] = deque(maxlen=1000)
 
 # Claudex-Sessions: user_id → ursprüngliche Aufgabenbeschreibung
 _claudex_sessions: dict[int, str] = {}

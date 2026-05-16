@@ -43,11 +43,12 @@ def _stage1(text: str) -> tuple[bool, int]:
     return False, score
 
 
-async def _stage2_llm_guard(text: str) -> bool:
+async def _stage2_llm_guard(text: str, soft_score: int = 0) -> bool:
     """
-    LLM-Guard via OpenRouter (claude-haiku).
+    LLM-Guard via OpenRouter (claude-haiku-4.5).
     Returns True = SAFE, False = INJECTION.
-    Async — blockiert den Event Loop nicht.
+    Bei API-Fehler: wenn soft_score < 3 → SAFE (Bot soll nicht durch API-Hänger sperren),
+    sonst INJECTION (Vorsicht bei starkem Pattern-Verdacht).
     """
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
@@ -58,7 +59,7 @@ async def _stage2_llm_guard(text: str) -> bool:
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "anthropic/claude-haiku-4",
+                    "model": "anthropic/claude-haiku-4.5",
                     "max_tokens": 5,
                     "messages": [
                         {
@@ -75,7 +76,7 @@ async def _stage2_llm_guard(text: str) -> bool:
             result = response.json()["choices"][0]["message"]["content"].strip().upper()
             return result == "SAFE"
     except Exception:
-        return False
+        return soft_score < 3
 
 
 async def is_injection_async(text: str) -> bool:
@@ -89,7 +90,7 @@ async def is_injection_async(text: str) -> bool:
     if hard_blocked:
         return True
     if score > 0:
-        return not await _stage2_llm_guard(text)
+        return not await _stage2_llm_guard(text, score)
     return False
 
 

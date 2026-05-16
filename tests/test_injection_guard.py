@@ -118,8 +118,8 @@ async def test_is_injection_hard_block_no_llm_call(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_stage2_network_timeout_returns_false(monkeypatch):
-    """Bei LLM-Fehler (Timeout) → False zurück (permissiv, kein Crash)."""
+async def test_stage2_timeout_low_score_returns_safe(monkeypatch):
+    """LLM-Timeout bei geringem soft_score → SAFE (kein Bot-Sperren bei API-Hängern)."""
     from app.security.injection_guard import _stage2_llm_guard
     import httpx
 
@@ -127,5 +127,19 @@ async def test_stage2_network_timeout_returns_false(monkeypatch):
         raise httpx.TimeoutException("timeout")
 
     monkeypatch.setattr("httpx.AsyncClient.post", failing_client_post)
-    result = await _stage2_llm_guard("some suspicious text")
+    result = await _stage2_llm_guard("some suspicious text", soft_score=1)
+    assert result is True
+
+
+@pytest.mark.anyio
+async def test_stage2_timeout_high_score_returns_injection(monkeypatch):
+    """LLM-Timeout bei hohem soft_score → INJECTION (Vorsicht bei starkem Verdacht)."""
+    from app.security.injection_guard import _stage2_llm_guard
+    import httpx
+
+    async def failing_client_post(*args, **kwargs):
+        raise httpx.TimeoutException("timeout")
+
+    monkeypatch.setattr("httpx.AsyncClient.post", failing_client_post)
+    result = await _stage2_llm_guard("some text", soft_score=3)
     assert result is False

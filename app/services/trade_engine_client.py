@@ -2,6 +2,7 @@
 HTTP-Client für die Trade Engine REST-API (Port 8081).
 Alle /tradebot und /stocks Handler rufen ausschließlich diese Funktionen auf.
 """
+import asyncio
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -42,8 +43,21 @@ async def _post(path: str, params: dict | None = None) -> dict | None:
 
 # ── Formatierte Status-Reports ────────────────────────────────────────────────
 
+async def _btc_to_eur() -> float:
+    """Fetch current BTC/EUR rate from Trade Engine's Kraken connection."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get("https://api.kraken.com/0/public/Ticker?pair=XBTEUR")
+            r.raise_for_status()
+            result = r.json().get("result", {})
+            pair = next(iter(result.values()))
+            return float(pair["c"][0])
+    except Exception:
+        return 0.0
+
+
 async def fetch_crypto_status() -> str:
-    data = await _get("/status")
+    data, recent = await asyncio.gather(_get("/status"), _get("/trades/recent?limit=3"))
     if not data:
         return "🔴 *Trade Engine offline* (Port 8081 nicht erreichbar)."
 
@@ -56,6 +70,7 @@ async def fetch_crypto_status() -> str:
     positions = crypto.get("positions", [])
     acc       = crypto.get("account", {})
     btc_bal   = float(acc.get("balance", 0)) if acc else None
+    btc_eur   = await _btc_to_eur()
     now       = datetime.now(ET).strftime("%d.%m.%Y %H:%M")
 
     lines = [
@@ -63,7 +78,8 @@ async def fetch_crypto_status() -> str:
         f"🟢 Trade Engine läuft  |  Kraken 24/7",
     ]
     if btc_bal is not None:
-        lines.append(f"💰 Kontostand: `{btc_bal:.6f} BTC`")
+        eur_str = f"  (~{btc_bal * btc_eur:,.2f} €)" if btc_eur else ""
+        lines.append(f"💰 Kontostand: `{btc_bal:.6f} BTC`{eur_str}")
     lines.append("")
 
     lines.append(f"📈 *Offene Positionen: {len(positions)}*")
@@ -72,7 +88,7 @@ async def fetch_crypto_status() -> str:
         side_raw = p.get("side", "long")
         side_tag = "🔴 SHORT" if side_raw == "short" else "🟢 LONG"
         lines.append(
-            f"  • `{p['symbol']}` {side_tag} | Einstieg: `{entry:.6f}` | "
+            f"  • `{p['symbol']}` {side_tag} | Einstieg: `{entry:.8f}` | "
             f"Candles: {p.get('candles_held', 0)} | "
             f"Trailing: {'✅' if p.get('trailing_active') else '⏳'}"
         )
@@ -80,13 +96,34 @@ async def fetch_crypto_status() -> str:
     if not positions:
         lines.append("  _Keine offenen Positionen_")
 
+    # ── Letzte 3 Trades ───────────────────────────────────────────────────────
+    if recent:
+        lines.append("")
+        lines.append("🕐 *Letzte Trades*")
+        for t in recent:
+            pl_pct = float(t.get("pl_pct", 0))
+            pl_btc = float(t.get("pl_abs", 0))
+            pl_eur = pl_btc * btc_eur if btc_eur else None
+            icon   = "✅" if pl_pct >= 0 else "❌"
+            sign   = "+" if pl_pct >= 0 else ""
+            side   = "SHORT" if t.get("side") == "short" else "LONG"
+            eur_str = f" ({sign}{pl_eur:,.2f} €)" if pl_eur is not None else ""
+            closed = t.get("closed_at", "")[:16].replace("T", " ")
+            lines.append(
+                f"  {icon} `{t['symbol']}` {side} | "
+                f"`{sign}{pl_pct:.2f}%`{eur_str} | {closed}"
+            )
+
+    # ── Statistik ─────────────────────────────────────────────────────────────
+    total_pl_btc = stats.get("total_pl", 0)
+    total_pl_eur = total_pl_btc * btc_eur if btc_eur else None
+    eur_total    = f" (~{'+' if total_pl_eur and total_pl_eur >= 0 else ''}{total_pl_eur:,.2f} €)" if total_pl_eur is not None else ""
     lines += [
         "",
         f"📊 *Gesamt-Statistik*",
         f"Trades: `{stats.get('total_trades', 0)}` | "
         f"Win-Rate: `{stats.get('win_rate', 0):.1f}%`",
-        f"Total P&L: `{'+' if stats.get('total_pl', 0) >= 0 else ''}"
-        f"{stats.get('total_pl', 0):.6f} BTC`",
+        f"Total P&L: `{'+' if total_pl_btc >= 0 else ''}{total_pl_btc:.6f} BTC`{eur_total}",
     ]
     return "\n".join(lines)
 

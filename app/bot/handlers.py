@@ -13,7 +13,7 @@ from app.security.injection_guard import is_injection_async
 from app.security.rate_limiter import is_rate_limited
 from app.bot.conversation import get_history, add_message, clear_history
 from app.bot.memory import add_direct, add_indirect, clear_memory, format_memory_overview
-from app.bot.whitelist import is_allowed
+from app.bot.whitelist import is_allowed, require_whitelist
 from app.agents.runner import run as agent_run
 from app.agents.football_news_agent import fetch_news_for_user
 from app.services.claude_runner import run_claude, run_claude_agent, run_claude_agent_continue, WORKDIR
@@ -106,11 +106,9 @@ async def _process_message(user_id: int, text: str, update: Update, context) -> 
     return response
 
 
+@require_whitelist
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    if not is_allowed(user.id):
-        await update.message.reply_text("⛔ Kein Zugriff.")
-        return
     clear_history(user.id)
     await update.message.reply_text(
         f"Hallo {user.first_name}! 👋\n"
@@ -146,39 +144,30 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+@require_whitelist
 async def reset_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if not is_allowed(user_id):
-        await update.message.reply_text("⛔ Kein Zugriff.")
-        return
     clear_history(user_id)
     await update.message.reply_text("🗑️ Gesprächsverlauf gelöscht.")
 
 
+@require_whitelist
 async def memory_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if not is_allowed(user_id):
-        await update.message.reply_text("⛔ Kein Zugriff.")
-        return
     overview = format_memory_overview(user_id)
     await update.message.reply_text(overview)
 
 
+@require_whitelist
 async def forget_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if not is_allowed(user_id):
-        await update.message.reply_text("⛔ Kein Zugriff.")
-        return
     await clear_memory(user_id)
     await update.message.reply_text("🧹 Gedächtnis gelöscht.")
 
 
+@require_whitelist
 async def news_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if not is_allowed(user_id):
-        await update.message.reply_text("⛔ Kein Zugriff.")
-        return
-
     args = context.args or []
     force_refresh = any(a.lower() == "fresh" for a in args)
 
@@ -198,12 +187,9 @@ async def news_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
 
+@require_whitelist
 async def strava_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if not is_allowed(user_id):
-        await update.message.reply_text("⛔ Kein Zugriff.")
-        return
-
     await update.message.reply_text("🏃 Starte Strava Kudos-Bot…")
 
     def _run_kudos() -> str:
@@ -247,7 +233,7 @@ async def strava_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return "\n".join(lines)
 
     try:
-        result = await asyncio.get_event_loop().run_in_executor(None, _run_kudos)
+        result = await asyncio.get_running_loop().run_in_executor(None, _run_kudos)
     except Exception as e:
         logger.exception("Strava Kudos Fehler")
         result = f"❌ Fehler beim Ausführen des Kudos-Bots: {e}"
@@ -255,12 +241,9 @@ async def strava_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(result)
 
 
+@require_whitelist
 async def claude_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if not is_allowed(user_id):
-        await update.message.reply_text("⛔ Kein Zugriff.")
-        return
-
     limited, retry_after = is_rate_limited(user_id)
     if limited:
         await update.message.reply_text(f"⏳ Zu viele Nachrichten. Bitte {retry_after}s warten.")
@@ -278,12 +261,9 @@ async def claude_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(chunk)
 
 
+@require_whitelist
 async def claudex_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if not is_allowed(user_id):
-        await update.message.reply_text("⛔ Kein Zugriff.")
-        return
-
     limited, retry_after = is_rate_limited(user_id)
     if limited:
         await update.message.reply_text(f"⏳ Zu viele Nachrichten. Bitte {retry_after}s warten.")
@@ -369,6 +349,7 @@ async def claudex_fertig_handler(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(f"⚠️ Commit fehlgeschlagen:\n{err.strip()[:400]}")
 
 
+@require_whitelist
 async def nein_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if _claudex_sessions.pop(user_id, None) is not None:
@@ -377,11 +358,9 @@ async def nein_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Abgebrochen.")
 
 
+@require_whitelist
 async def health_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if not is_allowed(user_id):
-        await update.message.reply_text("⛔ Kein Zugriff.")
-        return
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     report = await run_health_check()
     await update.message.reply_text(report, parse_mode="Markdown")
@@ -503,12 +482,9 @@ def _cal_label(cal_num: int) -> str:
     return "Kalender 1 (Gmail)" if cal_num == 1 else "Kalender 2 (Workspace)"
 
 
+@require_whitelist
 async def termine_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if not is_allowed(user_id):
-        await update.message.reply_text("⛔ Kein Zugriff.")
-        return
-
     args = context.args or []
     mode = args[0].lower() if args else "heute"
 
@@ -540,7 +516,7 @@ async def termine_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         start_utc = day_start.astimezone(timezone.utc)
         end_utc = day_end.astimezone(timezone.utc)
         events = await loop.run_in_executor(
@@ -573,11 +549,9 @@ async def termine_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(heading + "\n\n".join(lines), parse_mode="Markdown")
 
 
+@require_whitelist
 async def kalender1_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if not is_allowed(user_id):
-        await update.message.reply_text("⛔ Kein Zugriff.")
-        return
     if not GCAL_CALENDAR_ID_1:
         await update.message.reply_text("❌ GCAL_CALENDAR_ID_1 nicht konfiguriert.")
         return
@@ -585,11 +559,9 @@ async def kalender1_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Aktiver Kalender: *Kalender 1 (Gmail)*", parse_mode="Markdown")
 
 
+@require_whitelist
 async def kalender2_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if not is_allowed(user_id):
-        await update.message.reply_text("⛔ Kein Zugriff.")
-        return
     if not GCAL_CALENDAR_ID_2:
         await update.message.reply_text("❌ GCAL_CALENDAR_ID_2 nicht konfiguriert.")
         return

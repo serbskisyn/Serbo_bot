@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -6,6 +7,9 @@ logger = logging.getLogger(__name__)
 
 INDIRECT_THRESHOLD = 5
 MEMORY_FILE = Path(__file__).parent.parent / "data" / "memory.json"
+
+# Schützt _store + JSON-Persistenz gegen gleichzeitige Mutationen.
+_lock = asyncio.Lock()
 
 
 # ── Laden beim Start ──────────────────────────────────────────────────────────
@@ -36,21 +40,23 @@ def _get_user(user_id: int) -> dict:
     return _store[key]
 
 
-def add_direct(user_id: int, key: str, value: str) -> None:
-    user = _get_user(user_id)
-    user["confirmed"][key.lower()] = value
-    _save(_store)
+async def add_direct(user_id: int, key: str, value: str) -> None:
+    async with _lock:
+        user = _get_user(user_id)
+        user["confirmed"][key.lower()] = value
+        _save(_store)
 
 
-def add_indirect(user_id: int, fact: str) -> None:
-    user = _get_user(user_id)
-    fact = fact.lower()
-    user["pending"][fact] = user["pending"].get(fact, 0) + 1
-    if user["pending"][fact] >= INDIRECT_THRESHOLD:
-        key, _, value = fact.partition(":")
-        user["confirmed"][key.strip()] = value.strip()
-        del user["pending"][fact]
-    _save(_store)
+async def add_indirect(user_id: int, fact: str) -> None:
+    async with _lock:
+        user = _get_user(user_id)
+        fact = fact.lower()
+        user["pending"][fact] = user["pending"].get(fact, 0) + 1
+        if user["pending"][fact] >= INDIRECT_THRESHOLD:
+            key, _, value = fact.partition(":")
+            user["confirmed"][key.strip()] = value.strip()
+            del user["pending"][fact]
+        _save(_store)
 
 
 def get_confirmed(user_id: int) -> dict:
@@ -65,9 +71,10 @@ def get_memory_prompt(user_id: int) -> str:
     return f"\nWas du über den User weißt:\n{lines}"
 
 
-def clear_memory(user_id: int) -> None:
-    _store[str(user_id)] = {"confirmed": {}, "pending": {}}
-    _save(_store)
+async def clear_memory(user_id: int) -> None:
+    async with _lock:
+        _store[str(user_id)] = {"confirmed": {}, "pending": {}}
+        _save(_store)
 
 
 def format_memory_overview(user_id: int) -> str:

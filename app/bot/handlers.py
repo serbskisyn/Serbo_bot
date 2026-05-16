@@ -99,9 +99,9 @@ async def _process_message(user_id: int, text: str, update: Update, context) -> 
     add_message(user_id, "assistant", response)
     facts = await extract_facts(text, response)
     for key, value in facts.get("direct", {}).items():
-        add_direct(user_id, key, value)
+        await add_direct(user_id, key, value)
     for fact in facts.get("indirect", []):
-        add_indirect(user_id, fact)
+        await add_indirect(user_id, fact)
     await update.message.reply_text(response)
     return response
 
@@ -169,7 +169,7 @@ async def forget_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(user_id):
         await update.message.reply_text("⛔ Kein Zugriff.")
         return
-    clear_memory(user_id)
+    await clear_memory(user_id)
     await update.message.reply_text("🧹 Gedächtnis gelöscht.")
 
 

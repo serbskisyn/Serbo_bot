@@ -118,6 +118,8 @@ async def fetch_crypto_status() -> str:
     total_pl_btc = stats.get("total_pl", 0)
     total_pl_eur = total_pl_btc * btc_eur if btc_eur else None
     eur_total    = f" (~{'+' if total_pl_eur and total_pl_eur >= 0 else ''}{total_pl_eur:,.2f} €)" if total_pl_eur is not None else ""
+    cb           = data.get("circuit_breaker", {})
+    cb_line      = "\n⚡ *Circuit Breaker AKTIV* — neue Entries gesperrt" if cb.get("active") else ""
     lines += [
         "",
         f"📊 *Gesamt-Statistik*",
@@ -125,6 +127,8 @@ async def fetch_crypto_status() -> str:
         f"Win-Rate: `{stats.get('win_rate', 0):.1f}%`",
         f"Total P&L: `{'+' if total_pl_btc >= 0 else ''}{total_pl_btc:.6f} BTC`{eur_total}",
     ]
+    if cb_line:
+        lines.append(cb_line)
     return "\n".join(lines)
 
 

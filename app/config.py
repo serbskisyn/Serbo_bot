@@ -11,7 +11,7 @@ OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
 # Default: über OpenRouter (nutzt OPENROUTER_API_KEY). Wenn GROK_API_KEY gesetzt
 # ist, geht's direkt an api.x.ai — sicherer Fallback falls OpenRouter die
 # search_parameters nicht durchreicht.
-GROK_MODEL    = os.getenv("GROK_MODEL", "x-ai/grok-4.3")
+GROK_MODEL    = os.getenv("GROK_MODEL", "x-ai/grok-4-fast")
 GROK_API_KEY  = os.getenv("GROK_API_KEY", "")
 GROK_BASE_URL = os.getenv("GROK_BASE_URL", "https://api.x.ai/v1")
 BOT_NAME           = os.getenv("BOT_NAME", "MeinAgent")
@@ -51,33 +51,25 @@ if _push_ids_raw.strip():
         int(x) for x in _push_ids_raw.split(",") if x.strip()
     ]
 else:
-    NEWS_DAILY_PUSH_USER_IDS: list[int] = list(ALLOWED_USER_IDS)
+    NEWS_DAILY_PUSH_USER_IDS: list[int] = sorted(ALLOWED_USER_IDS)
 
 # ── Admin Alert ───────────────────────────────────────────────────────────────
 # Telegram-Chat-ID fuer System-Alerts (Feed-Health, Fehler etc.)
 # Setzen via .env: ADMIN_CHAT_ID=123456789
-# Fallback: erster Eintrag aus ALLOWED_USER_IDS (meist der Bot-Owner)
+# Fallback: kleinste ID aus ALLOWED_USER_IDS — deterministisch über Restarts.
 _admin_raw = os.getenv("ADMIN_CHAT_ID", "")
 if _admin_raw.strip():
     ADMIN_CHAT_ID: int | None = int(_admin_raw.strip())
 else:
-    ADMIN_CHAT_ID: int | None = next(iter(ALLOWED_USER_IDS), None)
+    ADMIN_CHAT_ID: int | None = min(ALLOWED_USER_IDS) if ALLOWED_USER_IDS else None
 
 # ── Google Sheets / Dienstplan ────────────────────────────────────────────────
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 
-SCHEDULE_URLAUB_SHEET_ID = os.getenv(
-    "SCHEDULE_URLAUB_SHEET_ID", "1M9WTVPlP-ivvmW_SsPSzQLIHBDwnGdFyoqgeHR7QUZE"
-)
-SCHEDULE_WUNSCH_SHEET_ID = os.getenv(
-    "SCHEDULE_WUNSCH_SHEET_ID", "1a1IcfdnfyU-MdLjzCajC2LH5thbHw5WTN9Q1O1kInt8"
-)
-SCHEDULE_KRANK_SHEET_ID = os.getenv(
-    "SCHEDULE_KRANK_SHEET_ID", "1BO4LwgNm9YWHyrYqy6N9kaDgoj1pA7xpcYZVkWlNkLc"
-)
-SCHEDULE_OUTPUT_SHEET_ID = os.getenv(
-    "SCHEDULE_OUTPUT_SHEET_ID", "1nMF24sf-HNvgJRMvQeZ3lTSf6qiGTvsHXedWjFpckkQ"
-)
+SCHEDULE_URLAUB_SHEET_ID = os.getenv("SCHEDULE_URLAUB_SHEET_ID", "")
+SCHEDULE_WUNSCH_SHEET_ID = os.getenv("SCHEDULE_WUNSCH_SHEET_ID", "")
+SCHEDULE_KRANK_SHEET_ID  = os.getenv("SCHEDULE_KRANK_SHEET_ID",  "")
+SCHEDULE_OUTPUT_SHEET_ID = os.getenv("SCHEDULE_OUTPUT_SHEET_ID", "")
 
 
 # ── TTS ──────────────────────────────────────────────────────────────────────

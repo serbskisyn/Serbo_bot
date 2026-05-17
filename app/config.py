@@ -11,7 +11,7 @@ OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
 # Default: über OpenRouter (nutzt OPENROUTER_API_KEY). Wenn GROK_API_KEY gesetzt
 # ist, geht's direkt an api.x.ai — sicherer Fallback falls OpenRouter die
 # search_parameters nicht durchreicht.
-GROK_MODEL    = os.getenv("GROK_MODEL", "x-ai/grok-4-fast")
+GROK_MODEL    = os.getenv("GROK_MODEL", "x-ai/grok-4.3")
 GROK_API_KEY  = os.getenv("GROK_API_KEY", "")
 GROK_BASE_URL = os.getenv("GROK_BASE_URL", "https://api.x.ai/v1")
 BOT_NAME           = os.getenv("BOT_NAME", "MeinAgent")

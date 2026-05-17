@@ -121,6 +121,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/claudex <Aufgabe> — Claude Agent Session (Dateien, Git, Bash)\n"
         f"  └ /fertig [commit] — Session beenden · /nein — abbrechen\n"
         f"/health — System-Status prüfen\n"
+        f"/tests — Test-Suite beider Bots ausführen\n"
         f"/dienstplan — Dienstplan erstellen\n"
         f"/debugwunsch — Sheet-Struktur prüfen (Diagnose)\n\n"
         f"📅 *Kalender*\n"
@@ -388,6 +389,37 @@ async def health_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     report = await run_health_check()
     await update.message.reply_text(report, parse_mode="Markdown")
+
+
+@require_whitelist
+async def tests_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    import asyncio, subprocess
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
+    async def _run_suite(label: str, cwd: str, venv: str) -> str:
+        result = await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: subprocess.run(
+                [f"{venv}/bin/pytest", "tests/", "-v", "--tb=short", "--no-header"],
+                cwd=cwd, capture_output=True, text=True, timeout=120,
+            )
+        )
+        output = (result.stdout + result.stderr).strip()
+        # Letzte Zusammenfassungszeile extrahieren
+        lines = output.splitlines()
+        summary = next((l for l in reversed(lines) if "passed" in l or "failed" in l or "error" in l), "kein Ergebnis")
+        # Nur fehlgeschlagene Tests + Summary ausgeben, bei Grün nur Summary
+        if result.returncode != 0:
+            failed_lines = [l for l in lines if "FAILED" in l or "ERROR" in l or "ERRORS" in l]
+            detail = "\n".join(failed_lines[:20])
+            return f"*{label}*\n❌ {summary}\n```\n{detail}\n```"
+        return f"*{label}*\n✅ {summary}"
+
+    serbo   = await _run_suite("Serbo\\_bot", "/home/pi/Serbo_bot",    "/home/pi/Serbo_bot/.venv")
+    trade   = await _run_suite("Trade Engine", "/home/pi/trade_engine", "/home/pi/trade_engine/.venv")
+    report  = f"🧪 *Test-Report* — {__import__('datetime').datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n{serbo}\n\n{trade}"
+    for chunk in _split_message(report):
+        await update.message.reply_text(chunk, parse_mode="Markdown")
 
 
 @guarded

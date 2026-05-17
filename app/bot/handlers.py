@@ -1,7 +1,6 @@
 import io
 import asyncio
 import logging
-from collections import deque
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from telegram import Update
@@ -13,7 +12,7 @@ from app.security.injection_guard import is_injection_async
 from app.security.rate_limiter import is_rate_limited
 from app.bot.conversation import get_history, add_message, clear_history
 from app.bot.memory import add_direct, add_indirect, clear_memory, format_memory_overview
-from app.bot.whitelist import is_allowed, require_whitelist
+from app.bot.whitelist import is_allowed, require_whitelist, guarded
 from app.agents.runner import run as agent_run
 from app.agents.football_news_agent import fetch_news_for_user
 from app.agents.xnews_agent import fetch_x_news
@@ -34,9 +33,6 @@ from strava_kudos.kudos_bot import (
 logger = logging.getLogger(__name__)
 
 MAX_INPUT_CHARS = 2000
-
-# Punkt 3: Telegram-Retry-Schutz — bereits gesehene update_ids
-_seen_update_ids: deque[int] = deque(maxlen=1000)
 
 # Claudex-Sessions: user_id → ursprüngliche Aufgabenbeschreibung
 _claudex_sessions: dict[int, str] = {}
@@ -394,28 +390,11 @@ async def health_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(report, parse_mode="Markdown")
 
 
+@guarded
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_text = update.message.text or ""
     logger.info("Textnachricht von User %d", user_id)
-
-    # Punkt 3: Dedup
-    uid = update.update_id
-    if uid in _seen_update_ids:
-        logger.debug("Doppelte update_id %d ignoriert", uid)
-        return
-    _seen_update_ids.append(uid)
-
-    if not is_allowed(user_id):
-        logger.warning("Unauthorized user | user=%d", user_id)
-        await update.message.reply_text("⛔ Kein Zugriff.")
-        return
-
-    limited, retry_after = is_rate_limited(user_id)
-    if limited:
-        logger.warning("Rate limit exceeded | user=%d", user_id)
-        await update.message.reply_text(f"⏳ Zu viele Nachrichten. Bitte {retry_after}s warten.")
-        return
 
     # Punkt 2: Null-Byte-Strip + Längen-Limit
     user_text = user_text.replace("\x00", "").strip()
@@ -441,25 +420,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _process_message(user_id, user_text, update, context)
 
 
+@guarded
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info("Sprachnachricht von User %d", user_id)
-
-    # Punkt 3: Dedup
-    uid = update.update_id
-    if uid in _seen_update_ids:
-        logger.debug("Doppelte update_id %d ignoriert", uid)
-        return
-    _seen_update_ids.append(uid)
-
-    if not is_allowed(user_id):
-        await update.message.reply_text("⛔ Kein Zugriff.")
-        return
-
-    limited, retry_after = is_rate_limited(user_id)
-    if limited:
-        await update.message.reply_text(f"⏳ Zu viele Nachrichten. Bitte {retry_after}s warten.")
-        return
 
     voice = update.message.voice
     voice_file = await context.bot.get_file(voice.file_id)
@@ -481,7 +445,12 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(text) > MAX_INPUT_CHARS:
         text = text[:MAX_INPUT_CHARS]
 
-    await update.message.reply_text(f"🎤 Transkribiert: _{text}_", parse_mode="Markdown")
+    if await is_injection_async(text):
+        logger.warning("Injection attempt (voice) | user=%d", user_id)
+        await update.message.reply_text("⚠️ Ungültige Eingabe erkannt.")
+        return
+
+    await update.message.reply_text(f"🎤 Transkribiert: {text}")
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
     # Punkt 5: TTS — Antwort generieren und als Audio zurückschicken

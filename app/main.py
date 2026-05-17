@@ -16,6 +16,7 @@ from app.bot.handlers import (
     news_handler, strava_handler, claude_handler, claudex_handler,
     claudex_fertig_handler, nein_handler, health_handler,
     termine_handler, kalender1_handler, kalender2_handler,
+    xnews_handler,
 )
 from app.services.news_cache import start_background_scheduler
 from app.bot.schedule_dialog import get_schedule_handler
@@ -92,6 +93,7 @@ def main():
     app.add_handler(CommandHandler("memory",  memory_handler))
     app.add_handler(CommandHandler("forget",  forget_handler))
     app.add_handler(CommandHandler("news",    news_handler))
+    app.add_handler(CommandHandler("xnews",   xnews_handler))
     app.add_handler(CommandHandler("strava",  strava_handler))
     app.add_handler(CommandHandler("claude",  claude_handler))
     app.add_handler(CommandHandler("claudex", claudex_handler))

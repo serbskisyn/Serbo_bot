@@ -16,6 +16,7 @@ from app.bot.memory import add_direct, add_indirect, clear_memory, format_memory
 from app.bot.whitelist import is_allowed, require_whitelist
 from app.agents.runner import run as agent_run
 from app.agents.football_news_agent import fetch_news_for_user
+from app.agents.xnews_agent import fetch_x_news
 from app.services.claude_runner import run_claude, run_claude_agent, run_claude_agent_continue, WORKDIR
 from app.services.health_check import run_health_check
 from app.bot.schedule_dialog import get_schedule_handler
@@ -118,6 +119,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/forget — Mein Gedächtnis löschen\n"
         f"/news — Aktuelle News deiner Lieblingsclubs\n"
         f"/news fresh — News sofort neu laden (Live-Fetch)\n"
+        f"/xnews <thema> — X.com Live-Recherche via Grok\n"
         f"/strava — Strava Kudos an alle Aktivitäten im Feed vergeben\n"
         f"/claude <Anfrage> — Claude Code CLI (nur Text)\n"
         f"/claudex <Aufgabe> — Claude Agent Session (Dateien, Git, Bash)\n"
@@ -163,6 +165,32 @@ async def forget_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await clear_memory(user_id)
     await update.message.reply_text("🧹 Gedächtnis gelöscht.")
+
+
+@require_whitelist
+async def xnews_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args or []
+    topic = " ".join(args).strip()
+    if not topic:
+        await update.message.reply_text(
+            "ℹ️ Nutzung: `/xnews <thema>`\n"
+            "Beispiel: `/xnews Bitcoin ETF Genehmigung`",
+            parse_mode="Markdown",
+        )
+        return
+
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    reply = await _run_with_typing(
+        context.bot,
+        update.effective_chat.id,
+        fetch_x_news(topic),
+    )
+    for chunk in _split_message(reply):
+        await update.message.reply_text(
+            chunk,
+            parse_mode="Markdown",
+            disable_web_page_preview=True,
+        )
 
 
 @require_whitelist

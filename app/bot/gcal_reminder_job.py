@@ -40,7 +40,7 @@ async def _check_and_notify(context) -> None:
     if not calendars:
         return
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     for calendar_id, label in calendars:
         try:
             events = await loop.run_in_executor(
@@ -96,7 +96,7 @@ async def send_daily_calendar_summary(context) -> None:
     if not calendars:
         return
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     blocks = []
     total_events = 0
 

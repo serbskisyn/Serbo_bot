@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime, timezone
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -9,20 +9,30 @@ CLAUDE_BIN = "/home/pi/.local/bin/claude"
 WORKDIR = Path(__file__).parent.parent.parent  # /home/pi/Serbo_bot
 AUDIT_LOG = WORKDIR / "logs" / "claudex_audit.log"
 
+# Dedizierter Audit-Logger: rotierend, thread-/process-safe, ohne Propagation.
+_audit_logger = logging.getLogger("serbo_bot.audit")
+_audit_logger.setLevel(logging.INFO)
+_audit_logger.propagate = False
+if not _audit_logger.handlers:
+    AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
+    _handler = RotatingFileHandler(
+        AUDIT_LOG, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+    )
+    _handler.setFormatter(logging.Formatter("%(asctime)s | %(message)s"))
+    _audit_logger.addHandler(_handler)
+
 
 def _audit(tag: str, prompt: str, stdout: bytes, stderr: bytes,
            exit_code: int | None) -> None:
-    """Schreibt Claudex-Aufruf an logs/claudex_audit.log. Fehler werden geloggt, nicht geraised."""
+    """Schreibt Claudex-Aufruf an logs/claudex_audit.log (rotiert bei 10 MB, 5 Backups)."""
     try:
-        AUDIT_LOG.parent.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now(timezone.utc).isoformat()
-        with AUDIT_LOG.open("a", encoding="utf-8") as f:
-            f.write(f"\n=== {ts} | {tag} | exit={exit_code} ===\n")
-            f.write(f"PROMPT: {prompt[:200]}\n")
-            if stdout:
-                f.write(f"STDOUT:\n{stdout.decode(errors='replace')[:4000]}\n")
-            if stderr:
-                f.write(f"STDERR:\n{stderr.decode(errors='replace')[:4000]}\n")
+        parts = [f"=== {tag} | exit={exit_code} ===",
+                 f"PROMPT: {prompt[:4000]}"]
+        if stdout:
+            parts.append(f"STDOUT:\n{stdout.decode(errors='replace')[:4000]}")
+        if stderr:
+            parts.append(f"STDERR:\n{stderr.decode(errors='replace')[:4000]}")
+        _audit_logger.info("\n".join(parts))
     except Exception as e:
         logger.warning("Audit-Log fehlgeschlagen: %s", e)
 

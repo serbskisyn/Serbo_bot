@@ -154,8 +154,21 @@ class ScheduleOrchestrator:
             if violations_vorherige:
                 gen.violations = list(violations_vorherige)
 
-            gen.generate()
-            kontroll = kontroll_agent.run(gen)
+            try:
+                gen.generate()
+            except Exception as e:
+                logger.exception("DienstplanGenerator.generate() fehlgeschlagen (Runde %d)", runde)
+                await self.status_cb(f"❌ Generierung fehlgeschlagen (Runde {runde}): {e}")
+                raise
+
+            try:
+                kontroll = kontroll_agent.run(gen)
+            except Exception as e:
+                logger.exception("KontrollAgent.run() fehlgeschlagen (Runde %d)", runde)
+                await self.status_cb(f"⚠️ Kontrollprüfung fehlgeschlagen: {e} — Plan wird ohne Prüfung übernommen.")
+                kontroll = None
+                break
+
             log.append(f"Runde {runde}: {len(kontroll.fehler)} Fehler, {len(kontroll.warnungen)} Warnungen")
 
             if kontroll.ok:
@@ -176,6 +189,7 @@ class ScheduleOrchestrator:
                         f"⚠️ Max. Runden ({MAX_RUNDEN}) erreicht — Plan mit verbleibenden "
                         f"{len(kontroll.fehler)} Fehlern wird übernommen."
                     )
+                    break
 
         return OrchestratorErgebnis(
             gen=gen,

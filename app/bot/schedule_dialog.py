@@ -147,15 +147,30 @@ async def _starte_generierung(update: Update, context: ContextTypes.DEFAULT_TYPE
     async def status(msg: str):
         await update.message.reply_text(msg)
 
-    orchestrator = ScheduleOrchestrator(status_cb=status)
-    ergebnis = await orchestrator.run(monat=monat, jahr=jahr, manuell_krank=kranktage)
+    try:
+        orchestrator = ScheduleOrchestrator(status_cb=status)
+        ergebnis = await orchestrator.run(monat=monat, jahr=jahr, manuell_krank=kranktage)
+    except Exception as e:
+        logger.exception("Orchestrator fehlgeschlagen")
+        await update.message.reply_text(
+            f"❌ Fehler beim Generieren des Plans:\n`{e}`\n\n"
+            "Bitte prüfe die Google-Sheet-Konfiguration und starte mit /dienstplan neu.",
+            parse_mode="Markdown",
+        )
+        return ConversationHandler.END
 
     gen = ergebnis.gen
+    if gen is None:
+        await update.message.reply_text(
+            "❌ Plan konnte nicht erstellt werden (interner Fehler).\n"
+            "Bitte mit /dienstplan neu starten.",
+        )
+        return ConversationHandler.END
 
     # Report ausgeben
     report = gen.get_report()
-    # Kontroll-Zusammenfassung anhängen
-    report += "\n\n" + ergebnis.kontroll.zusammenfassung()
+    if ergebnis.kontroll is not None:
+        report += "\n\n" + ergebnis.kontroll.zusammenfassung()
     for chunk in _chunk_text(report, 4000):
         await update.message.reply_text(f"```\n{chunk}\n```", parse_mode="Markdown")
 

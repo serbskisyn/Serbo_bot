@@ -120,13 +120,39 @@ async def fetch_crypto_status() -> str:
     eur_total    = f" (~{'+' if total_pl_eur and total_pl_eur >= 0 else ''}{total_pl_eur:,.2f} €)" if total_pl_eur is not None else ""
     cb           = data.get("circuit_breaker", {})
     cb_line      = "\n⚡ *Circuit Breaker AKTIV* — neue Entries gesperrt" if cb.get("active") else ""
+
     lines += [
         "",
         f"📊 *Gesamt-Statistik*",
         f"Trades: `{stats.get('total_trades', 0)}` | "
         f"Win-Rate: `{stats.get('win_rate', 0):.1f}%`",
-        f"Total P&L: `{'+' if total_pl_btc >= 0 else ''}{total_pl_btc:.6f} BTC`{eur_total}",
+        f"Brutto P&L: `{'+' if total_pl_btc >= 0 else ''}{total_pl_btc:.6f} BTC`{eur_total}",
     ]
+
+    fs = data.get("fee_stats", {})
+    if fs:
+        net_btc   = fs.get("net_pl", 0)
+        net_eur   = net_btc * btc_eur if btc_eur else None
+        avg_btc   = fs.get("avg_net_trade", 0)
+        avg_eur   = avg_btc * btc_eur if btc_eur else None
+        fees_btc  = fs.get("total_fees", 0)
+        payoff    = fs.get("payoff_ratio")
+        be_wr     = fs.get("breakeven_wr")
+
+        net_sign  = "+" if net_btc >= 0 else ""
+        avg_sign  = "+" if avg_btc >= 0 else ""
+        net_eur_s = f" (~{net_sign}{net_eur:,.2f} €)" if net_eur is not None else ""
+        avg_eur_s = f" ({avg_sign}{avg_eur:,.4f} €)" if avg_eur is not None else ""
+        payoff_s  = f"`{payoff:.2f}x`" if payoff is not None else "`–`"
+        be_wr_s   = f" _(Break-even: {be_wr:.0f}%)_" if be_wr else ""
+
+        lines += [
+            f"Gebühren: `-{fees_btc:.6f} BTC`",
+            f"Netto P&L: `{net_sign}{net_btc:.6f} BTC`{net_eur_s}",
+            f"Avg/Trade netto: `{avg_sign}{avg_btc:.8f} BTC`{avg_eur_s}",
+            f"Payoff-Ratio: {payoff_s}{be_wr_s}",
+        ]
+
     if cb_line:
         lines.append(cb_line)
     return "\n".join(lines)

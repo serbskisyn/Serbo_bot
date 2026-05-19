@@ -128,17 +128,12 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/termine [heute|morgen|woche] — Kalendertermine anzeigen\n"
         f"/kalender1 — Gmail-Kalender aktiv\n"
         f"/kalender2 — Workspace-Kalender aktiv\n\n"
-        f"📈 *Crypto Trading Bot (Freqtrade)*\n"
-        f"/tradebot — Status, Wallet & P&L\n"
-        f"/tradebot pause — Neue Käufe stoppen\n"
-        f"/tradebot resume — Käufe wieder aktivieren\n"
-        f"/tradebot stop — Bot anhalten\n"
-        f"/tradebot start — Bot starten\n"
-        f"/tradebot help — Alle Trading-Befehle\n\n"
-        f"📊 *Aktien Bot (Alpaca)*\n"
-        f"/stocks — Status, Positionen & P&L\n"
-        f"/stocks scan — Manuellen LLM-Scan starten\n"
-        f"/stocks help — Alle Aktien-Befehle",
+        f"📈 *Trading Bot (Crypto + Stocks)*\n"
+        f"/tradebot — Kombinierter Status (Crypto + Stocks)\n"
+        f"/tradebot crypto pause — Neue Crypto-Käufe stoppen\n"
+        f"/tradebot crypto resume — Crypto-Käufe wieder aktivieren\n"
+        f"/tradebot stocks scan — Manuellen Aktien-Scan starten\n"
+        f"/tradebot help — Alle Trading-Befehle",
         parse_mode="Markdown",
     )
 

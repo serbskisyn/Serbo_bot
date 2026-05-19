@@ -28,7 +28,7 @@ from app.services.health_check import send_daily_health_check
 from app.bot.gcal_reminder_job import register_gcal_reminder_job, send_daily_calendar_summary
 from app.agents.schedule.lead_qualifying_agent import register_lead_qualifying_job
 from app.bot.trading_job import tradebot_handler, register_trading_stats_job
-from app.bot.alpaca_job import stocks_handler, register_alpaca_jobs
+from app.bot.alpaca_job import register_alpaca_jobs
 
 _BERLIN = ZoneInfo("Europe/Berlin")
 
@@ -106,7 +106,6 @@ def main():
     app.add_handler(CommandHandler("kalender1", kalender1_handler))
     app.add_handler(CommandHandler("kalender2", kalender2_handler))
     app.add_handler(CommandHandler("tradebot", tradebot_handler))
-    app.add_handler(CommandHandler("stocks",   stocks_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_handler(MessageHandler(filters.VOICE, voice_handler))
     app.add_error_handler(error_handler)

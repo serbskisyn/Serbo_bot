@@ -5,17 +5,30 @@ from telegram.ext import ContextTypes
 
 from app.bot.whitelist import is_allowed
 from app.config import ADMIN_CHAT_ID, TRADING_STATS_HOUR, TRADING_STATS_MINUTE
-from app.services.trade_engine_client import fetch_status, trigger_scan
+from app.services.trade_engine_client import fetch_status, fetch_crypto_status, trigger_scan, control_crypto
 
 logger = logging.getLogger(__name__)
 
-_HELP = (
+_HELP_CRYPTO = (
+    "🪙 *Crypto-Befehle*\n\n"
+    "`/tradebot crypto pause` — Neue Käufe stoppen\n"
+    "`/tradebot crypto resume` — Käufe wieder aktivieren\n"
+    "`/tradebot crypto stop` — Alias für pause\n"
+    "`/tradebot crypto start` — Alias für resume\n"
+    "`/tradebot crypto help` — Diese Übersicht"
+)
+
+_HELP_STOCKS = (
+    "📈 *Stocks-Befehle*\n\n"
+    "`/tradebot stocks scan` — Manuellen LLM-Scan starten\n"
+    "`/tradebot stocks help` — Diese Übersicht"
+)
+
+_HELP_FULL = (
     "🤖 *Trading Bot*\n\n"
-    "`/tradebot` — Kombinierter Status (Crypto + Stocks)\n"
-    "`/tradebot scan` — Crypto-Scan auslösen\n"
-    "`/tradebot stocks` — Stocks-Scan auslösen\n"
-    "`/tradebot help` — Diese Übersicht\n\n"
-    "_`/stocks` ist ein Alias für `/tradebot`_"
+    "`/tradebot` — Kombinierter Status (Crypto + Stocks)\n\n"
+    + _HELP_CRYPTO + "\n\n"
+    + _HELP_STOCKS
 )
 
 
@@ -24,20 +37,51 @@ async def tradebot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text("⛔ Kein Zugriff.")
         return
 
-    sub = (context.args[0].lower() if context.args else "").strip()
+    args = [a.lower() for a in (context.args or [])]
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
-    if sub == "help":
-        await update.message.reply_text(_HELP, parse_mode="Markdown")
-    elif sub == "scan":
-        reply = await trigger_scan("crypto")
-        await update.message.reply_text(reply, parse_mode="Markdown")
-    elif sub == "stocks":
-        reply = await trigger_scan("stocks")
-        await update.message.reply_text(reply, parse_mode="Markdown")
-    else:
+    # /tradebot
+    if not args:
         reply = await fetch_status()
         await update.message.reply_text(reply, parse_mode="Markdown")
+        return
+
+    # /tradebot help
+    if args[0] == "help":
+        await update.message.reply_text(_HELP_FULL, parse_mode="Markdown")
+        return
+
+    # /tradebot crypto <action>
+    if args[0] == "crypto":
+        action = args[1] if len(args) > 1 else ""
+        if action == "help" or not action:
+            await update.message.reply_text(_HELP_CRYPTO, parse_mode="Markdown")
+        elif action in ("pause", "resume", "stop", "start"):
+            reply = await control_crypto(action)
+            await update.message.reply_text(reply, parse_mode="Markdown")
+        else:
+            await update.message.reply_text(
+                f"⚠️ Unbekannte Aktion: `{action}`\n\n" + _HELP_CRYPTO, parse_mode="Markdown"
+            )
+        return
+
+    # /tradebot stocks <action>
+    if args[0] == "stocks":
+        action = args[1] if len(args) > 1 else ""
+        if action == "help" or not action:
+            await update.message.reply_text(_HELP_STOCKS, parse_mode="Markdown")
+        elif action == "scan":
+            reply = await trigger_scan("stocks")
+            await update.message.reply_text(reply, parse_mode="Markdown")
+        else:
+            await update.message.reply_text(
+                f"⚠️ Unbekannte Aktion: `{action}`\n\n" + _HELP_STOCKS, parse_mode="Markdown"
+            )
+        return
+
+    await update.message.reply_text(
+        f"⚠️ Unbekannte Option: `{args[0]}`\n\n" + _HELP_FULL, parse_mode="Markdown"
+    )
 
 
 async def send_daily_trading_stats(context: ContextTypes.DEFAULT_TYPE) -> None:

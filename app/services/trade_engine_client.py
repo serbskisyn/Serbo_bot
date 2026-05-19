@@ -184,3 +184,20 @@ async def trigger_scan(market: str = "all") -> str:
     if not result:
         return "⚠️ Trade Engine nicht erreichbar."
     return f"🔍 Scan gestartet (`{market}`) — Signale kommen per Push."
+
+
+async def control_crypto(action: str) -> str:
+    """pause | resume | start (= resume alias) | stop (= pause alias)"""
+    if action in ("pause", "stop"):
+        result = await _post("/crypto/pause")
+        if not result:
+            return "⚠️ Trade Engine nicht erreichbar."
+        icon = "⏸️" if action == "pause" else "🛑"
+        label = "pausiert" if action == "pause" else "gestoppt"
+        return f"{icon} Crypto-Entries {label} — offene Positionen laufen weiter."
+    if action in ("resume", "start"):
+        result = await _post("/crypto/resume")
+        if not result:
+            return "⚠️ Trade Engine nicht erreichbar."
+        return "▶️ Crypto-Entries wieder aktiv."
+    return f"⚠️ Unbekannte Aktion: `{action}`"

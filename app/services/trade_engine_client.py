@@ -173,22 +173,17 @@ async def fetch_status() -> str:
 
     lines += ["", "📊 *Statistik*"]
 
-    # Kraken Crypto — P&L-Werte aus fee_stats (Portfolio-Delta, zuverlässiger als Summe pl_abs)
+    # Kraken Crypto — P&L aus Summe der pl_abs je Trade (echte Handelsanteile)
     lines.append("")
     lines.append("🪙 *Kraken Crypto*")
     if cs["trades"]:
+        g_btc   = cs["gross_pl"]
+        g_sign  = "+" if g_btc >= 0 else ""
+        g_eur_s = f" (~{g_sign}{g_btc * btc_eur:,.2f} €)" if btc_eur else ""
         lines.append(f"Trades: `{cs['trades']}` | Win-Rate: `{cs['win_rate']:.1f}%`")
-        if fs:
-            g_btc   = fs.get("gross_pl", 0)
-            fee_btc = fs.get("total_fees", 0)
-            net_btc = fs.get("net_pl", 0)
-            g_sign  = "+" if g_btc >= 0 else ""
-            n_sign  = "+" if net_btc >= 0 else ""
-            g_eur_s = f" (~{g_sign}{g_btc * btc_eur:,.2f} €)" if btc_eur else ""
-            n_eur_s = f" (~{n_sign}{net_btc * btc_eur:,.2f} €)" if btc_eur else ""
-            lines.append(f"Brutto P&L: `{g_sign}{g_btc:.6f} BTC`{g_eur_s}")
-            lines.append(f"Gebühren: `-{fee_btc:.6f} BTC`")
-            lines.append(f"Netto P&L: `{n_sign}{net_btc:.6f} BTC`{n_eur_s}")
+        lines.append(f"Brutto P&L: `{g_sign}{g_btc:.8f} BTC`{g_eur_s}")
+        lines.append("Gebühren: `–`")
+        lines.append(f"Netto P&L: `{g_sign}{g_btc:.8f} BTC`{g_eur_s}")
         payoff_s = f"`{cs['payoff']:.2f}x`" if cs["payoff"] is not None else "`–`"
         lines.append(f"Payoff-Ratio: {payoff_s}")
     else:

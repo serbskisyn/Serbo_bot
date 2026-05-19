@@ -56,19 +56,45 @@ async def _btc_to_eur() -> float:
         return 0.0
 
 
+def _platform_stats(trades: list) -> dict:
+    """Berechnet Statistik-Kennzahlen aus einer Liste abgeschlossener Trades."""
+    if not trades:
+        return {"trades": 0, "gross_pl": 0.0, "win_rate": 0.0, "payoff": None,
+                "wins": 0, "losses": 0}
+    pl_abs   = [float(t.get("pl_abs", 0)) for t in trades]
+    pl_pct   = [float(t.get("pl_pct", 0)) for t in trades]
+    win_abs  = [a for a, p in zip(pl_abs, pl_pct) if p > 0]
+    loss_abs = [a for a, p in zip(pl_abs, pl_pct) if p <= 0]
+    avg_win  = sum(win_abs) / len(win_abs) if win_abs else 0.0
+    avg_loss = abs(sum(loss_abs) / len(loss_abs)) if loss_abs else 0.0
+    payoff   = avg_win / avg_loss if avg_loss > 0 else None
+    return {
+        "trades":   len(trades),
+        "gross_pl": sum(pl_abs),
+        "win_rate": len(win_abs) / len(trades) * 100,
+        "wins":     len(win_abs),
+        "losses":   len(loss_abs),
+        "payoff":   payoff,
+    }
+
+
 async def fetch_status() -> str:
     """Kombinierter Status: Kraken Crypto + Alpaca Stocks in einer Ansicht."""
-    data, recent = await asyncio.gather(_get("/status"), _get("/trades/recent?limit=5"))
+    data, all_trades, recent = await asyncio.gather(
+        _get("/status"),
+        _get("/trades/recent?limit=1000"),
+        _get("/trades/recent?limit=5"),
+    )
     if not data:
         return "🔴 *Trade Engine offline* (Port 8081 nicht erreichbar)."
 
-    crypto = data.get("crypto", {})
-    stocks = data.get("stocks", {})
-    stats  = data.get("stats", {})
-    cb     = data.get("circuit_breaker", {})
+    crypto  = data.get("crypto", {})
+    stocks  = data.get("stocks", {})
+    cb      = data.get("circuit_breaker", {})
+    fs      = data.get("fee_stats", {})
     btc_eur = await _btc_to_eur()
-    now    = datetime.now(ET).strftime("%d.%m.%Y %H:%M ET")
-    lines  = [f"🤖 *Trading Bot — {now}*"]
+    now     = datetime.now(ET).strftime("%d.%m.%Y %H:%M ET")
+    lines   = [f"🤖 *Trading Bot — {now}*"]
 
     # ── Kraken Crypto ─────────────────────────────────────────────────────────
     lines.append("")
@@ -78,12 +104,12 @@ async def fetch_status() -> str:
         c_pos   = crypto.get("positions", [])
         eur_s   = f" (~{btc_bal * btc_eur:,.2f} €)" if btc_bal and btc_eur else ""
         bal_s   = f"`{btc_bal:.6f} BTC`{eur_s}" if btc_bal is not None else "–"
-        lines.append(f"🪙 *Kraken Crypto* | 24/7")
+        lines.append("🪙 *Kraken Crypto* | 24/7")
         lines.append(f"💰 {bal_s}")
         lines.append(f"📈 Positionen: *{len(c_pos)}*")
         for p in c_pos:
-            entry   = float(p.get("entry_price", 0))
-            s_tag   = "🔴 SHORT" if p.get("side") == "short" else "🟢 LONG"
+            entry = float(p.get("entry_price", 0))
+            s_tag = "🔴 SHORT" if p.get("side") == "short" else "🟢 LONG"
             lines.append(
                 f"  • `{p['symbol']}` {s_tag} | `{entry:.8f}` | "
                 f"{p.get('candles_held', 0)} Candles | "
@@ -97,14 +123,14 @@ async def fetch_status() -> str:
     # ── Alpaca Stocks ─────────────────────────────────────────────────────────
     lines.append("")
     if stocks.get("enabled"):
-        acc     = stocks.get("account", {})
-        s_pos   = stocks.get("positions", [])
-        equity  = float(acc.get("equity", 0))
-        cash    = float(acc.get("cash", 0))
-        day_pl  = equity - float(acc.get("last_equity", equity))
-        d_sign  = "+" if day_pl >= 0 else ""
-        m_st    = "🟢 Offen" if stocks.get("market_open") else "🔴 Geschlossen"
-        mode    = "Paper" if acc.get("mode") == "paper" else "Live"
+        acc    = stocks.get("account", {})
+        s_pos  = stocks.get("positions", [])
+        equity = float(acc.get("equity", 0))
+        cash   = float(acc.get("cash", 0))
+        day_pl = equity - float(acc.get("last_equity", equity))
+        d_sign = "+" if day_pl >= 0 else ""
+        m_st   = "🟢 Offen" if stocks.get("market_open") else "🔴 Geschlossen"
+        mode   = "Paper" if acc.get("mode") == "paper" else "Live"
         lines.append(f"📈 *Alpaca Stocks* | {m_st} | {mode}")
         lines.append(f"💰 Equity: `${equity:,.2f}` | Cash: `${cash:,.2f}` | Tag: `{d_sign}${day_pl:,.2f}`")
         lines.append(f"📈 Positionen: *{len(s_pos)}*")
@@ -124,45 +150,64 @@ async def fetch_status() -> str:
         lines.append("")
         lines.append("🕐 *Letzte Trades*")
         for t in recent:
-            pl_pct  = float(t.get("pl_pct", 0))
-            pl_abs  = float(t.get("pl_abs", 0))
-            sign    = "+" if pl_pct >= 0 else ""
-            icon    = "✅" if pl_pct >= 0 else "❌"
-            side    = "SHORT" if t.get("side") == "short" else "LONG"
-            mkt     = t.get("market", "crypto")
-            closed  = t.get("closed_at", "")[:16].replace("T", " ")
-            if mkt == "crypto":
+            pl_pct = float(t.get("pl_pct", 0))
+            pl_abs = float(t.get("pl_abs", 0))
+            sign   = "+" if pl_pct >= 0 else ""
+            icon   = "✅" if pl_pct >= 0 else "❌"
+            side   = "SHORT" if t.get("side") == "short" else "LONG"
+            closed = t.get("closed_at", "")[:16].replace("T", " ")
+            is_crypto = "/" in t.get("symbol", "")
+            if is_crypto:
                 eur_s = f" ({sign}{pl_abs * btc_eur:,.2f} €)" if btc_eur else ""
                 pl_s  = f"`{sign}{pl_pct:.2f}%`{eur_s}"
             else:
-                pl_s  = f"`{sign}{pl_pct:.2f}%` ({sign}${pl_abs:.2f})"
+                pl_s = f"`{sign}{pl_pct:.2f}%` ({sign}${pl_abs:.2f})"
             lines.append(f"  {icon} `{t['symbol']}` {side} {pl_s} | {closed}")
 
-    # ── Statistik (Crypto, nach Gebühren) ─────────────────────────────────────
-    total_pl_btc = stats.get("total_pl", 0)
-    total_pl_eur = total_pl_btc * btc_eur if btc_eur else None
-    eur_total    = f" (~{'+' if total_pl_eur and total_pl_eur >= 0 else ''}{total_pl_eur:,.2f} €)" if total_pl_eur is not None else ""
-    lines += [
-        "",
-        "📊 *Statistik (gesamt)*",
-        f"Trades: `{stats.get('total_trades', 0)}` | Win-Rate: `{stats.get('win_rate', 0):.1f}%`",
-        f"Brutto P&L: `{'+' if total_pl_btc >= 0 else ''}{total_pl_btc:.6f} BTC`{eur_total}",
-    ]
-    fs = data.get("fee_stats", {})
-    if fs:
-        net_btc  = fs.get("net_pl", 0)
-        net_eur  = net_btc * btc_eur if btc_eur else None
-        n_sign   = "+" if net_btc >= 0 else ""
-        n_eur_s  = f" (~{n_sign}{net_eur:,.2f} €)" if net_eur is not None else ""
-        payoff   = fs.get("payoff_ratio")
-        be_wr    = fs.get("breakeven_wr")
-        p_s      = f"`{payoff:.2f}x`" if payoff is not None else "`–`"
-        be_s     = f" _(BE: {be_wr:.0f}%)_" if be_wr else ""
-        lines += [
-            f"Gebühren: `-{fs.get('total_fees', 0):.6f} BTC`",
-            f"Netto P&L: `{n_sign}{net_btc:.6f} BTC`{n_eur_s}",
-            f"Payoff-Ratio: {p_s}{be_s}",
-        ]
+    # ── Statistik per Platform ─────────────────────────────────────────────────
+    all_t    = all_trades or []
+    c_trades = [t for t in all_t if "/" in t.get("symbol", "")]
+    s_trades = [t for t in all_t if "/" not in t.get("symbol", "")]
+    cs = _platform_stats(c_trades)
+    ss = _platform_stats(s_trades)
+
+    lines += ["", "📊 *Statistik*"]
+
+    # Kraken Crypto — P&L-Werte aus fee_stats (Portfolio-Delta, zuverlässiger als Summe pl_abs)
+    lines.append("")
+    lines.append("🪙 *Kraken Crypto*")
+    if cs["trades"]:
+        lines.append(f"Trades: `{cs['trades']}` | Win-Rate: `{cs['win_rate']:.1f}%`")
+        if fs:
+            g_btc   = fs.get("gross_pl", 0)
+            fee_btc = fs.get("total_fees", 0)
+            net_btc = fs.get("net_pl", 0)
+            g_sign  = "+" if g_btc >= 0 else ""
+            n_sign  = "+" if net_btc >= 0 else ""
+            g_eur_s = f" (~{g_sign}{g_btc * btc_eur:,.2f} €)" if btc_eur else ""
+            n_eur_s = f" (~{n_sign}{net_btc * btc_eur:,.2f} €)" if btc_eur else ""
+            lines.append(f"Brutto P&L: `{g_sign}{g_btc:.6f} BTC`{g_eur_s}")
+            lines.append(f"Gebühren: `-{fee_btc:.6f} BTC`")
+            lines.append(f"Netto P&L: `{n_sign}{net_btc:.6f} BTC`{n_eur_s}")
+        payoff_s = f"`{cs['payoff']:.2f}x`" if cs["payoff"] is not None else "`–`"
+        lines.append(f"Payoff-Ratio: {payoff_s}")
+    else:
+        lines.append("_Noch keine abgeschlossenen Trades_")
+
+    # Alpaca Stocks — P&L aus pl_abs (USD, direkt nutzbar)
+    lines.append("")
+    lines.append("📈 *Alpaca Stocks*")
+    if ss["trades"]:
+        g_usd  = ss["gross_pl"]
+        g_sign = "+" if g_usd >= 0 else ""
+        lines.append(f"Trades: `{ss['trades']}` | Win-Rate: `{ss['win_rate']:.1f}%`")
+        lines.append(f"Brutto P&L: `{g_sign}${g_usd:.2f}`")
+        lines.append("Gebühren: `–`")
+        lines.append(f"Netto P&L: `{g_sign}${g_usd:.2f}`")
+        payoff_s = f"`{ss['payoff']:.2f}x`" if ss["payoff"] is not None else "`–`"
+        lines.append(f"Payoff-Ratio: {payoff_s}")
+    else:
+        lines.append("_Noch keine abgeschlossenen Trades_")
 
     if cb.get("active"):
         lines.append("\n⚡ *Circuit Breaker AKTIV* — Crypto-Entries gesperrt")

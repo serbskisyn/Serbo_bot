@@ -56,156 +56,127 @@ async def _btc_to_eur() -> float:
         return 0.0
 
 
-async def fetch_crypto_status() -> str:
-    data, recent = await asyncio.gather(_get("/status"), _get("/trades/recent?limit=3"))
+async def fetch_status() -> str:
+    """Kombinierter Status: Kraken Crypto + Alpaca Stocks in einer Ansicht."""
+    data, recent = await asyncio.gather(_get("/status"), _get("/trades/recent?limit=5"))
     if not data:
         return "🔴 *Trade Engine offline* (Port 8081 nicht erreichbar)."
 
     crypto = data.get("crypto", {})
+    stocks = data.get("stocks", {})
     stats  = data.get("stats", {})
+    cb     = data.get("circuit_breaker", {})
+    btc_eur = await _btc_to_eur()
+    now    = datetime.now(ET).strftime("%d.%m.%Y %H:%M ET")
+    lines  = [f"🤖 *Trading Bot — {now}*"]
 
-    if not crypto.get("enabled"):
-        return "⚠️ Kraken nicht konfiguriert."
-
-    positions = crypto.get("positions", [])
-    acc       = crypto.get("account", {})
-    btc_bal   = float(acc.get("balance", 0)) if acc else None
-    btc_eur   = await _btc_to_eur()
-    now       = datetime.now(ET).strftime("%d.%m.%Y %H:%M")
-
-    lines = [
-        f"🪙 *Crypto Trading — {now}*",
-        f"🟢 Trade Engine läuft  |  Kraken 24/7",
-    ]
-    if btc_bal is not None:
-        eur_str = f"  (~{btc_bal * btc_eur:,.2f} €)" if btc_eur else ""
-        lines.append(f"💰 Kontostand: `{btc_bal:.6f} BTC`{eur_str}")
+    # ── Kraken Crypto ─────────────────────────────────────────────────────────
     lines.append("")
+    if crypto.get("enabled"):
+        acc     = crypto.get("account", {})
+        btc_bal = float(acc.get("balance", 0)) if acc else None
+        c_pos   = crypto.get("positions", [])
+        eur_s   = f" (~{btc_bal * btc_eur:,.2f} €)" if btc_bal and btc_eur else ""
+        bal_s   = f"`{btc_bal:.6f} BTC`{eur_s}" if btc_bal is not None else "–"
+        lines.append(f"🪙 *Kraken Crypto* | 24/7")
+        lines.append(f"💰 {bal_s}")
+        lines.append(f"📈 Positionen: *{len(c_pos)}*")
+        for p in c_pos:
+            entry   = float(p.get("entry_price", 0))
+            s_tag   = "🔴 SHORT" if p.get("side") == "short" else "🟢 LONG"
+            lines.append(
+                f"  • `{p['symbol']}` {s_tag} | `{entry:.8f}` | "
+                f"{p.get('candles_held', 0)} Candles | "
+                f"Trail: {'✅' if p.get('trailing_active') else '⏳'}"
+            )
+        if not c_pos:
+            lines.append("  _Keine offenen Positionen_")
+    else:
+        lines.append("🪙 Kraken nicht konfiguriert")
 
-    lines.append(f"📈 *Offene Positionen: {len(positions)}*")
-    for p in positions:
-        entry    = float(p.get("entry_price", 0))
-        side_raw = p.get("side", "long")
-        side_tag = "🔴 SHORT" if side_raw == "short" else "🟢 LONG"
-        lines.append(
-            f"  • `{p['symbol']}` {side_tag} | Einstieg: `{entry:.8f}` | "
-            f"Candles: {p.get('candles_held', 0)} | "
-            f"Trailing: {'✅' if p.get('trailing_active') else '⏳'}"
-        )
+    # ── Alpaca Stocks ─────────────────────────────────────────────────────────
+    lines.append("")
+    if stocks.get("enabled"):
+        acc     = stocks.get("account", {})
+        s_pos   = stocks.get("positions", [])
+        equity  = float(acc.get("equity", 0))
+        cash    = float(acc.get("cash", 0))
+        day_pl  = equity - float(acc.get("last_equity", equity))
+        d_sign  = "+" if day_pl >= 0 else ""
+        m_st    = "🟢 Offen" if stocks.get("market_open") else "🔴 Geschlossen"
+        mode    = "Paper" if acc.get("mode") == "paper" else "Live"
+        lines.append(f"📈 *Alpaca Stocks* | {m_st} | {mode}")
+        lines.append(f"💰 Equity: `${equity:,.2f}` | Cash: `${cash:,.2f}` | Tag: `{d_sign}${day_pl:,.2f}`")
+        lines.append(f"📈 Positionen: *{len(s_pos)}*")
+        for p in s_pos:
+            pl_pct = float(p.get("unrealized_plpc", 0)) * 100
+            pl_abs = float(p.get("unrealized_pl", 0))
+            icon   = "✅" if pl_pct >= 0 else "❌"
+            sign   = "+" if pl_pct >= 0 else ""
+            lines.append(f"  {icon} `{p['symbol']}` `{sign}{pl_pct:.2f}%` ({sign}${pl_abs:.2f})")
+        if not s_pos:
+            lines.append("  _Keine offenen Positionen_")
+    else:
+        lines.append("📈 Alpaca nicht konfiguriert")
 
-    if not positions:
-        lines.append("  _Keine offenen Positionen_")
-
-    # ── Letzte 3 Trades ───────────────────────────────────────────────────────
+    # ── Letzte Trades ─────────────────────────────────────────────────────────
     if recent:
         lines.append("")
         lines.append("🕐 *Letzte Trades*")
         for t in recent:
-            pl_pct = float(t.get("pl_pct", 0))
-            pl_btc = float(t.get("pl_abs", 0))
-            pl_eur = pl_btc * btc_eur if btc_eur else None
-            icon   = "✅" if pl_pct >= 0 else "❌"
-            sign   = "+" if pl_pct >= 0 else ""
-            side   = "SHORT" if t.get("side") == "short" else "LONG"
-            eur_str = f" ({sign}{pl_eur:,.2f} €)" if pl_eur is not None else ""
-            closed = t.get("closed_at", "")[:16].replace("T", " ")
-            lines.append(
-                f"  {icon} `{t['symbol']}` {side} | "
-                f"`{sign}{pl_pct:.2f}%`{eur_str} | {closed}"
-            )
+            pl_pct  = float(t.get("pl_pct", 0))
+            pl_abs  = float(t.get("pl_abs", 0))
+            sign    = "+" if pl_pct >= 0 else ""
+            icon    = "✅" if pl_pct >= 0 else "❌"
+            side    = "SHORT" if t.get("side") == "short" else "LONG"
+            mkt     = t.get("market", "crypto")
+            closed  = t.get("closed_at", "")[:16].replace("T", " ")
+            if mkt == "crypto":
+                eur_s = f" ({sign}{pl_abs * btc_eur:,.2f} €)" if btc_eur else ""
+                pl_s  = f"`{sign}{pl_pct:.2f}%`{eur_s}"
+            else:
+                pl_s  = f"`{sign}{pl_pct:.2f}%` ({sign}${pl_abs:.2f})"
+            lines.append(f"  {icon} `{t['symbol']}` {side} {pl_s} | {closed}")
 
-    # ── Statistik ─────────────────────────────────────────────────────────────
+    # ── Statistik (Crypto, nach Gebühren) ─────────────────────────────────────
     total_pl_btc = stats.get("total_pl", 0)
     total_pl_eur = total_pl_btc * btc_eur if btc_eur else None
     eur_total    = f" (~{'+' if total_pl_eur and total_pl_eur >= 0 else ''}{total_pl_eur:,.2f} €)" if total_pl_eur is not None else ""
-    cb           = data.get("circuit_breaker", {})
-    cb_line      = "\n⚡ *Circuit Breaker AKTIV* — neue Entries gesperrt" if cb.get("active") else ""
-
     lines += [
         "",
-        f"📊 *Gesamt-Statistik*",
-        f"Trades: `{stats.get('total_trades', 0)}` | "
-        f"Win-Rate: `{stats.get('win_rate', 0):.1f}%`",
+        "📊 *Statistik (gesamt)*",
+        f"Trades: `{stats.get('total_trades', 0)}` | Win-Rate: `{stats.get('win_rate', 0):.1f}%`",
         f"Brutto P&L: `{'+' if total_pl_btc >= 0 else ''}{total_pl_btc:.6f} BTC`{eur_total}",
     ]
-
     fs = data.get("fee_stats", {})
     if fs:
-        net_btc   = fs.get("net_pl", 0)
-        net_eur   = net_btc * btc_eur if btc_eur else None
-        avg_btc   = fs.get("avg_net_trade", 0)
-        avg_eur   = avg_btc * btc_eur if btc_eur else None
-        fees_btc  = fs.get("total_fees", 0)
-        payoff    = fs.get("payoff_ratio")
-        be_wr     = fs.get("breakeven_wr")
-
-        net_sign  = "+" if net_btc >= 0 else ""
-        avg_sign  = "+" if avg_btc >= 0 else ""
-        net_eur_s = f" (~{net_sign}{net_eur:,.2f} €)" if net_eur is not None else ""
-        avg_eur_s = f" ({avg_sign}{avg_eur:,.4f} €)" if avg_eur is not None else ""
-        payoff_s  = f"`{payoff:.2f}x`" if payoff is not None else "`–`"
-        be_wr_s   = f" _(Break-even: {be_wr:.0f}%)_" if be_wr else ""
-
+        net_btc  = fs.get("net_pl", 0)
+        net_eur  = net_btc * btc_eur if btc_eur else None
+        n_sign   = "+" if net_btc >= 0 else ""
+        n_eur_s  = f" (~{n_sign}{net_eur:,.2f} €)" if net_eur is not None else ""
+        payoff   = fs.get("payoff_ratio")
+        be_wr    = fs.get("breakeven_wr")
+        p_s      = f"`{payoff:.2f}x`" if payoff is not None else "`–`"
+        be_s     = f" _(BE: {be_wr:.0f}%)_" if be_wr else ""
         lines += [
-            f"Gebühren: `-{fees_btc:.6f} BTC`",
-            f"Netto P&L: `{net_sign}{net_btc:.6f} BTC`{net_eur_s}",
-            f"Avg/Trade netto: `{avg_sign}{avg_btc:.8f} BTC`{avg_eur_s}",
-            f"Payoff-Ratio: {payoff_s}{be_wr_s}",
+            f"Gebühren: `-{fs.get('total_fees', 0):.6f} BTC`",
+            f"Netto P&L: `{n_sign}{net_btc:.6f} BTC`{n_eur_s}",
+            f"Payoff-Ratio: {p_s}{be_s}",
         ]
 
-    if cb_line:
-        lines.append(cb_line)
+    if cb.get("active"):
+        lines.append("\n⚡ *Circuit Breaker AKTIV* — Crypto-Entries gesperrt")
+
     return "\n".join(lines)
+
+
+# Aliases für Rückwärtskompatibilität
+async def fetch_crypto_status() -> str:
+    return await fetch_status()
 
 
 async def fetch_stocks_status() -> str:
-    data = await _get("/status")
-    if not data:
-        return "⚠️ Trade Engine nicht erreichbar (Port 8081)."
-
-    stocks = data.get("stocks", {})
-    stats  = data.get("stats", {})
-
-    if not stocks.get("enabled"):
-        return "⚠️ Alpaca nicht konfiguriert."
-
-    acc       = stocks.get("account", {})
-    positions = stocks.get("positions", [])
-    market_st = "🟢 Offen" if stocks.get("market_open") else "🔴 Geschlossen"
-    mode      = "📄 Paper" if acc.get("mode") == "paper" else "💵 Live"
-    equity    = float(acc.get("equity", 0))
-    cash      = float(acc.get("cash", 0))
-    day_pl    = equity - float(acc.get("last_equity", equity))
-    day_sign  = "+" if day_pl >= 0 else ""
-    now       = datetime.now(ET).strftime("%d.%m.%Y %H:%M ET")
-
-    lines = [
-        f"📊 *Alpaca — {now}*",
-        f"Modus: {mode} | Markt: {market_st}\n",
-        f"💰 *Konto*",
-        f"Equity: `${equity:,.2f}`  |  Cash: `${cash:,.2f}`",
-        f"Tages-P&L: `{day_sign}${day_pl:,.2f}`\n",
-        f"📈 *Offene Positionen: {len(positions)}*",
-    ]
-    for p in positions:
-        pl_pct = float(p.get("unrealized_plpc", 0)) * 100
-        pl_abs = float(p.get("unrealized_pl", 0))
-        icon   = "✅" if pl_pct >= 0 else "❌"
-        sign   = "+" if pl_pct >= 0 else ""
-        lines.append(f"  {icon} `{p['symbol']}`: `{sign}{pl_pct:.2f}%` ({sign}${pl_abs:.2f})")
-
-    if not positions:
-        lines.append("  _Keine offenen Positionen_")
-
-    lines += [
-        "",
-        f"📊 *Trade Engine Statistik*",
-        f"Trades: `{stats.get('total_trades', 0)}` | "
-        f"Win-Rate: `{stats.get('win_rate', 0):.1f}%`",
-        f"Total P&L: `{'+' if stats.get('total_pl', 0) >= 0 else ''}"
-        f"${stats.get('total_pl', 0):.2f}`",
-    ]
-    return "\n".join(lines)
+    return await fetch_status()
 
 
 async def trigger_scan(market: str = "all") -> str:

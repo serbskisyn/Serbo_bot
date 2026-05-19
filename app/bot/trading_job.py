@@ -5,15 +5,17 @@ from telegram.ext import ContextTypes
 
 from app.bot.whitelist import is_allowed
 from app.config import ADMIN_CHAT_ID, TRADING_STATS_HOUR, TRADING_STATS_MINUTE
-from app.services.trade_engine_client import fetch_crypto_status, trigger_scan
+from app.services.trade_engine_client import fetch_status, trigger_scan
 
 logger = logging.getLogger(__name__)
 
 _HELP = (
-    "🪙 *Crypto Trading Bot*\n\n"
-    "`/tradebot` — Status & offene Positionen\n"
-    "`/tradebot scan` — Manuellen Scan auslösen\n"
-    "`/tradebot help` — Diese Übersicht"
+    "🤖 *Trading Bot*\n\n"
+    "`/tradebot` — Kombinierter Status (Crypto + Stocks)\n"
+    "`/tradebot scan` — Crypto-Scan auslösen\n"
+    "`/tradebot stocks` — Stocks-Scan auslösen\n"
+    "`/tradebot help` — Diese Übersicht\n\n"
+    "_`/stocks` ist ein Alias für `/tradebot`_"
 )
 
 
@@ -30,8 +32,11 @@ async def tradebot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     elif sub == "scan":
         reply = await trigger_scan("crypto")
         await update.message.reply_text(reply, parse_mode="Markdown")
+    elif sub == "stocks":
+        reply = await trigger_scan("stocks")
+        await update.message.reply_text(reply, parse_mode="Markdown")
     else:
-        reply = await fetch_crypto_status()
+        reply = await fetch_status()
         await update.message.reply_text(reply, parse_mode="Markdown")
 
 

@@ -56,13 +56,33 @@ async def _btc_to_eur() -> float:
         return 0.0
 
 
-def _platform_stats(trades: list) -> dict:
+# Gebühren-Modelle
+_KRAKEN_FEE_PER_LEG  = 0.0008      # 0.08 % Maker-Fee bei Kraken (BTC-Pairs)
+_ALPACA_SEC_PER_SALE = 0.0000278   # SEC-Fee 0.00278 % auf Verkaufserlös (2026)
+_ALPACA_TAF_PER_SHARE = 0.000166   # TAF 0.0166 ¢ pro verkauftem Share (2026)
+
+
+def _trade_fee(t: dict, market: str) -> float:
+    """Round-Trip-Gebühr pro Trade in der jeweiligen Basis-Währung."""
+    entry = float(t.get("entry_price", 0))
+    exit_ = float(t.get("exit_price", 0))
+    qty   = float(t.get("qty", 0))
+    if market == "crypto":
+        # Beide Legs × Maker-Fee, in BTC
+        return (entry + exit_) * qty * _KRAKEN_FEE_PER_LEG
+    # Alpaca: kommissionsfrei, nur SEC + TAF auf Verkaufsseite (USD)
+    sell_notional = exit_ * qty
+    return sell_notional * _ALPACA_SEC_PER_SALE + qty * _ALPACA_TAF_PER_SHARE
+
+
+def _platform_stats(trades: list, market: str = "crypto") -> dict:
     """Berechnet Statistik-Kennzahlen aus einer Liste abgeschlossener Trades."""
     if not trades:
-        return {"trades": 0, "gross_pl": 0.0, "win_rate": 0.0, "payoff": None,
-                "wins": 0, "losses": 0}
+        return {"trades": 0, "gross_pl": 0.0, "fees": 0.0, "net_pl": 0.0,
+                "win_rate": 0.0, "payoff": None, "wins": 0, "losses": 0}
     pl_abs   = [float(t.get("pl_abs", 0)) for t in trades]
     pl_pct   = [float(t.get("pl_pct", 0)) for t in trades]
+    fees     = [_trade_fee(t, market) for t in trades]
     win_abs  = [a for a, p in zip(pl_abs, pl_pct) if p > 0]
     loss_abs = [a for a, p in zip(pl_abs, pl_pct) if p <= 0]
     avg_win  = sum(win_abs) / len(win_abs) if win_abs else 0.0
@@ -71,6 +91,8 @@ def _platform_stats(trades: list) -> dict:
     return {
         "trades":   len(trades),
         "gross_pl": sum(pl_abs),
+        "fees":     sum(fees),
+        "net_pl":   sum(pl_abs) - sum(fees),
         "win_rate": len(win_abs) / len(trades) * 100,
         "wins":     len(win_abs),
         "losses":   len(loss_abs),
@@ -168,37 +190,44 @@ async def fetch_status() -> str:
     all_t    = all_trades or []
     c_trades = [t for t in all_t if "/" in t.get("symbol", "")]
     s_trades = [t for t in all_t if "/" not in t.get("symbol", "")]
-    cs = _platform_stats(c_trades)
-    ss = _platform_stats(s_trades)
+    cs = _platform_stats(c_trades, market="crypto")
+    ss = _platform_stats(s_trades, market="stocks")
 
     lines += ["", "📊 *Statistik*"]
 
-    # Kraken Crypto — P&L aus Summe der pl_abs je Trade (echte Handelsanteile)
+    # Kraken Crypto — P&L aus Summe der pl_abs, Fees aus 0.08 % Maker pro Leg
     lines.append("")
     lines.append("🪙 *Kraken Crypto*")
     if cs["trades"]:
         g_btc   = cs["gross_pl"]
+        f_btc   = cs["fees"]
+        n_btc   = cs["net_pl"]
         g_sign  = "+" if g_btc >= 0 else ""
+        n_sign  = "+" if n_btc >= 0 else ""
         g_eur_s = f" (~{g_sign}{g_btc * btc_eur:,.2f} €)" if btc_eur else ""
+        n_eur_s = f" (~{n_sign}{n_btc * btc_eur:,.2f} €)" if btc_eur else ""
         lines.append(f"Trades: `{cs['trades']}` | Win-Rate: `{cs['win_rate']:.1f}%`")
         lines.append(f"Brutto P&L: `{g_sign}{g_btc:.8f} BTC`{g_eur_s}")
-        lines.append("Gebühren: `–`")
-        lines.append(f"Netto P&L: `{g_sign}{g_btc:.8f} BTC`{g_eur_s}")
+        lines.append(f"Gebühren: `-{f_btc:.8f} BTC` _(Maker 0,08 %/Leg)_")
+        lines.append(f"Netto P&L: `{n_sign}{n_btc:.8f} BTC`{n_eur_s}")
         payoff_s = f"`{cs['payoff']:.2f}x`" if cs["payoff"] is not None else "`–`"
         lines.append(f"Payoff-Ratio: {payoff_s}")
     else:
         lines.append("_Noch keine abgeschlossenen Trades_")
 
-    # Alpaca Stocks — P&L aus pl_abs (USD, direkt nutzbar)
+    # Alpaca Stocks — Gebühren = nur SEC + TAF auf Verkaufsseite (kommissionsfrei)
     lines.append("")
     lines.append("📈 *Alpaca Stocks*")
     if ss["trades"]:
         g_usd  = ss["gross_pl"]
+        f_usd  = ss["fees"]
+        n_usd  = ss["net_pl"]
         g_sign = "+" if g_usd >= 0 else ""
+        n_sign = "+" if n_usd >= 0 else ""
         lines.append(f"Trades: `{ss['trades']}` | Win-Rate: `{ss['win_rate']:.1f}%`")
         lines.append(f"Brutto P&L: `{g_sign}${g_usd:.2f}`")
-        lines.append("Gebühren: `–`")
-        lines.append(f"Netto P&L: `{g_sign}${g_usd:.2f}`")
+        lines.append(f"Gebühren: `-${f_usd:.4f}` _(SEC + TAF, kommissionsfrei)_")
+        lines.append(f"Netto P&L: `{n_sign}${n_usd:.2f}`")
         payoff_s = f"`{ss['payoff']:.2f}x`" if ss["payoff"] is not None else "`–`"
         lines.append(f"Payoff-Ratio: {payoff_s}")
     else:

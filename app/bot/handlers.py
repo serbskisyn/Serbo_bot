@@ -122,6 +122,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"  └ /fertig [commit] — Session beenden · /nein — abbrechen\n"
         f"/health — System-Status prüfen\n"
         f"/tests — Test-Suite beider Bots ausführen\n"
+        f"/leads — Lead-Qualifying manuell triggern (Perplexity + Pepper-Sentiment)\n"
         f"/dienstplan — Dienstplan erstellen\n"
         f"/debugwunsch — Sheet-Struktur prüfen (Diagnose)\n\n"
         f"📅 *Kalender*\n"

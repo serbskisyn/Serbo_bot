@@ -1,8 +1,9 @@
 """
-enrich_company.py — LangGraph node: enrich company information via Gemini web search.
+enrich_company.py — LangGraph node: enrich company information via Perplexity web search.
 
-Uses a single Gemini 2.0 Flash call (with Google Search grounding) to research the
-company — no separate SerpAPI step required. Northdata is queried in parallel as a stub.
+Nutzt Perplexity Sonar Pro (OpenRouter) — Live-Web-Suche eingebaut, eine LLM-Call.
+Fallback auf Gemini falls Perplexity scheitert (Quota, Timeout, Konfig-Fehler).
+Northdata wird parallel als Stub geprüft.
 """
 from __future__ import annotations
 
@@ -12,30 +13,47 @@ from app.agents.lead_qualifying.services.gemini_websearch import (
     enrich_company as gemini_enrich_company,
     get_news_summary as gemini_news_summary,
 )
+from app.agents.lead_qualifying.services.perplexity_websearch import (
+    enrich_company as perplexity_enrich_company,
+    get_news_summary as perplexity_news_summary,
+)
 from app.agents.lead_qualifying.services.northdata_lookup import get_company_summary
 from app.agents.lead_qualifying.state import LeadState
 
 logger = logging.getLogger(__name__)
 
 
+def _has_useful_data(data: dict) -> bool:
+    """Heuristik: gibt's Substanz im Perplexity-Ergebnis, oder soll wir Gemini probieren?"""
+    return bool(
+        data.get("company_website")
+        or data.get("company_description")
+        or data.get("industry")
+        or data.get("employee_count_estimate")
+    )
+
+
 async def enrich_company_node(state: LeadState) -> LeadState:
     """
-    Enrich the current lead's company information.
+    Firmen-Recherche der aktuellen Lead.
 
-    Uses Gemini 2.0 Flash + Google Search grounding for a single-call enrichment.
-    Northdata is fetched in parallel (stub until API key is available).
+    Primär: Perplexity Sonar Pro (Live-Search). Fallback: Gemini 2.0 Flash + Google Search.
+    Northdata parallel als Stub.
 
     Reads:  state["current_lead"]
-    Writes: state["company_website"], state["northdata_summary"],
-            state["news_summary"], and intermediate fields for qualify node.
+    Writes: state["company_website"], state["northdata_summary"], state["news_summary"],
+            sowie Zwischenfelder für qualify_business_fit_node.
     """
-    lead = state.get("current_lead", {})
+    lead  = state.get("current_lead", {})
     firma = str(lead.get("Firma", "")).strip()
 
-    logger.info("enrich_company: '%s' (via Gemini web search)", firma)
+    logger.info("enrich_company: '%s' (via Perplexity Sonar Pro)", firma)
 
-    # 1. Gemini: company research (searches + synthesises in one call)
-    company_data = await gemini_enrich_company(firma)
+    # 1. Perplexity primär, Gemini als Fallback bei leerem Ergebnis
+    company_data = await perplexity_enrich_company(firma)
+    if not _has_useful_data(company_data):
+        logger.info("enrich_company: Perplexity-Ergebnis leer für '%s' — Fallback Gemini", firma)
+        company_data = await gemini_enrich_company(firma)
     company_website = company_data.get("company_website", "")
     company_description = company_data.get("company_description", "")
     industry = company_data.get("industry", "")
@@ -46,10 +64,17 @@ async def enrich_company_node(state: LeadState) -> LeadState:
     if ecommerce_signals and ecommerce_signals.lower() != "keine gefunden":
         company_description = f"{company_description} | E-Commerce-Signale: {ecommerce_signals}".strip(" |")
 
-    # 2. Gemini: recent news (separate focused call for news signals)
+    # 2. News-Recherche: Perplexity primär, Gemini-Fallback bei leerem Ergebnis
     news_summary = ""
     try:
-        news_summary = await gemini_news_summary(firma)
+        news_summary = await perplexity_news_summary(firma)
+        if not news_summary or news_summary.startswith("Keine aktuellen Nachrichten"):
+            try:
+                gemini_news = await gemini_news_summary(firma)
+                if gemini_news and not gemini_news.startswith("Keine aktuellen Nachrichten"):
+                    news_summary = gemini_news
+            except Exception as exc:
+                logger.debug("enrich_company: Gemini-News-Fallback Fehler für '%s': %s", firma, exc)
     except Exception as exc:
         logger.warning("enrich_company: News-Lookup Fehler für '%s': %s", firma, exc)
 

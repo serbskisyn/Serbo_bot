@@ -26,10 +26,37 @@ _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 # Fast, cheap model for the pre-qualify step — no need for a heavy model here
 _PRE_QUALIFY_MODEL = "openai/gpt-4o-mini"
 
+# Deterministische SKIP-Heuristiken — sparen LLM-Call bei offensichtlichem Müll
+_SPAM_EMAIL_PATTERNS = ("test@", "asdf", "foo@", "bar@", "noreply", "no-reply",
+                       "example.com", "tempmail", "mailinator")
+_MIN_FIRMA_LEN  = 3   # "e", "co", "x" → SKIP
+_MIN_NAME_LEN   = 2   # "e", "x" allein als Vorname → SKIP
+
+
+def _deterministic_skip(vorname: str, nachname: str, firma: str, email: str) -> str | None:
+    """Schnelle Heuristik vor dem LLM. Returns reason-string wenn SKIP, sonst None."""
+    if len(firma) < _MIN_FIRMA_LEN and not nachname:
+        return f"Firmenname und Nachname zu kurz ('{firma}', '{nachname}') — keine verwertbaren Daten"
+    if len(firma) < _MIN_FIRMA_LEN and len(vorname) < _MIN_NAME_LEN:
+        return f"Firma '{firma}' und Vorname '{vorname}' zu kurz — ungültiger Lead"
+    if not firma and not email:
+        return "Weder Firma noch E-Mail vorhanden"
+    email_low = email.lower()
+    for pat in _SPAM_EMAIL_PATTERNS:
+        if pat in email_low:
+            return f"E-Mail enthält Spam-/Test-Muster '{pat}'"
+    # Identische Vor-/Nachname/Firma (z.B. alles "e") → Datenmüll
+    if vorname and firma and vorname.lower() == firma.lower() and len(firma) <= 3:
+        return f"Identische Müll-Daten ('{firma}'={vorname}) — kein echter Lead"
+    return None
+
 
 async def pre_qualify_node(state: LeadState) -> LeadState:
     """
-    Quick LLM assessment of the raw lead fields.
+    Quick assessment of the raw lead fields.
+
+    1. Deterministische SKIP-Heuristiken (kein LLM-Call bei offensichtlichem Müll)
+    2. LLM-Klassifikation für alles andere
 
     Reads:  state["current_lead"]
     Writes: state["pre_qualify_label"] ("HIGH" | "LOW" | "SKIP")
@@ -43,6 +70,16 @@ async def pre_qualify_node(state: LeadState) -> LeadState:
     quelle = str(lead.get("Quelle", "")).strip()
 
     logger.info("pre_qualify: '%s %s' @ '%s'", vorname, nachname, firma)
+
+    # 1. Schneller deterministischer SKIP-Check
+    auto_skip = _deterministic_skip(vorname, nachname, firma, email)
+    if auto_skip:
+        logger.info("pre_qualify: '%s' → SKIP (deterministisch) | %s", firma, auto_skip)
+        return {
+            **state,
+            "pre_qualify_label": "SKIP",
+            "pre_qualify_reason": auto_skip,
+        }
 
     label = "LOW"       # safe default: enrich anyway
     reason = ""

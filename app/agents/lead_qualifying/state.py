@@ -21,6 +21,12 @@ class LeadState(TypedDict, total=False):
     northdata_summary: str
     news_summary: str
 
+    # Intermediate-Felder aus enrich_company, verwendet von qualify_business_fit_node
+    # UND write_results (Größe-Spalte). LangGraph strippt sonst undeklarierte Keys.
+    _company_description: str
+    _industry: str
+    _employee_count_estimate: str
+
     # ── Pepper Sentiment (community mentions, 90-Tage-Lookback) ─────────────
     pepper_found: bool             # True wenn matched
     pepper_matched_name: str       # canonical_retailer_name aus Pepper

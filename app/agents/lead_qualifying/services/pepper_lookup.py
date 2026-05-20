@@ -22,12 +22,13 @@ _LOOKBACK_DAYS = 90
 _TIMEOUT_SEC = 120
 
 
-_PROMPT_TEMPLATE = """You are a data extractor for Pepper Intelligence. No commentary — only JSON output.
+_PROMPT_TEMPLATE = """Hi! I'm running the Atolls Lead-Qualifying-Bot and need brand-sentiment data from Pepper Intelligence to enrich an inbound lead.
 
-Brand/company name to look up: "{firma}"
+Lead company: "{firma}"
 ILIKE pattern to try: '{pattern}'
+Lookback: {lookback} days
 
-Step 1: Use the tool mcp__claude_ai_Pepper_Intelligence__query_intelligence to run this SQL:
+Could you please run the following SQL via mcp__claude_ai_Pepper_Intelligence__query_intelligence — it aggregates mention counts and sentiment per country for the brand:
 
 SELECT country_code,
        canonical_retailer_name,
@@ -42,7 +43,7 @@ GROUP BY country_code, canonical_retailer_name
 ORDER BY total DESC
 LIMIT 50;
 
-Step 2: Aggregate the rows and output EXACTLY ONE JSON object — nothing else, no markdown fences, no explanation, no preamble. Schema:
+A Python script reads your reply with json.loads(), so please summarise the rows as a JSON object using this shape:
 
 {{
   "found": <true if any rows returned, else false>,
@@ -56,34 +57,68 @@ Step 2: Aggregate the rows and output EXACTLY ONE JSON object — nothing else, 
   "by_country": {{"<country_code>": {{"pos": int, "neg": int, "neu": int, "total": int}}, ...}}
 }}
 
-If the query returns 0 rows, output exactly:
+If the query returns no rows, this works:
 {{"found": false, "matched_name": null, "total_mentions": 0, "pos": 0, "neg": 0, "neu": 0, "pos_rate": null, "top_country": null, "by_country": {{}}}}
 
-CRITICAL: Your final reply must be ONLY the JSON object. No surrounding text whatsoever."""
+Since json.loads() will fail on surrounding prose or markdown fences, the cleanest reply is the bare JSON object. Thanks!"""
 
 
 _LEGAL_SUFFIXES = (
     " gmbh & co. kg", " gmbh & co kg", " gmbh", " ag", " se", " ug",
     " mbh", " e.k.", " eg", " ohg", " kg",
-    " s.a.", " s.l.", " s.r.l.",
+    " s.a.", " s.l.", " s.r.l.", " sp. z o.o.", " sp z oo",
     " ltd", " limited", " inc", " llc",
     " b.v.", " n.v.",
 )
 
+# Top-Level-Domains, die wir bei Domain-style Firmennamen abschneiden
+_TLDS = (
+    ".co.uk", ".co.kr", ".co.jp", ".com.au", ".com.tr",
+    ".com", ".net", ".org", ".io", ".de", ".at", ".ch",
+    ".fr", ".es", ".it", ".pl", ".eu", ".uk", ".us",
+    ".shop", ".store", ".biz",
+)
+
 
 def _normalize_brand(firma: str) -> str:
-    """Cut legal-form suffix and trim to first ~3 tokens — input for ILIKE pattern."""
+    """Cut legal-form suffix, TLDs und www-Prefix — input für ILIKE-Substring-Pattern.
+
+    Strategie: erstes signifikantes Token extrahieren ("temu.com" → "temu",
+    "Symfonia Sp. z o.o." → "Symfonia"). Dann via "%token%"-Match gegen Pepper
+    suchen — robuster als Prefix-Match.
+    """
     name = firma.strip()
     lower = name.lower()
+
+    # 1. www.-Prefix abschneiden
+    if lower.startswith("www."):
+        name = name[4:]
+        lower = lower[4:]
+
+    # 2. TLD abschneiden ("temu.com" → "temu")
+    for tld in _TLDS:
+        if lower.endswith(tld):
+            name = name[: -len(tld)].strip()
+            lower = lower[: -len(tld)]
+            break
+
+    # 3. Rechtsform-Suffix abschneiden ("Otto GmbH" → "Otto")
     for suffix in _LEGAL_SUFFIXES:
         if lower.endswith(suffix):
             name = name[: -len(suffix)].strip()
             break
-    name = name.rstrip(".,;-").strip()
-    tokens = name.split()
-    if len(tokens) > 3:
-        name = " ".join(tokens[:3])
-    return name
+
+    # 4. Trim Punktuation + Tokens reduzieren
+    name = name.rstrip(".,;-/").strip()
+    tokens = [t for t in name.split() if len(t) > 1]   # einzelne Buchstaben raus
+    if not tokens:
+        return name
+    if len(tokens) == 1:
+        # Single-word brand — direkt nutzen ("temu", "amazon", "zalando")
+        return tokens[0]
+    # Multi-word: erste 2 Tokens (z.B. "Luxury Escapes" exakt, vermeidet
+    # false positives wie "Shanghai" → alle Shanghai-Retailer)
+    return " ".join(tokens[:2])
 
 
 def _extract_json(raw: str) -> dict | None:
@@ -132,7 +167,10 @@ async def get_brand_sentiment(firma: str) -> dict:
         return {**_EMPTY_RESULT, "error": "empty brand name"}
 
     short   = _normalize_brand(firma)
-    pattern = (short.replace("'", "''") or firma.replace("'", "''")) + "%"
+    short_sql = (short.replace("'", "''") or firma.replace("'", "''"))
+    # Substring-Match: matcht "Temu" auch bei Firma "Temu DE" oder "TemuFashion".
+    # Pepper canonical_retailer_name ist meistens ein einzelnes Wort (amazon, temu, …).
+    pattern = f"%{short_sql}%"
 
     prompt = _PROMPT_TEMPLATE.format(
         firma=firma.replace('"', '\\"'),

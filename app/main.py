@@ -16,7 +16,7 @@ from app.bot.handlers import (
     news_handler, strava_handler, claude_handler, claudex_handler,
     claudex_fertig_handler, nein_handler, health_handler,
     termine_handler, kalender1_handler, kalender2_handler,
-    xnews_handler, tests_handler,
+    xnews_handler, tests_handler, leads_handler,
 )
 from app.services.news_cache import start_background_scheduler
 from app.bot.schedule_dialog import get_schedule_handler
@@ -106,6 +106,7 @@ def main():
     app.add_handler(CommandHandler("kalender1", kalender1_handler))
     app.add_handler(CommandHandler("kalender2", kalender2_handler))
     app.add_handler(CommandHandler("tradebot", tradebot_handler))
+    app.add_handler(CommandHandler("leads",    leads_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_handler(MessageHandler(filters.VOICE, voice_handler))
     app.add_error_handler(error_handler)

@@ -96,9 +96,17 @@ def register_lead_qualifying_job(app: Application) -> None:
     """
     Register Lead-Qualifying als JobQueue-Job für jeden konfigurierten Time-Slot.
 
-    Default: 2× täglich (08:00 + 16:00 Europe/Berlin).
-    Override via LEAD_QUALIFYING_TIMES="08:00,16:00,..." (komma-separierte HH:MM-Liste).
+    Standardmäßig aktiv (2× täglich 08:00 + 16:00). Komplett deaktivierbar via
+    LEAD_QUALIFYING_SCHEDULER_ENABLED=false (dann läuft nur noch der manuelle
+    /leads-Command). Slot-Zeiten via LEAD_QUALIFYING_TIMES="08:00,16:00,...".
     """
+    import os
+    enabled = os.getenv("LEAD_QUALIFYING_SCHEDULER_ENABLED", "true").strip().lower()
+    if enabled in ("0", "false", "no", "off"):
+        logger.info("Lead-Qualifying-Scheduler deaktiviert (LEAD_QUALIFYING_SCHEDULER_ENABLED=%s) — "
+                    "nur manueller /leads-Trigger verfügbar.", enabled)
+        return
+
     if app.job_queue is None:
         logger.warning(
             "JobQueue nicht verfügbar — Lead-Qualifying-Job nicht registriert. "

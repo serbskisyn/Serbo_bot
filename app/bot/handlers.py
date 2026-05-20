@@ -417,6 +417,76 @@ async def tests_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(chunk, parse_mode="Markdown")
 
 
+@require_whitelist
+async def leads_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Manuell den Lead-Qualifying-Agent triggern.
+
+    Verarbeitet bis zu LEAD_QUALIFYING_MAX_PER_RUN Leads (Default 3 für manuelle Runs).
+    Schreibt Validierungsspalten ins Inbound-Sheet + Qualified-Leads-Tab + sendet Summary.
+    """
+    import time as _time
+    chat_id = update.effective_chat.id
+    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+    await update.message.reply_text(
+        "🚀 *Lead-Qualifying gestartet* — verarbeite bis zu "
+        f"`{__import__('os').getenv('LEAD_QUALIFYING_MAX_PER_RUN', '3')}` Leads. "
+        "Pro Lead ~45 s (Perplexity + Pepper-Subprocess).",
+        parse_mode="Markdown",
+    )
+
+    t0 = _time.monotonic()
+    try:
+        from app.agents.lead_qualifying.graph import run_pipeline
+        final_state = await run_pipeline()
+    except Exception as exc:
+        logger.error("leads_handler: Pipeline-Fehler: %s", exc, exc_info=True)
+        await update.message.reply_text(
+            f"❌ *Lead-Qualifying fehlgeschlagen*\n\nFehler: `{exc}`",
+            parse_mode="Markdown",
+        )
+        return
+
+    elapsed = _time.monotonic() - t0
+    processed = final_state.get("processed_leads", [])
+    errors = final_state.get("errors", [])
+
+    if not processed:
+        await update.message.reply_text(
+            f"✅ *Lead-Qualifying durch* — keine neuen Leads gefunden ({elapsed:.0f} s).",
+            parse_mode="Markdown",
+        )
+        return
+
+    qualified = [d for d in processed if d.get("classification") != "FILTERED"]
+    filtered = len(processed) - len(qualified)
+    lines = [
+        f"✅ *Lead-Qualifying durch* ({elapsed:.0f} s)",
+        f"`{len(processed)}` Leads — `{len(qualified)}` qualifiziert, `{filtered}` gefiltert",
+    ]
+    if errors:
+        lines.append(f"⚠️ `{len(errors)}` Fehler im Run")
+
+    # Kompakter Detail-Block pro Lead
+    for i, d in enumerate(qualified[:5], 1):
+        name  = f"{d.get('vorname', '')} {d.get('nachname', '')}".strip() or "(unbekannt)"
+        firma = d.get("firma", "")
+        clf   = d.get("classification", "")
+        pep   = (d.get("_pepper_summary") or "").split(" · ")[0]
+        groesse = d.get("_employee_count") or "—"
+        lines.append(f"\n*{i}.* `{name}` @ `{firma[:30]}` — {clf}")
+        lines.append(f"   Größe: {groesse} | Pepper: {pep}")
+
+    if len(qualified) > 5:
+        lines.append(f"\n_…und {len(qualified) - 5} weitere._")
+
+    lines.append(
+        f"\n📊 Validierungsspalten im Inbound-Sheet "
+        f"(Spalten L-Q) aktualisiert."
+    )
+
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
 @guarded
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id

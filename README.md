@@ -348,6 +348,7 @@ sudo journalctl -u trade_engine -f
 - [x] 15 Crypto pairs (Kraken/BTC) + 15 US symbols (Alpaca)
 
 ### Planned
+- [ ] **Backtest engine for Trade Engine** — `BacktestExchange(BaseExchange)` + historical data collector + `POST /backtest` endpoint. Foundation for autonomous strategy optimization (autoresearch-style overnight parameter tuning via Claude Code). ~5-6 days of work. See `/home/pi/trade_engine/README.md` Roadmap for technical plan.
 - [ ] **Scrapling integration** — `StealthyFetcher` for Strava (replace fragile cookie auth), `AsyncFetcher` for financial news in sentiment block
 - [ ] Freqtrade shutdown after Trade Engine proves stable (~2 weeks)
 - [ ] `/tradebot` + `/stocks` extended — trade history, daily P&L chart

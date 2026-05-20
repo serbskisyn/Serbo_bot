@@ -11,10 +11,7 @@ import hashlib
 import logging
 import os
 
-from app.agents.lead_qualifying.services.sheets import (
-    read_inbound_leads,
-    read_existing_lead_keys,
-)
+from app.agents.lead_qualifying.services.sheets import read_inbound_leads
 from app.agents.lead_qualifying.state import LeadState
 
 logger = logging.getLogger(__name__)
@@ -56,23 +53,14 @@ async def fetch_new_leads_node(state: LeadState) -> LeadState:
             "errors": [*state.get("errors", []), f"Inbound-Tab nicht lesbar: {exc}"],
         }
 
-    # Inject computed lead_key into each row
+    # Inject computed lead_key into each row (gespeichert für Qualified-Leads-Tab + Logs)
     for row in raw_leads:
         row["_lead_key"] = _compute_lead_key(row)
 
-    try:
-        existing_keys = await read_existing_lead_keys()
-    except Exception as exc:
-        logger.warning("fetch_new_leads: Existing-Keys nicht lesbar (%s) — verarbeite alle", exc)
-        existing_keys = set()
-
-    # Idempotenz 1: bereits in 'Qualified Leads' geschrieben (lead_key match)
-    new_leads = [r for r in raw_leads if r["_lead_key"] not in existing_keys]
-
-    # Idempotenz 2: Validierung_Datum bereits gesetzt (in einem früheren Run verarbeitet)
-    before = len(new_leads)
-    new_leads = [r for r in new_leads if not r.get("_validierung_datum")]
-    skipped_validated = before - len(new_leads)
+    # Single Source of Truth für Idempotenz: Validierung_Datum im Inbound-Tab.
+    # Qualified-Leads-Tab bleibt als Audit-Log, ist aber nicht mehr Idempotenz-Quelle.
+    new_leads = [r for r in raw_leads if not r.get("_validierung_datum")]
+    skipped_validated = len(raw_leads) - len(new_leads)
     if skipped_validated:
         logger.info("fetch_new_leads: %d Leads bereits validiert (Datum gesetzt) — übersprungen", skipped_validated)
 
@@ -93,9 +81,9 @@ async def fetch_new_leads_node(state: LeadState) -> LeadState:
         )
 
     logger.info(
-        "fetch_new_leads: %d Inbound-Zeilen, %d bereits verarbeitet, %d neu",
+        "fetch_new_leads: %d Inbound-Zeilen, %d bereits validiert, %d neu",
         len(raw_leads),
-        len(raw_leads) - total_candidates,
+        skipped_validated,
         len(new_leads),
     )
 

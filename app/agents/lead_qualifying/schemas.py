@@ -34,6 +34,10 @@ class InboundLead(BaseModel):
 class QualifiedLeadRow(BaseModel):
     """One fully-processed lead row ready to be written to the sheet."""
 
+    # 'extra=allow' damit _row_index, pepper_summary etc. mitgespeichert werden können,
+    # ohne dass to_sheet_row() sie ausgibt (das nutzt nur COLUMNS).
+    model_config = {"extra": "allow"}
+
     lead_key: str
     processed_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat(timespec="seconds") + "Z")
 

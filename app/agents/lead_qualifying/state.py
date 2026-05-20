@@ -21,6 +21,17 @@ class LeadState(TypedDict, total=False):
     northdata_summary: str
     news_summary: str
 
+    # ── Pepper Sentiment (community mentions, 90-Tage-Lookback) ─────────────
+    pepper_found: bool             # True wenn matched
+    pepper_matched_name: str       # canonical_retailer_name aus Pepper
+    pepper_total_mentions: int
+    pepper_pos: int
+    pepper_neg: int
+    pepper_neu: int
+    pepper_pos_rate: float         # 0.0–1.0, None → -1.0 markiert "kein Signal"
+    pepper_top_country: str
+    pepper_summary: str            # 1-Zeilen-DE-Summary für Sheet/Telegram
+
     # ── Qualification ─────────────────────────────────────────────────────────
     business_fit_shoop: str        # 0-10 score + one-line rationale
     business_fit_igraal: str

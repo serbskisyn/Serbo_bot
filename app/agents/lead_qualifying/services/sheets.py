@@ -24,6 +24,58 @@ QUALIFIED_TAB_NAME = "Qualified Leads"
 # Canonical column headers for the Qualified Leads tab
 QUALIFIED_COLUMNS = QualifiedLeadRow.COLUMNS
 
+# Validation columns appended to the Inbound tab (header names).
+# Order matters — _write_validation_for_row schreibt in dieser Reihenfolge.
+VALIDATION_COLUMNS: list[str] = [
+    "Validierung_Größe",
+    "Validierung_Sentiment",
+    "Validierung_Score",
+    "Validierung_Klassifikation",
+    "Validierung_Notiz",
+    "Validierung_Datum",
+]
+
+
+# Maps real Inbound headers → canonical fields the pipeline uses.
+# "Name" wird in Vorname/Nachname gesplittet (siehe _map_inbound_row).
+_FIELD_MAP: dict[str, str] = {
+    "Email Address": "E-Mail",
+    "Company Name":  "Firma",
+    "Company website":          "company_website_raw",
+    "Company industry/category": "Industry",
+    "Partnership goals":        "Partnership_Goals",
+    "Target country":           "Quelle",     # genutzt als grobe Quelle/Region
+    "Phone number":             "Telefon",
+    "Message":                  "Message",
+    "Date":                     "Datum",
+    "Status":                   "Status",
+}
+
+
+def _split_name(full: str) -> tuple[str, str]:
+    full = full.strip()
+    if not full:
+        return "", ""
+    parts = full.split(maxsplit=1)
+    return (parts[0], parts[1] if len(parts) > 1 else "")
+
+
+def _map_inbound_row(row: dict[str, str], row_index: int) -> dict[str, str]:
+    """Mappe reale Inbound-Spaltennamen auf die pipeline-internen Feldnamen."""
+    vorname, nachname = _split_name(str(row.get("Name", "")))
+    mapped: dict[str, str] = {
+        "Vorname":  vorname,
+        "Nachname": nachname,
+        "_row_index": row_index,  # 1-basiert (Header = 1, erste Daten-Zeile = 2)
+        # Wenn Validierung_Datum schon gefüllt ist, wurde der Lead in einer
+        # vorherigen Run-Iteration verarbeitet → fetch_new_leads filtert ihn raus.
+        "_validierung_datum": str(row.get("Validierung_Datum", "")).strip(),
+    }
+    for src, dst in _FIELD_MAP.items():
+        if src in row:
+            mapped[dst] = str(row.get(src, "")).strip()
+    return mapped
+
 
 def _get_client() -> gspread.Client:
     """Re-uses the same credential loading logic as gspread_client.py."""
@@ -50,13 +102,70 @@ def _ensure_qualified_tab(sh: gspread.Spreadsheet) -> gspread.Worksheet:
 
 
 def _sync_read_inbound() -> list[dict[str, str]]:
-    """Read all rows from the Inbound tab as a list of dicts."""
+    """Read all rows from the Inbound tab as a list of dicts with canonical field names.
+
+    - Mappt 'Name' → Vorname+Nachname-Split.
+    - Mappt reale Header → 'Firma', 'E-Mail', etc. (siehe _FIELD_MAP).
+    - Hängt '_row_index' an jede Zeile (1-basiert, Header = Zeile 1).
+    """
     client = _get_client()
     sh = client.open_by_key(INBOUND_SHEET_ID)
     ws = sh.worksheet(INBOUND_TAB_NAME)
-    rows = ws.get_all_records(default_blank="")
-    logger.info("Inbound Tab: %d Zeilen gelesen", len(rows))
-    return rows  # type: ignore[return-value]
+    raw_rows = ws.get_all_records(default_blank="")
+    mapped = [_map_inbound_row(row, idx) for idx, row in enumerate(raw_rows, start=2)]
+    logger.info("Inbound Tab: %d Zeilen gelesen (gemappt)", len(mapped))
+    return mapped
+
+
+def _sync_ensure_validation_columns() -> dict[str, int]:
+    """Stellt sicher, dass alle Validierungsspalten im Inbound-Header existieren.
+
+    Returns: Dict {VALIDATION_COLUMN_NAME: 1-basierte_spalten_id}.
+    """
+    client = _get_client()
+    sh = client.open_by_key(INBOUND_SHEET_ID)
+    ws = sh.worksheet(INBOUND_TAB_NAME)
+    header = ws.row_values(1)
+
+    existing: dict[str, int] = {h.strip(): i + 1 for i, h in enumerate(header) if h.strip()}
+    missing = [c for c in VALIDATION_COLUMNS if c not in existing]
+
+    if missing:
+        from gspread.utils import rowcol_to_a1
+        start_col = len(header) + 1
+        ws.update(rowcol_to_a1(1, start_col), [missing])
+        for offset, name in enumerate(missing):
+            existing[name] = start_col + offset
+        logger.info("Inbound-Tab: %d Validierungsspalte(n) angelegt (%s)", len(missing), missing)
+
+    return {c: existing[c] for c in VALIDATION_COLUMNS}
+
+
+def _sync_write_validation_for_row(row_index: int, values: dict[str, str]) -> None:
+    """Schreibt Validierungs-Felder in eine bestimmte Inbound-Zeile (row_index 1-basiert)."""
+    if row_index < 2:
+        logger.warning("write_validation_for_row: ungültiger row_index=%s", row_index)
+        return
+    col_map = _sync_ensure_validation_columns()
+    from gspread.utils import rowcol_to_a1
+    client = _get_client()
+    sh = client.open_by_key(INBOUND_SHEET_ID)
+    ws = sh.worksheet(INBOUND_TAB_NAME)
+
+    # Zellweise statt batch_update, weil Spalten meist nicht zusammenhängen.
+    updates = []
+    for col_name, value in values.items():
+        col_idx = col_map.get(col_name)
+        if col_idx is None:
+            logger.warning("write_validation_for_row: unbekannte Spalte '%s' ignoriert", col_name)
+            continue
+        updates.append({
+            "range": rowcol_to_a1(row_index, col_idx),
+            "values": [[str(value)]],
+        })
+    if updates:
+        ws.batch_update(updates, value_input_option="USER_ENTERED")
+        logger.debug("Inbound-Zeile %d: %d Validierungswerte geschrieben", row_index, len(updates))
 
 
 def _sync_read_existing_keys() -> set[str]:
@@ -102,3 +211,15 @@ async def append_qualified_leads(rows: list[list[str]]) -> None:
     """Async wrapper: append rows to Qualified Leads tab."""
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, partial(_sync_append_rows, rows))
+
+
+async def ensure_validation_columns() -> dict[str, int]:
+    """Async wrapper: stellt sicher, dass Validierungsspalten im Inbound-Header existieren."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _sync_ensure_validation_columns)
+
+
+async def write_validation_for_row(row_index: int, values: dict[str, str]) -> None:
+    """Async wrapper: schreibt Validierungswerte in eine spezifische Inbound-Zeile."""
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, partial(_sync_write_validation_for_row, row_index, values))

@@ -13,6 +13,8 @@ from app.agents.lead_qualifying.schemas import QualifiedLeadRow
 from app.agents.lead_qualifying.services.sheets import (
     INBOUND_SHEET_ID,
     append_qualified_leads,
+    ensure_validation_columns,
+    write_validation_for_row,
 )
 from app.agents.lead_qualifying.state import LeadState
 from app.agents.lead_qualifying.prompts import (
@@ -70,7 +72,11 @@ async def collect_filtered_result_node(state: LeadState) -> LeadState:
     )
 
     processed = list(state.get("processed_leads", []))
-    processed.append(row.model_dump())
+    row_dict = row.model_dump()
+    row_dict["_row_index"] = int(lead.get("_row_index", 0))
+    row_dict["_pepper_summary"] = ""  # FILTERED-Leads kein Pepper-Lookup
+    row_dict["_employee_count"] = ""
+    processed.append(row_dict)
     logger.info(
         "collect_filtered_result: '%s %s' @ '%s' → FILTERED (%s)",
         row.vorname, row.nachname, row.firma, row.pre_qualify_reason,
@@ -113,7 +119,11 @@ async def collect_lead_result_node(state: LeadState) -> LeadState:
     )
 
     processed = list(state.get("processed_leads", []))
-    processed.append(row.model_dump())
+    row_dict = row.model_dump()
+    row_dict["_row_index"] = int(lead.get("_row_index", 0))
+    row_dict["_pepper_summary"] = state.get("pepper_summary", "")
+    row_dict["_employee_count"] = state.get("_employee_count_estimate", "")
+    processed.append(row_dict)
     logger.info(
         "collect_lead_result: '%s %s' @ '%s' → %s (score=%d)",
         row.vorname, row.nachname, row.firma, row.classification, row.score_total,
@@ -134,10 +144,12 @@ async def write_results_node(state: LeadState) -> LeadState:
         logger.info("write_results: Keine neuen Leads zu schreiben")
         return {**state, "telegram_notified": False}
 
-    # ── 1. Write to Google Sheets ────────────────────────────────────────────
+    # ── 1a. Append in 'Qualified Leads' (Audit-Tab, behält History) ──────────
     rows_to_write: list[list[str]] = []
     for lead_dict in processed:
-        row_obj = QualifiedLeadRow(**lead_dict)
+        # Privat-Felder vor QualifiedLeadRow rausnehmen, sonst rejected pydantic
+        clean = {k: v for k, v in lead_dict.items() if not k.startswith("_")}
+        row_obj = QualifiedLeadRow(**clean)
         rows_to_write.append(row_obj.to_sheet_row())
 
     try:
@@ -150,6 +162,47 @@ async def write_results_node(state: LeadState) -> LeadState:
             "telegram_notified": False,
             "errors": [*state.get("errors", []), f"Sheets-Schreibfehler: {exc}"],
         }
+
+    # ── 1b. Validierungsspalten im Inbound-Tab pro Lead-Zeile aktualisieren ──
+    try:
+        await ensure_validation_columns()
+    except Exception as exc:
+        logger.warning("write_results: Validierungsspalten konnten nicht angelegt werden: %s", exc)
+
+    today_iso = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+    val_errors = 0
+    val_written = 0
+    for lead_dict in processed:
+        row_idx = int(lead_dict.get("_row_index", 0) or 0)
+        if row_idx < 2:
+            continue
+        groesse = str(lead_dict.get("_employee_count", "")).strip() or "—"
+        sentiment = str(lead_dict.get("_pepper_summary", "")).strip() or "—"
+        score = lead_dict.get("score_total", 0)
+        classification = lead_dict.get("classification", "")
+        # Notiz: bei FILTERED den pre_qualify_reason, sonst recommended_action
+        if classification == "FILTERED":
+            notiz = lead_dict.get("pre_qualify_reason", "")
+        else:
+            notiz = lead_dict.get("recommended_action", "")
+        try:
+            await write_validation_for_row(row_idx, {
+                "Validierung_Größe":          groesse,
+                "Validierung_Sentiment":      sentiment,
+                "Validierung_Score":          f"{score}/40" if classification != "FILTERED" else "—",
+                "Validierung_Klassifikation": classification,
+                "Validierung_Notiz":          notiz[:500],
+                "Validierung_Datum":          today_iso,
+            })
+            val_written += 1
+        except Exception as exc:
+            val_errors += 1
+            logger.warning("write_results: Validierung-Write für Zeile %d fehlgeschlagen: %s", row_idx, exc)
+
+    logger.info(
+        "write_results: %d Validierungs-Zeilen in Inbound-Tab geschrieben (%d Fehler)",
+        val_written, val_errors,
+    )
 
     # ── 2. Send Telegram summary ─────────────────────────────────────────────
     telegram_notified = False

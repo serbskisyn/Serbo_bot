@@ -20,23 +20,45 @@ logger = logging.getLogger(__name__)
 
 BERLIN = ZoneInfo("Europe/Berlin")
 
-# Default run time: 08:00 Europe/Berlin
-# Override via LEAD_QUALIFYING_HOUR / LEAD_QUALIFYING_MINUTE env vars.
-_DEFAULT_HOUR = 8
-_DEFAULT_MINUTE = 0
+# 2× täglich (Morgen + Nachmittag). Defaults überschreibbar via Env-Vars:
+#   LEAD_QUALIFYING_TIMES="08:00,16:00"   (komma-separierte HH:MM-Liste)
+#   LEAD_QUALIFYING_HOUR / LEAD_QUALIFYING_MINUTE bleiben Backwards-Compat (1× täglich).
+_DEFAULT_TIMES = "08:00,16:00"
 
 
-def _get_schedule_time() -> time:
+def _parse_time(spec: str) -> time | None:
+    try:
+        hh, mm = spec.strip().split(":", 1)
+        return time(hour=int(hh), minute=int(mm), second=0, tzinfo=BERLIN)
+    except (ValueError, AttributeError):
+        return None
+
+
+def _get_schedule_times() -> list[time]:
+    """Liste täglicher Run-Zeiten in Europe/Berlin.
+
+    Bevorzugt LEAD_QUALIFYING_TIMES (komma-separiert); fällt auf legacy
+    LEAD_QUALIFYING_HOUR/MINUTE zurück (1×); sonst Default 08:00 + 16:00.
+    """
     import os
-    try:
-        hour = int(os.getenv("LEAD_QUALIFYING_HOUR", str(_DEFAULT_HOUR)))
-    except ValueError:
-        hour = _DEFAULT_HOUR
-    try:
-        minute = int(os.getenv("LEAD_QUALIFYING_MINUTE", str(_DEFAULT_MINUTE)))
-    except ValueError:
-        minute = _DEFAULT_MINUTE
-    return time(hour=hour, minute=minute, second=0, tzinfo=BERLIN)
+    raw = os.getenv("LEAD_QUALIFYING_TIMES", "").strip()
+    if raw:
+        slots = [t for spec in raw.split(",") if (t := _parse_time(spec))]
+        if slots:
+            return slots
+
+    legacy_hour = os.getenv("LEAD_QUALIFYING_HOUR")
+    if legacy_hour is not None:
+        try:
+            return [time(
+                hour=int(legacy_hour),
+                minute=int(os.getenv("LEAD_QUALIFYING_MINUTE", "0")),
+                second=0, tzinfo=BERLIN,
+            )]
+        except ValueError:
+            pass
+
+    return [t for spec in _DEFAULT_TIMES.split(",") if (t := _parse_time(spec))]
 
 
 async def _run_lead_qualifying_job(context) -> None:  # noqa: ANN001
@@ -72,10 +94,10 @@ async def _run_lead_qualifying_job(context) -> None:  # noqa: ANN001
 
 def register_lead_qualifying_job(app: Application) -> None:
     """
-    Register the lead qualifying pipeline as a daily JobQueue job.
+    Register Lead-Qualifying als JobQueue-Job für jeden konfigurierten Time-Slot.
 
-    Call this from main.py inside _post_init after the bot is ready.
-    Runs at LEAD_QUALIFYING_HOUR:LEAD_QUALIFYING_MINUTE Europe/Berlin (default 08:00).
+    Default: 2× täglich (08:00 + 16:00 Europe/Berlin).
+    Override via LEAD_QUALIFYING_TIMES="08:00,16:00,..." (komma-separierte HH:MM-Liste).
     """
     if app.job_queue is None:
         logger.warning(
@@ -84,14 +106,20 @@ def register_lead_qualifying_job(app: Application) -> None:
         )
         return
 
-    run_time = _get_schedule_time()
-    app.job_queue.run_daily(
-        callback=_run_lead_qualifying_job,
-        time=run_time,
-        name="lead_qualifying_daily",
-    )
+    slots = _get_schedule_times()
+    if not slots:
+        logger.warning("Keine gültigen Run-Zeiten für Lead-Qualifying — Job nicht registriert")
+        return
+
+    for run_time in slots:
+        slot_label = f"{run_time.hour:02d}{run_time.minute:02d}"
+        app.job_queue.run_daily(
+            callback=_run_lead_qualifying_job,
+            time=run_time,
+            name=f"lead_qualifying_daily_{slot_label}",
+        )
     logger.info(
-        "Lead-Qualifying-Job registriert: täglich %02d:%02d Europe/Berlin",
-        run_time.hour,
-        run_time.minute,
+        "Lead-Qualifying registriert: %d Slot(s) Europe/Berlin — %s",
+        len(slots),
+        ", ".join(f"{t.hour:02d}:{t.minute:02d}" for t in slots),
     )

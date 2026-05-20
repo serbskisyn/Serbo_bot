@@ -33,6 +33,7 @@ from app.agents.lead_qualifying.nodes.pre_qualify import (
 )
 from app.agents.lead_qualifying.nodes.enrich_contact import enrich_contact_node
 from app.agents.lead_qualifying.nodes.enrich_company import enrich_company_node
+from app.agents.lead_qualifying.nodes.enrich_pepper_sentiment import enrich_pepper_sentiment_node
 from app.agents.lead_qualifying.nodes.qualify_business_fit import qualify_business_fit_node
 from app.agents.lead_qualifying.nodes.write_results import (
     collect_filtered_result_node,
@@ -57,6 +58,7 @@ def build_per_lead_graph():
     graph.add_node("pre_qualify", pre_qualify_node)
     graph.add_node("enrich_contact", enrich_contact_node)
     graph.add_node("enrich_company", enrich_company_node)
+    graph.add_node("enrich_pepper_sentiment", enrich_pepper_sentiment_node)
     graph.add_node("qualify_business_fit", qualify_business_fit_node)
     graph.add_node("collect_result", collect_lead_result_node)
     graph.add_node("collect_filtered_result", collect_filtered_result_node)
@@ -75,7 +77,8 @@ def build_per_lead_graph():
 
     # Full enrichment pipeline
     graph.add_edge("enrich_contact", "enrich_company")
-    graph.add_edge("enrich_company", "qualify_business_fit")
+    graph.add_edge("enrich_company", "enrich_pepper_sentiment")
+    graph.add_edge("enrich_pepper_sentiment", "qualify_business_fit")
     graph.add_edge("qualify_business_fit", "collect_result")
     graph.add_edge("collect_result", END)
 
@@ -135,6 +138,15 @@ async def run_pipeline() -> LeadState:
             "company_website": "",
             "northdata_summary": "",
             "news_summary": "",
+            "pepper_found": False,
+            "pepper_matched_name": "",
+            "pepper_total_mentions": 0,
+            "pepper_pos": 0,
+            "pepper_neg": 0,
+            "pepper_neu": 0,
+            "pepper_pos_rate": -1.0,
+            "pepper_top_country": "",
+            "pepper_summary": "",
             "business_fit_shoop": "",
             "business_fit_igraal": "",
             "business_fit_mydealz": "",

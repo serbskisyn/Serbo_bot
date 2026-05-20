@@ -113,6 +113,9 @@ ALPACA_SCAN_MINUTE: int = int(os.getenv("ALPACA_SCAN_MINUTE", "0"))
 # ── Trade Engine ─────────────────────────────────────────────────────────────
 TRADE_ENGINE_URL:    str = os.getenv("TRADE_ENGINE_URL", "http://127.0.0.1:8081")
 TRADE_ENGINE_SECRET: str = os.getenv("TRADE_ENGINE_SECRET", "")
+# Kraken Maker-Fee pro Leg (0.0008 = 0,08 % bei Standard-Pro-Volume).
+# Bei höherem 30-Tage-Volumen kann das niedriger sein — siehe Kraken-Fee-Tier.
+KRAKEN_FEE_MAKER:    float = float(os.getenv("KRAKEN_FEE_MAKER", "0.0008"))
 
 # ── Lead Qualifying Agent ─────────────────────────────────────────────────────
 SERP_API_KEY: str = os.getenv("SERP_API_KEY", "")

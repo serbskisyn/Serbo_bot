@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from app.config import TRADE_ENGINE_URL, TRADE_ENGINE_SECRET
+from app.config import TRADE_ENGINE_URL, TRADE_ENGINE_SECRET, KRAKEN_FEE_MAKER
 
 logger = logging.getLogger(__name__)
 ET = ZoneInfo("America/New_York")
@@ -56,10 +56,9 @@ async def _btc_to_eur() -> float:
         return 0.0
 
 
-# Gebühren-Modelle
-_KRAKEN_FEE_PER_LEG  = 0.0008      # 0.08 % Maker-Fee bei Kraken (BTC-Pairs)
-_ALPACA_SEC_PER_SALE = 0.0000278   # SEC-Fee 0.00278 % auf Verkaufserlös (2026)
-_ALPACA_TAF_PER_SHARE = 0.000166   # TAF 0.0166 ¢ pro verkauftem Share (2026)
+# Gebühren-Modelle — Kraken-Fee via Env (KRAKEN_FEE_MAKER), Alpaca-Regulatory-Fees als 2026er Konstanten
+_ALPACA_SEC_PER_SALE  = 0.0000278   # SEC-Fee 0.00278 % auf Verkaufserlös (2026)
+_ALPACA_TAF_PER_SHARE = 0.000166    # TAF 0.0166 ¢ pro verkauftem Share (2026)
 
 
 def _trade_fee(t: dict, market: str) -> float:
@@ -68,8 +67,8 @@ def _trade_fee(t: dict, market: str) -> float:
     exit_ = float(t.get("exit_price", 0))
     qty   = float(t.get("qty", 0))
     if market == "crypto":
-        # Beide Legs × Maker-Fee, in BTC
-        return (entry + exit_) * qty * _KRAKEN_FEE_PER_LEG
+        # Beide Legs × Maker-Fee (env-konfigurierbar), in BTC
+        return (entry + exit_) * qty * KRAKEN_FEE_MAKER
     # Alpaca: kommissionsfrei, nur SEC + TAF auf Verkaufsseite (USD)
     sell_notional = exit_ * qty
     return sell_notional * _ALPACA_SEC_PER_SALE + qty * _ALPACA_TAF_PER_SHARE
@@ -208,7 +207,7 @@ async def fetch_status() -> str:
         n_eur_s = f" (~{n_sign}{n_btc * btc_eur:,.2f} €)" if btc_eur else ""
         lines.append(f"Trades: `{cs['trades']}` | Win-Rate: `{cs['win_rate']:.1f}%`")
         lines.append(f"Brutto P&L: `{g_sign}{g_btc:.8f} BTC`{g_eur_s}")
-        lines.append(f"Gebühren: `-{f_btc:.8f} BTC` _(Maker 0,08 %/Leg)_")
+        lines.append(f"Gebühren: `-{f_btc:.8f} BTC` _(Maker {KRAKEN_FEE_MAKER*100:.2f} %/Leg)_")
         lines.append(f"Netto P&L: `{n_sign}{n_btc:.8f} BTC`{n_eur_s}")
         payoff_s = f"`{cs['payoff']:.2f}x`" if cs["payoff"] is not None else "`–`"
         lines.append(f"Payoff-Ratio: {payoff_s}")

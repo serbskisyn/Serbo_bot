@@ -120,9 +120,37 @@ async def collect_lead_result_node(state: LeadState) -> LeadState:
 
     processed = list(state.get("processed_leads", []))
     row_dict = row.model_dump()
-    row_dict["_row_index"] = int(lead.get("_row_index", 0))
+    row_dict["_row_index"]      = int(lead.get("_row_index", 0))
     row_dict["_pepper_summary"] = state.get("pepper_summary", "")
-    row_dict["_employee_count"] = state.get("_employee_count_estimate", "")
+    row_dict["_employee_count"] = state.get("_employee_count_estimate", "") or state.get("company_employees", "")
+
+    # Neue Pipeline-Felder für Sheet-Spalten
+    validated = state.get("validated_brands") or []
+    seen: set[str] = set()
+    unique_brand_names: list[str] = []
+    for b in validated:
+        if not isinstance(b, dict):
+            continue
+        n = (b.get("name") or "").strip()
+        key = n.lower()
+        if n and key not in seen:
+            seen.add(key)
+            unique_brand_names.append(n)
+    row_dict["_brands"] = ", ".join(unique_brand_names)[:500] or "—"
+
+    revenue   = state.get("company_revenue", "") or "—"
+    employees = state.get("company_employees", "") or "—"
+    hq        = state.get("company_hq", "") or ""
+    model     = state.get("business_model", "") or ""
+    facts = f"Umsatz: {revenue} · MA: {employees}"
+    if hq:    facts += f" · HQ: {hq}"
+    if model: facts += f" · Modell: {model}"
+    row_dict["_firmenfakten"] = facts
+
+    row_dict["_sentiment_target"] = state.get("pepper_target_summary", "") or "—"
+    row_dict["_sentiment_cross"]  = state.get("pepper_cross_summary", "") or "—"
+    row_dict["_sales_signals"]    = state.get("sales_signals", "") or ""
+
     processed.append(row_dict)
     logger.info(
         "collect_lead_result: '%s %s' @ '%s' → %s (score=%d)",
@@ -176,23 +204,36 @@ async def write_results_node(state: LeadState) -> LeadState:
         row_idx = int(lead_dict.get("_row_index", 0) or 0)
         if row_idx < 2:
             continue
-        groesse = str(lead_dict.get("_employee_count", "")).strip() or "—"
-        sentiment = str(lead_dict.get("_pepper_summary", "")).strip() or "—"
-        score = lead_dict.get("score_total", 0)
-        classification = lead_dict.get("classification", "")
-        # Notiz: bei FILTERED den pre_qualify_reason, sonst recommended_action
+
+        groesse           = str(lead_dict.get("_employee_count", "")).strip() or "—"
+        marken            = str(lead_dict.get("_brands", "")).strip() or "—"
+        firmenfakten      = str(lead_dict.get("_firmenfakten", "")).strip() or "—"
+        sentiment_target  = str(lead_dict.get("_sentiment_target", "")).strip() or "—"
+        sentiment_cross   = str(lead_dict.get("_sentiment_cross", "")).strip() or "—"
+        sentiment_legacy  = str(lead_dict.get("_pepper_summary", "")).strip() or "—"
+        score             = lead_dict.get("score_total", 0)
+        classification    = lead_dict.get("classification", "")
+
+        # Notiz: bei FILTERED den Filter-Grund, sonst Sales-Signals + Recommended-Action
         if classification == "FILTERED":
             notiz = lead_dict.get("pre_qualify_reason", "")
         else:
-            notiz = lead_dict.get("recommended_action", "")
+            sales = str(lead_dict.get("_sales_signals", "")).strip()
+            action = str(lead_dict.get("recommended_action", "")).strip()
+            notiz = " | ".join(p for p in [sales, action] if p)
+
         try:
             await write_validation_for_row(row_idx, {
-                "Validierung_Größe":          groesse,
-                "Validierung_Sentiment":      sentiment,
-                "Validierung_Score":          f"{score}/40" if classification != "FILTERED" else "—",
-                "Validierung_Klassifikation": classification,
-                "Validierung_Notiz":          notiz[:500],
-                "Validierung_Datum":          today_iso,
+                "Validierung_Größe":               groesse,
+                "Validierung_Marken":              marken[:500],
+                "Validierung_Firmenfakten":        firmenfakten[:500],
+                "Validierung_Sentiment_Zielland":  sentiment_target[:300],
+                "Validierung_Sentiment_Cross":     sentiment_cross[:300],
+                "Validierung_Sentiment":           sentiment_legacy[:300],
+                "Validierung_Score":               f"{score}/40" if classification != "FILTERED" else "—",
+                "Validierung_Klassifikation":      classification,
+                "Validierung_Notiz":               notiz[:500],
+                "Validierung_Datum":               today_iso,
             })
             val_written += 1
         except Exception as exc:

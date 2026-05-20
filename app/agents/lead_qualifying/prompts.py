@@ -130,6 +130,14 @@ QUALIFICATION_USER = """Lead-Informationen:
 - Unternehmensbeschreibung: {company_description}
 - Branche: {industry}
 - Unternehmensgröße: {employee_count_estimate}
+- Umsatz-Schätzung: {company_revenue}
+- HQ: {company_hq}
+- Geschäftsmodell: {business_model}
+- Hauptmärkte: {primary_markets}
+- eCommerce-Marken: {validated_brands_text}
+- Sales-Signale: {sales_signals}
+- Pepper-Sentiment Zielland: {pepper_target_summary}
+- Pepper-Sentiment Cross-Country: {pepper_cross_summary}
 - Aktuelle News: {news_summary}
 
 Bewerte den Business Fit für jede unserer 4 Plattformen auf einer Skala von 0-10

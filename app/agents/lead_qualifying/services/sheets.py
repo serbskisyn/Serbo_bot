@@ -25,14 +25,19 @@ QUALIFIED_TAB_NAME = "Qualified Leads"
 QUALIFIED_COLUMNS = QualifiedLeadRow.COLUMNS
 
 # Validation columns appended to the Inbound tab (header names).
-# Order matters — _write_validation_for_row schreibt in dieser Reihenfolge.
+# Neue Pipeline (2026-05-20 Refactor): Brand-Discovery + Multi-Country-Pepper.
+# Bestehende Spalten werden beibehalten, neue ergänzt.
 VALIDATION_COLUMNS: list[str] = [
-    "Validierung_Größe",
-    "Validierung_Sentiment",
-    "Validierung_Score",
-    "Validierung_Klassifikation",
-    "Validierung_Notiz",
-    "Validierung_Datum",
+    "Validierung_Größe",                    # Mitarbeiterzahl-Schätzung
+    "Validierung_Marken",                   # eCommerce-Marken (comma-sep)
+    "Validierung_Firmenfakten",             # Umsatz, MA, HQ, Geschäftsmodell
+    "Validierung_Sentiment_Zielland",       # Pepper-Aggregat für Sheet-Spalte-H-Land
+    "Validierung_Sentiment_Cross",          # Top-N Länder mit Pepper-Aktivität
+    "Validierung_Sentiment",                # Legacy: Gesamt-Pepper-Summary
+    "Validierung_Score",                    # Score 0-40 (Kriterien WIP)
+    "Validierung_Klassifikation",           # HOT/WARM/COLD/FILTERED
+    "Validierung_Notiz",                    # Sales-Signale + recommended_action
+    "Validierung_Datum",                    # ISO-Datum, dient als Idempotenz-Marker
 ]
 
 

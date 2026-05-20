@@ -27,6 +27,30 @@ class LeadState(TypedDict, total=False):
     _industry: str
     _employee_count_estimate: str
 
+    # ── Neue Pipeline (2026-05-20 Refactor): Brand-Discovery + Sales-Validation +
+    #     Multi-Country-Pepper-Lookup pro Brand ────────────────────────────────
+    discovered_brands:   list                  # aus discover_ecommerce_brands
+    is_holding:          bool
+    validated_brands:    list                  # aus validate_company_sales
+    company_revenue:     str                   # Umsatz-Schätzung
+    company_employees:   str                   # Mitarbeiterzahl
+    company_hq:          str                   # Headquarters-Standort
+    primary_markets:     list                  # Liste ISO-Codes
+    business_model:      str                   # B2C/B2B/Marketplace/Hybrid
+    sales_signals:       str                   # 2-3 Sätze Sales-Kontext
+
+    # Zielland aus Inbound-Spalte "Target country" → Pepper-ISO-Code
+    target_country_iso:  str
+
+    # Pepper-Multi-Brand-Multi-Country-Output (komplette Datenstruktur)
+    pepper_by_brand:           dict
+    pepper_brands_found:       int
+    pepper_total_mentions_all: int
+
+    # Kompakte Strings für Sheet-Spalten (zur Performance, einmal berechnet)
+    pepper_target_summary:     str             # 1 Zeile für Zielland
+    pepper_cross_summary:      str             # 1 Zeile für Top-Cross-Country
+
     # ── Pepper Sentiment (community mentions, 90-Tage-Lookback) ─────────────
     pepper_found: bool             # True wenn matched
     pepper_matched_name: str       # canonical_retailer_name aus Pepper

@@ -241,3 +241,163 @@ def format_sentiment_summary(result: dict) -> str:
     if matched:
         parts.append(f'"{matched}"')
     return " · ".join(parts)
+
+
+# ── Multi-Brand × Multi-Country Lookup ────────────────────────────────────────
+
+_MULTI_PROMPT = """Hi! I'm running the Atolls Lead-Qualifying-Bot and need country-level brand-sentiment data from Pepper Intelligence to enrich an inbound lead.
+
+The lead's company is "{firma}" — they operate the following eCommerce brands:
+{brand_list}
+
+Could you please run this SQL via mcp__claude_ai_Pepper_Intelligence__query_intelligence — it aggregates mention counts per brand per country for the last {lookback} days:
+
+SELECT canonical_retailer_name,
+       country_code,
+       sum(CASE WHEN sentiment='positive' THEN mention_count ELSE 0 END) AS pos,
+       sum(CASE WHEN sentiment='negative' THEN mention_count ELSE 0 END) AS neg,
+       sum(CASE WHEN sentiment='neutral'  THEN mention_count ELSE 0 END) AS neu,
+       sum(mention_count) AS total
+FROM v_retailer_sentiment_daily
+WHERE ({where_clause})
+  AND comment_day >= current_date - {lookback}
+GROUP BY canonical_retailer_name, country_code
+ORDER BY total DESC
+LIMIT 500;
+
+A Python script parses your reply with json.loads(). Please summarise the result as a JSON object grouped by brand and country, like this:
+
+{{
+  "by_brand": {{
+    "<canonical_retailer_name>": {{
+      "total_mentions": <int>,
+      "pos_rate": <float pos/(pos+neg) rounded to 3 decimals, or null>,
+      "by_country": {{
+         "<country_code>": {{"pos": int, "neg": int, "neu": int, "total": int, "pos_rate": <float or null>}}
+      }}
+    }}
+  }},
+  "brands_found": <int>,
+  "total_mentions_all": <int>
+}}
+
+If the query returns no rows, please respond with:
+{{"by_brand": {{}}, "brands_found": 0, "total_mentions_all": 0}}
+
+Since json.loads() will fail on surrounding prose or markdown fences, the cleanest reply is the bare JSON object. Thanks!"""
+
+
+def _build_where_clause(brand_names: list[str]) -> str:
+    """Baut OR-verkettete ILIKE-Bedingungen für mehrere Brand-Patterns."""
+    if not brand_names:
+        return "1=0"
+    clauses = []
+    for n in brand_names:
+        pat = _normalize_brand(n)
+        if not pat:
+            continue
+        # SQL-Escape Single-Quotes
+        pat_sql = pat.replace("'", "''")
+        clauses.append(f"canonical_retailer_name ILIKE '%{pat_sql}%'")
+    return " OR ".join(clauses) if clauses else "1=0"
+
+
+async def get_multi_brand_sentiment(firma: str, brand_names: list[str]) -> dict:
+    """Pepper-Lookup für mehrere Brands gleichzeitig, aufgeschlüsselt nach Land.
+
+    Output:
+      {
+        "by_brand": {brand: {total, pos_rate, by_country: {iso: {pos, neg, neu, total, pos_rate}}}},
+        "brands_found": int,
+        "total_mentions_all": int,
+        "error": str (nur bei Fehler)
+      }
+    """
+    if not brand_names:
+        return {"by_brand": {}, "brands_found": 0, "total_mentions_all": 0}
+
+    where_clause = _build_where_clause(brand_names)
+    brand_list = "\n".join(f"- {n}" for n in brand_names if n.strip())
+
+    prompt = _MULTI_PROMPT.format(
+        firma=firma.replace('"', '\\"'),
+        brand_list=brand_list,
+        where_clause=where_clause,
+        lookback=_LOOKBACK_DAYS,
+    )
+
+    logger.info("pepper_multi: '%s' — %d Brands → Pepper-Subprocess", firma, len(brand_names))
+
+    try:
+        raw = await run_claude_agent(prompt, timeout=_TIMEOUT_SEC * 2)
+    except Exception as exc:
+        logger.warning("pepper_multi: subprocess-Exception: %s", exc)
+        return {"by_brand": {}, "brands_found": 0, "total_mentions_all": 0,
+                "error": f"subprocess: {exc}"}
+
+    if raw.startswith("❌") or raw.startswith("⏳"):
+        logger.warning("pepper_multi: subprocess-Fehler: %s", raw[:200])
+        return {"by_brand": {}, "brands_found": 0, "total_mentions_all": 0,
+                "error": raw[:300]}
+
+    parsed = _extract_json(raw)
+    if parsed is None:
+        logger.warning("pepper_multi: JSON-Parse-Fehler; raw=%r", raw[:300])
+        return {"by_brand": {}, "brands_found": 0, "total_mentions_all": 0,
+                "error": "JSON parse failed"}
+
+    by_brand = parsed.get("by_brand") or {}
+    logger.info("pepper_multi: '%s' → %d Brands gefunden, %d Total-Mentions",
+                firma, len(by_brand), int(parsed.get("total_mentions_all") or 0))
+    return {
+        "by_brand":           by_brand,
+        "brands_found":       int(parsed.get("brands_found") or 0),
+        "total_mentions_all": int(parsed.get("total_mentions_all") or 0),
+    }
+
+
+def format_country_sentiment(by_brand: dict, country_iso: str) -> str:
+    """1-Zeilen-Summary für eine spezifische Country-Spalte ('de', 'pl', ...).
+
+    Aggregiert über alle Brands für dieses Land.
+    """
+    if not by_brand or not country_iso:
+        return "—"
+    pos = neg = neu = 0
+    brands_with_data = []
+    for brand, stats in by_brand.items():
+        c = (stats.get("by_country") or {}).get(country_iso)
+        if c:
+            pos += int(c.get("pos") or 0)
+            neg += int(c.get("neg") or 0)
+            neu += int(c.get("neu") or 0)
+            t = int(c.get("total") or 0)
+            if t > 0:
+                brands_with_data.append(f"{brand}:{t}")
+    total = pos + neg + neu
+    if total == 0:
+        return "—"
+    rate = pos / (pos + neg) if (pos + neg) > 0 else None
+    parts = [f"{total} M", f"{pos}↑/{neg}↓"]
+    if rate is not None:
+        parts.append(f"{rate*100:.0f}%↑")
+    if brands_with_data and len(brands_with_data) <= 3:
+        parts.append("(" + ", ".join(brands_with_data) + ")")
+    return " · ".join(parts)
+
+
+def format_cross_country_summary(by_brand: dict, exclude_iso: str | None = None,
+                                  top_n: int = 4) -> str:
+    """Cross-Country-Summary: Top-N Länder (außer Zielland) mit Pepper-Aktivität."""
+    if not by_brand:
+        return "—"
+    per_country: dict[str, int] = {}
+    for brand, stats in by_brand.items():
+        for iso, c in (stats.get("by_country") or {}).items():
+            if exclude_iso and iso == exclude_iso:
+                continue
+            per_country[iso] = per_country.get(iso, 0) + int(c.get("total") or 0)
+    if not per_country:
+        return "—"
+    sorted_countries = sorted(per_country.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+    return " | ".join(f"{iso.upper()}:{total}m" for iso, total in sorted_countries if total > 0) or "—"

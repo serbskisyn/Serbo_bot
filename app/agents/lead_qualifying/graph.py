@@ -31,9 +31,9 @@ from app.agents.lead_qualifying.nodes.pre_qualify import (
     pre_qualify_node,
     route_after_pre_qualify,
 )
-from app.agents.lead_qualifying.nodes.enrich_contact import enrich_contact_node
-from app.agents.lead_qualifying.nodes.enrich_company import enrich_company_node
-from app.agents.lead_qualifying.nodes.enrich_pepper_sentiment import enrich_pepper_sentiment_node
+from app.agents.lead_qualifying.nodes.discover_brands import discover_brands_node
+from app.agents.lead_qualifying.nodes.validate_company import validate_company_node
+from app.agents.lead_qualifying.nodes.pepper_multi_country import pepper_multi_country_node
 from app.agents.lead_qualifying.nodes.qualify_business_fit import qualify_business_fit_node
 from app.agents.lead_qualifying.nodes.write_results import (
     collect_filtered_result_node,
@@ -56,29 +56,30 @@ def build_per_lead_graph():
     graph = StateGraph(LeadState)
 
     graph.add_node("pre_qualify", pre_qualify_node)
-    graph.add_node("enrich_contact", enrich_contact_node)
-    graph.add_node("enrich_company", enrich_company_node)
-    graph.add_node("enrich_pepper_sentiment", enrich_pepper_sentiment_node)
+    graph.add_node("discover_brands", discover_brands_node)
+    graph.add_node("validate_company", validate_company_node)
+    graph.add_node("pepper_multi_country", pepper_multi_country_node)
     graph.add_node("qualify_business_fit", qualify_business_fit_node)
     graph.add_node("collect_result", collect_lead_result_node)
     graph.add_node("collect_filtered_result", collect_filtered_result_node)
 
     graph.set_entry_point("pre_qualify")
 
-    # Conditional branch after pre-qualification
+    # Conditional branch after pre-qualification (Fake-Lead-Filter)
     graph.add_conditional_edges(
         "pre_qualify",
         route_after_pre_qualify,
         {
-            "enrich_contact": "enrich_contact",
+            "enrich_contact": "discover_brands",        # Routing-Key bleibt für Compat
             "collect_filtered_result": "collect_filtered_result",
         },
     )
 
-    # Full enrichment pipeline
-    graph.add_edge("enrich_contact", "enrich_company")
-    graph.add_edge("enrich_company", "enrich_pepper_sentiment")
-    graph.add_edge("enrich_pepper_sentiment", "qualify_business_fit")
+    # Enrichment-Pipeline:
+    # discover_brands → validate_company → pepper_multi_country → qualify_business_fit
+    graph.add_edge("discover_brands", "validate_company")
+    graph.add_edge("validate_company", "pepper_multi_country")
+    graph.add_edge("pepper_multi_country", "qualify_business_fit")
     graph.add_edge("qualify_business_fit", "collect_result")
     graph.add_edge("collect_result", END)
 
@@ -138,14 +139,23 @@ async def run_pipeline() -> LeadState:
             "company_website": "",
             "northdata_summary": "",
             "news_summary": "",
-            "pepper_found": False,
-            "pepper_matched_name": "",
-            "pepper_total_mentions": 0,
-            "pepper_pos": 0,
-            "pepper_neg": 0,
-            "pepper_neu": 0,
-            "pepper_pos_rate": -1.0,
-            "pepper_top_country": "",
+            # Neue Pipeline-Felder
+            "discovered_brands": [],
+            "is_holding": False,
+            "validated_brands": [],
+            "company_revenue": "",
+            "company_employees": "",
+            "company_hq": "",
+            "primary_markets": [],
+            "business_model": "",
+            "sales_signals": "",
+            "target_country_iso": "",
+            "pepper_by_brand": {},
+            "pepper_brands_found": 0,
+            "pepper_total_mentions_all": 0,
+            "pepper_target_summary": "",
+            "pepper_cross_summary": "",
+            # Legacy
             "pepper_summary": "",
             "business_fit_shoop": "",
             "business_fit_igraal": "",

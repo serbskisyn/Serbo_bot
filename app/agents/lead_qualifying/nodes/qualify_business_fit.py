@@ -42,12 +42,24 @@ async def qualify_business_fit_node(state: LeadState) -> LeadState:
     firma = str(lead.get("Firma", "")).strip()
     name = f"{vorname} {nachname}".strip()
 
-    contact_title = state.get("contact_title", "")
-    company_website = state.get("company_website", "")
-    company_description = state.get("_company_description", "")
-    industry = state.get("_industry", "")
-    employee_count_estimate = state.get("_employee_count_estimate", "")
-    news_summary = state.get("news_summary", "")
+    contact_title           = state.get("contact_title", "")
+    company_website         = state.get("company_website", "")
+    company_description     = state.get("_company_description", "")
+    industry                = state.get("_industry", "")
+    employee_count_estimate = state.get("_employee_count_estimate", "") or state.get("company_employees", "")
+    news_summary            = state.get("news_summary", "")
+    company_revenue         = state.get("company_revenue", "")
+    company_hq              = state.get("company_hq", "")
+    business_model          = state.get("business_model", "")
+    primary_markets         = state.get("primary_markets") or []
+    sales_signals           = state.get("sales_signals", "")
+    pepper_target_summary   = state.get("pepper_target_summary", "")
+    pepper_cross_summary    = state.get("pepper_cross_summary", "")
+    validated_brands        = state.get("validated_brands") or []
+
+    validated_brands_text = ", ".join(
+        b.get("name", "") for b in validated_brands if isinstance(b, dict) and b.get("name")
+    ) or "(keine identifiziert)"
 
     logger.info("qualify_business_fit: '%s' @ '%s'", name, firma)
 
@@ -59,6 +71,14 @@ async def qualify_business_fit_node(state: LeadState) -> LeadState:
         company_description=company_description or "(keine Beschreibung)",
         industry=industry or "(unbekannt)",
         employee_count_estimate=employee_count_estimate or "(unbekannt)",
+        company_revenue=company_revenue or "(unbekannt)",
+        company_hq=company_hq or "(unbekannt)",
+        business_model=business_model or "(unbekannt)",
+        primary_markets=", ".join(primary_markets) if primary_markets else "(unbekannt)",
+        validated_brands_text=validated_brands_text,
+        sales_signals=sales_signals or "(keine)",
+        pepper_target_summary=pepper_target_summary or "(keine Daten)",
+        pepper_cross_summary=pepper_cross_summary or "(keine Daten)",
         news_summary=news_summary or "Keine News gefunden.",
     )
 

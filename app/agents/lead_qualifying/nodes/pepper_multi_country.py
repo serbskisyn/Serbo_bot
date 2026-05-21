@@ -91,7 +91,8 @@ async def pepper_multi_country_node(state: LeadState) -> LeadState:
     lookup_error = result.get("error") or ""
 
     target_summary = format_country_sentiment(by_brand, target_iso) if target_iso else "—"
-    cross_summary  = format_cross_country_summary(by_brand, exclude_iso=target_iso, top_n=4)
+    # All-country matrix (no exclusion, no cap) — one line per country sorted by total
+    cross_summary  = format_cross_country_summary(by_brand)
 
     if total_all > 0 or by_brand:
         legacy_summary = _format_legacy_summary(by_brand, total_all)

@@ -461,54 +461,51 @@ def _aggregate_country(by_brand: dict, country_iso: str) -> dict:
     }
 
 
-def format_country_sentiment(by_brand: dict, country_iso: str) -> str:
-    """1-Zeilen-Summary für eine spezifische Country-Spalte ('de', 'pl', ...).
+def _fmt_country_line(iso: str, pos: int, neu: int, neg: int, total: int) -> str:
+    """Formats one country row: 'DE: 200 mentions - 20 positive, 40 neutral, 140 negative - Ratio 10% pos vs 70% neg'."""
+    pos_pct = round(pos / total * 100) if total > 0 else 0
+    neg_pct = round(neg / total * 100) if total > 0 else 0
+    return (
+        f"{iso.upper()}: {total} mentions"
+        f" - {pos} positive, {neu} neutral, {neg} negative"
+        f" - Ratio {pos_pct}% pos vs {neg_pct}% neg"
+    )
 
-    Aggregiert über alle Brands für dieses Land. Enthält Mentions, Pos-Rate,
-    Deal-Count und Top-3-Aspects.
-    """
+
+def format_country_sentiment(by_brand: dict, country_iso: str) -> str:
+    """Detailed sentiment line for a single target country."""
     agg = _aggregate_country(by_brand, country_iso)
     if not agg:
         return "—"
-    parts = [f"{agg['total']} M ({agg['deals']} Deals)", f"{agg['pos']}↑/{agg['neg']}↓"]
-    if agg["pos_rate"] is not None:
-        parts.append(f"{agg['pos_rate']*100:.0f}%↑")
-    if agg["top_aspects"]:
-        asp_strs = []
-        for a in agg["top_aspects"]:
-            asp_strs.append(f"{a['aspect']}({a['pos']}↑/{a['neg']}↓)")
-        parts.append("Top: " + ", ".join(asp_strs))
-    return " · ".join(parts)
+    return _fmt_country_line(
+        country_iso,
+        agg["pos"], agg["neu"], agg["neg"], agg["total"],
+    )
 
 
 def format_cross_country_summary(by_brand: dict, exclude_iso: str | None = None,
                                   top_n: int = 4) -> str:
-    """Cross-Country-Summary: Top-N Länder (außer Zielland) mit Pepper-Aktivität.
+    """Matrix of all countries with Pepper activity, sorted by total mentions descending.
 
-    Zeigt pro Land: Mentions, Deals, Pos-Rate.
+    One line per country:
+      DE: 200 mentions - 20 positive, 40 neutral, 140 negative - Ratio 10% pos vs 70% neg
     """
     if not by_brand:
         return "—"
     per_country: dict[str, dict] = {}
     for brand, stats in by_brand.items():
         for iso, c in (stats.get("by_country") or {}).items():
-            if exclude_iso and iso == exclude_iso:
-                continue
-            row = per_country.setdefault(iso, {"pos": 0, "neg": 0, "neu": 0, "deals": 0})
-            row["pos"]   += int(c.get("pos") or 0)
-            row["neg"]   += int(c.get("neg") or 0)
-            row["neu"]   += int(c.get("neu") or 0)
-            row["deals"] += int(c.get("deals") or 0)
-    enriched = [
-        (iso, r["pos"] + r["neg"] + r["neu"], r["pos"], r["neg"], r["deals"])
-        for iso, r in per_country.items()
-    ]
-    enriched = sorted(enriched, key=lambda x: x[1], reverse=True)[:top_n]
-    parts = []
-    for iso, total, p, n, d in enriched:
-        if total == 0:
-            continue
-        rate = p / (p + n) * 100 if (p + n) > 0 else None
-        rate_s = f" {rate:.0f}%↑" if rate is not None else ""
-        parts.append(f"{iso.upper()}:{total}m/{d}d{rate_s}")
-    return " | ".join(parts) or "—"
+            row = per_country.setdefault(iso, {"pos": 0, "neg": 0, "neu": 0})
+            row["pos"] += int(c.get("pos") or 0)
+            row["neg"] += int(c.get("neg") or 0)
+            row["neu"] += int(c.get("neu") or 0)
+
+    rows = sorted(
+        ((iso, r["pos"], r["neu"], r["neg"], r["pos"] + r["neg"] + r["neu"])
+         for iso, r in per_country.items() if r["pos"] + r["neg"] + r["neu"] > 0),
+        key=lambda x: x[4], reverse=True,
+    )
+    if not rows:
+        return "—"
+    lines = [_fmt_country_line(iso, p, nu, ng, t) for iso, p, nu, ng, t in rows]
+    return "\n".join(lines)

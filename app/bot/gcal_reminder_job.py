@@ -1,6 +1,8 @@
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from app.config import (
@@ -18,8 +20,38 @@ _MONTHS_DE = ["Januar", "Februar", "März", "April", "Mai", "Juni",
 
 logger = logging.getLogger(__name__)
 
-# Tracks already-notified events: "{event_id}_{date}" to avoid duplicate pushes
+_NOTIFIED_PATH = Path("app/data/gcal_notified.json")
+
+# Tracks already-notified events: "{event_id}_{date}" — persisted across restarts
 _notified: set[str] = set()
+
+
+def _load_notified() -> None:
+    """Load persisted notified-set from disk; drop entries older than yesterday."""
+    global _notified
+    if not _NOTIFIED_PATH.exists():
+        return
+    try:
+        data: list[str] = json.loads(_NOTIFIED_PATH.read_text())
+        today = datetime.now(_BERLIN).date()
+        yesterday = (today - timedelta(days=1)).isoformat()
+        # Keep only today's and yesterday's entries (avoids unbounded growth)
+        _notified = {k for k in data if k.endswith(today.isoformat()) or k.endswith(yesterday)}
+        logger.info("gcal_reminder: %d gespeicherte Erinnerungen geladen", len(_notified))
+    except Exception as e:
+        logger.warning("gcal_reminder: Notified-Cache konnte nicht geladen werden: %s", e)
+
+
+def _save_notified() -> None:
+    """Persist current notified-set to disk."""
+    try:
+        _NOTIFIED_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _NOTIFIED_PATH.write_text(json.dumps(sorted(_notified)))
+    except Exception as e:
+        logger.warning("gcal_reminder: Notified-Cache konnte nicht gespeichert werden: %s", e)
+
+
+_load_notified()
 
 
 async def _check_and_notify(context) -> None:
@@ -51,11 +83,22 @@ async def _check_and_notify(context) -> None:
             continue
 
         for event in events:
+            # Skip all-day events — no specific start time, reminder doesn't apply
+            start = event.get('start', {})
+            if 'dateTime' not in start:
+                continue
+
+            # Skip events that have already started or are in the past
+            event_start = datetime.fromisoformat(start['dateTime']).astimezone(timezone.utc)
+            if event_start <= now:
+                continue
+
             event_id = event.get('id', '')
             key = f"{event_id}_{now.date()}"
             if key in _notified:
                 continue
             _notified.add(key)
+            _save_notified()
 
             line = format_event(event)
             text = (

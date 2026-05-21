@@ -243,46 +243,55 @@ def format_sentiment_summary(result: dict) -> str:
     return " · ".join(parts)
 
 
-# ── Multi-Brand × Multi-Country Lookup ────────────────────────────────────────
+# ── Multi-Brand × Multi-Country Lookup mit Aspects + Deals ───────────────────
 
-_MULTI_PROMPT = """Hi! I'm running the Atolls Lead-Qualifying-Bot and need country-level brand-sentiment data from Pepper Intelligence to enrich an inbound lead.
+_MULTI_PROMPT = """Hi! I'm running the Atolls Lead-Qualifying-Bot and need detailed country-level brand-sentiment data from Pepper Intelligence to enrich an inbound lead.
 
 The lead's company is "{firma}" — they operate the following eCommerce brands:
 {brand_list}
 
-Could you please run this SQL via mcp__claude_ai_Pepper_Intelligence__query_intelligence — it aggregates mention counts per brand per country for the last {lookback} days:
+Could you please run this SQL via mcp__claude_ai_Pepper_Intelligence__query_intelligence — it aggregates mentions, deals and aspect-level sentiment per brand per country for the last {lookback} days:
 
 SELECT canonical_retailer_name,
        country_code,
-       sum(CASE WHEN sentiment='positive' THEN mention_count ELSE 0 END) AS pos,
-       sum(CASE WHEN sentiment='negative' THEN mention_count ELSE 0 END) AS neg,
-       sum(CASE WHEN sentiment='neutral'  THEN mention_count ELSE 0 END) AS neu,
-       sum(mention_count) AS total
-FROM v_retailer_sentiment_daily
+       sentiment,
+       aspect,
+       count(*)                  AS mentions,
+       count(DISTINCT deal_id)   AS deals
+FROM v_retailer_mentions
 WHERE ({where_clause})
-  AND comment_day >= current_date - {lookback}
-GROUP BY canonical_retailer_name, country_code
-ORDER BY total DESC
-LIMIT 500;
+  AND comment_created_at >= current_date - {lookback}
+GROUP BY canonical_retailer_name, country_code, sentiment, aspect
+ORDER BY mentions DESC
+LIMIT 2000;
 
-A Python script parses your reply with json.loads(). Please summarise the result as a JSON object grouped by brand and country, like this:
+A Python script parses your reply with json.loads(). Please aggregate the rows and respond with this JSON shape — brand × country with overall sentiment buckets, deal count, and the TOP 3 aspects per country (by total mentions across all sentiment categories):
 
 {{
   "by_brand": {{
     "<canonical_retailer_name>": {{
       "total_mentions": <int>,
-      "pos_rate": <float pos/(pos+neg) rounded to 3 decimals, or null>,
+      "total_deals": <int>,
       "by_country": {{
-         "<country_code>": {{"pos": int, "neg": int, "neu": int, "total": int, "pos_rate": <float or null>}}
+         "<country_code>": {{
+            "pos": <int>, "neg": <int>, "neu": <int>, "total": <int>,
+            "pos_rate": <float pos/(pos+neg) rounded to 3 decimals, or null>,
+            "deals": <int — distinct deal_id count for this brand+country>,
+            "top_aspects": [
+              {{"aspect": "<name>", "pos": int, "neg": int, "neu": int, "total": int}},
+              ... up to 3 entries, sorted by total descending, skip rows where aspect is null ...
+            ]
+         }}
       }}
     }}
   }},
   "brands_found": <int>,
-  "total_mentions_all": <int>
+  "total_mentions_all": <int>,
+  "total_deals_all": <int>
 }}
 
 If the query returns no rows, please respond with:
-{{"by_brand": {{}}, "brands_found": 0, "total_mentions_all": 0}}
+{{"by_brand": {{}}, "brands_found": 0, "total_mentions_all": 0, "total_deals_all": 0}}
 
 Since json.loads() will fail on surrounding prose or markdown fences, the cleanest reply is the bare JSON object. Thanks!"""
 
@@ -347,57 +356,114 @@ async def get_multi_brand_sentiment(firma: str, brand_names: list[str]) -> dict:
                 "error": "JSON parse failed"}
 
     by_brand = parsed.get("by_brand") or {}
-    logger.info("pepper_multi: '%s' → %d Brands gefunden, %d Total-Mentions",
-                firma, len(by_brand), int(parsed.get("total_mentions_all") or 0))
+    logger.info(
+        "pepper_multi: '%s' → %d Brands, %d Total-Mentions, %d Deals",
+        firma, len(by_brand),
+        int(parsed.get("total_mentions_all") or 0),
+        int(parsed.get("total_deals_all") or 0),
+    )
     return {
         "by_brand":           by_brand,
         "brands_found":       int(parsed.get("brands_found") or 0),
         "total_mentions_all": int(parsed.get("total_mentions_all") or 0),
+        "total_deals_all":    int(parsed.get("total_deals_all") or 0),
+    }
+
+
+def _aggregate_country(by_brand: dict, country_iso: str) -> dict:
+    """Aggregiert Brand-Daten für ein Country zu einem flachen Dict."""
+    if not by_brand or not country_iso:
+        return {}
+    pos = neg = neu = total_deals = 0
+    brands_seen: list[str] = []
+    aspect_acc: dict[str, dict[str, int]] = {}      # aspect → {pos, neg, neu, total}
+    for brand, stats in by_brand.items():
+        c = (stats.get("by_country") or {}).get(country_iso)
+        if not c:
+            continue
+        cp = int(c.get("pos") or 0)
+        cn = int(c.get("neg") or 0)
+        cu = int(c.get("neu") or 0)
+        if (cp + cn + cu) == 0:
+            continue
+        pos += cp
+        neg += cn
+        neu += cu
+        total_deals += int(c.get("deals") or 0)
+        brands_seen.append(f"{brand}:{cp+cn+cu}")
+        for a in (c.get("top_aspects") or []):
+            name = (a.get("aspect") or "").strip().lower()
+            if not name:
+                continue
+            row = aspect_acc.setdefault(name, {"pos": 0, "neg": 0, "neu": 0, "total": 0})
+            row["pos"]   += int(a.get("pos") or 0)
+            row["neg"]   += int(a.get("neg") or 0)
+            row["neu"]   += int(a.get("neu") or 0)
+            row["total"] += int(a.get("total") or 0)
+    if (pos + neg + neu) == 0:
+        return {}
+    top_aspects = sorted(
+        ({"aspect": name, **row} for name, row in aspect_acc.items()),
+        key=lambda r: r["total"], reverse=True,
+    )[:3]
+    return {
+        "pos": pos, "neg": neg, "neu": neu,
+        "total": pos + neg + neu,
+        "deals": total_deals,
+        "pos_rate": round(pos / (pos + neg), 3) if (pos + neg) > 0 else None,
+        "brands": brands_seen,
+        "top_aspects": top_aspects,
     }
 
 
 def format_country_sentiment(by_brand: dict, country_iso: str) -> str:
     """1-Zeilen-Summary für eine spezifische Country-Spalte ('de', 'pl', ...).
 
-    Aggregiert über alle Brands für dieses Land.
+    Aggregiert über alle Brands für dieses Land. Enthält Mentions, Pos-Rate,
+    Deal-Count und Top-3-Aspects.
     """
-    if not by_brand or not country_iso:
+    agg = _aggregate_country(by_brand, country_iso)
+    if not agg:
         return "—"
-    pos = neg = neu = 0
-    brands_with_data = []
-    for brand, stats in by_brand.items():
-        c = (stats.get("by_country") or {}).get(country_iso)
-        if c:
-            pos += int(c.get("pos") or 0)
-            neg += int(c.get("neg") or 0)
-            neu += int(c.get("neu") or 0)
-            t = int(c.get("total") or 0)
-            if t > 0:
-                brands_with_data.append(f"{brand}:{t}")
-    total = pos + neg + neu
-    if total == 0:
-        return "—"
-    rate = pos / (pos + neg) if (pos + neg) > 0 else None
-    parts = [f"{total} M", f"{pos}↑/{neg}↓"]
-    if rate is not None:
-        parts.append(f"{rate*100:.0f}%↑")
-    if brands_with_data and len(brands_with_data) <= 3:
-        parts.append("(" + ", ".join(brands_with_data) + ")")
+    parts = [f"{agg['total']} M ({agg['deals']} Deals)", f"{agg['pos']}↑/{agg['neg']}↓"]
+    if agg["pos_rate"] is not None:
+        parts.append(f"{agg['pos_rate']*100:.0f}%↑")
+    if agg["top_aspects"]:
+        asp_strs = []
+        for a in agg["top_aspects"]:
+            asp_strs.append(f"{a['aspect']}({a['pos']}↑/{a['neg']}↓)")
+        parts.append("Top: " + ", ".join(asp_strs))
     return " · ".join(parts)
 
 
 def format_cross_country_summary(by_brand: dict, exclude_iso: str | None = None,
                                   top_n: int = 4) -> str:
-    """Cross-Country-Summary: Top-N Länder (außer Zielland) mit Pepper-Aktivität."""
+    """Cross-Country-Summary: Top-N Länder (außer Zielland) mit Pepper-Aktivität.
+
+    Zeigt pro Land: Mentions, Deals, Pos-Rate.
+    """
     if not by_brand:
         return "—"
-    per_country: dict[str, int] = {}
+    per_country: dict[str, dict] = {}
     for brand, stats in by_brand.items():
         for iso, c in (stats.get("by_country") or {}).items():
             if exclude_iso and iso == exclude_iso:
                 continue
-            per_country[iso] = per_country.get(iso, 0) + int(c.get("total") or 0)
-    if not per_country:
-        return "—"
-    sorted_countries = sorted(per_country.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
-    return " | ".join(f"{iso.upper()}:{total}m" for iso, total in sorted_countries if total > 0) or "—"
+            row = per_country.setdefault(iso, {"pos": 0, "neg": 0, "neu": 0, "deals": 0})
+            row["pos"]   += int(c.get("pos") or 0)
+            row["neg"]   += int(c.get("neg") or 0)
+            row["neu"]   += int(c.get("neu") or 0)
+            row["deals"] += int(c.get("deals") or 0)
+    enriched = [
+        (iso, r["pos"] + r["neg"] + r["neu"], r["pos"], r["neg"], r["deals"])
+        for iso, r in per_country.items()
+    ]
+    enriched = sorted(enriched, key=lambda x: x[1], reverse=True)[:top_n]
+    parts = []
+    for iso, total, p, n, d in enriched:
+        if total == 0:
+            continue
+        rate = p / (p + n) * 100 if (p + n) > 0 else None
+        rate_s = f" {rate:.0f}%↑" if rate is not None else ""
+        parts.append(f"{iso.upper()}:{total}m/{d}d{rate_s}")
+    return " | ".join(parts) or "—"

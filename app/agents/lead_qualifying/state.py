@@ -63,13 +63,16 @@ class LeadState(TypedDict, total=False):
     pepper_summary: str            # 1-Zeilen-DE-Summary für Sheet/Telegram
 
     # ── Qualification ─────────────────────────────────────────────────────────
-    business_fit_shoop: str        # 0-10 score + one-line rationale
+    business_fit_shoop: str        # Legacy (jetzt leer)
     business_fit_igraal: str
     business_fit_mydealz: str
     business_fit_gutscheine: str
-    score_total: int               # 0-40 aggregate
+    score_total: int               # 0-100 (neuer deterministischer Score)
     classification: str            # HOT / WARM / COLD
     recommended_action: str
+    contact_seniority: str         # junior/mid/senior (vom LLM)
+    score_breakdown: str           # 1-Zeilen-Audit "Biz X · Pepper Y · Ctx Z"
+    score_override: str            # falls Auto-HOT/COLD getriggert
 
     # ── Pre-qualification (raw-data only, before enrichment) ─────────────────
     pre_qualify_label: str         # HIGH / LOW / SKIP

@@ -150,6 +150,8 @@ async def collect_lead_result_node(state: LeadState) -> LeadState:
     row_dict["_sentiment_target"] = state.get("pepper_target_summary", "") or "—"
     row_dict["_sentiment_cross"]  = state.get("pepper_cross_summary", "") or "—"
     row_dict["_sales_signals"]    = state.get("sales_signals", "") or ""
+    row_dict["_score_breakdown"]  = state.get("score_breakdown", "") or ""
+    row_dict["_score_override"]   = state.get("score_override", "") or ""
 
     processed.append(row_dict)
     logger.info(
@@ -214,13 +216,16 @@ async def write_results_node(state: LeadState) -> LeadState:
         score             = lead_dict.get("score_total", 0)
         classification    = lead_dict.get("classification", "")
 
-        # Notiz: bei FILTERED den Filter-Grund, sonst Sales-Signals + Recommended-Action
+        # Notiz: bei FILTERED den Filter-Grund, sonst Action + Breakdown + Override + Sales
         if classification == "FILTERED":
             notiz = lead_dict.get("pre_qualify_reason", "")
         else:
-            sales = str(lead_dict.get("_sales_signals", "")).strip()
-            action = str(lead_dict.get("recommended_action", "")).strip()
-            notiz = " | ".join(p for p in [sales, action] if p)
+            action   = str(lead_dict.get("recommended_action", "")).strip()
+            override = str(lead_dict.get("_score_override", "")).strip()
+            brk      = str(lead_dict.get("_score_breakdown", "")).strip()
+            sales    = str(lead_dict.get("_sales_signals", "")).strip()
+            notiz_parts = [p for p in [action, override, brk, sales] if p]
+            notiz = " | ".join(notiz_parts)
 
         try:
             await write_validation_for_row(row_idx, {
@@ -230,7 +235,7 @@ async def write_results_node(state: LeadState) -> LeadState:
                 "Validierung_Sentiment_Zielland":  sentiment_target[:300],
                 "Validierung_Sentiment_Cross":     sentiment_cross[:300],
                 "Validierung_Sentiment":           sentiment_legacy[:300],
-                "Validierung_Score":               f"{score}/40" if classification != "FILTERED" else "—",
+                "Validierung_Score":               f"{score}/100" if classification != "FILTERED" else "—",
                 "Validierung_Klassifikation":      classification,
                 "Validierung_Notiz":               notiz[:500],
                 "Validierung_Datum":               today_iso,

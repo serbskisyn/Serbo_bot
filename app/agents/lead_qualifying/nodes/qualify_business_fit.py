@@ -1,9 +1,15 @@
 """
-qualify_business_fit.py — LangGraph node: LLM-based business fit scoring.
+qualify_business_fit.py — LangGraph node: deterministischer Score + LLM-Sales-Action.
 
-Scores the current lead for all 4 platforms (Shoop.de, iGraal.de,
-mydealz.de, mydealz.de/gutscheine) in a single LLM call, then classifies
-HOT / WARM / COLD via the scorer service.
+Score wird deterministisch via scorer_v2.compute_score() berechnet — transparent
+und debuggbar. Der LLM-Call macht nur noch zwei kompakte Aufgaben:
+  - contact_seniority (Junior/Mid/Senior) aus Name + Position einschätzen
+  - recommended_action (1-2 Sätze) für die Sales-Person ableiten
+
+Reads:  state[*] (alle Pipeline-Felder)
+Writes: state["score_total"], state["classification"], state["recommended_action"],
+        state["contact_seniority"], state["score_breakdown"], state["score_override"]
+        sowie Legacy business_fit_* (leer).
 """
 from __future__ import annotations
 
@@ -11,11 +17,10 @@ import json
 import logging
 import re
 
-from app.agents.lead_qualifying.prompts import (
-    QUALIFICATION_SYSTEM,
-    QUALIFICATION_USER,
+from app.agents.lead_qualifying.services.scorer_v2 import (
+    compute_score,
+    format_breakdown,
 )
-from app.agents.lead_qualifying.services.scorer import classify, extract_score
 from app.agents.lead_qualifying.state import LeadState
 from app.services.openrouter_client import ask_llm
 
@@ -24,106 +29,101 @@ logger = logging.getLogger(__name__)
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
-def _fmt_score(score: int, rationale: str) -> str:
-    """Format platform score as 'SCORE — rationale'."""
-    return f"{score} — {rationale}" if rationale else str(score)
+_SALES_ACTION_SYSTEM = (
+    "Du bist ein erfahrener B2B-Sales-Analyst für Atolls (Shoop, iGraal, mydealz). "
+    "Du formulierst kurze, konkrete Next-Steps für die Sales-Person. "
+    "Antworte AUSSCHLIESSLICH mit dem geforderten JSON, kein Text drumherum."
+)
+
+_SALES_ACTION_USER = """Lead-Kurzprofil:
+- Name: {name}
+- Firma: {firma}
+- Geschäftsmodell: {business_model}
+- Märkte: {markets}
+- Validierte eCom-Marken: {brands_text}
+- Pepper-Sentiment Zielland: {pepper_target}
+- Pepper-Cross-Country: {pepper_cross}
+- Sales-Signale: {sales_signals}
+- Score-Klassifikation: {classification} ({score}/100)
+
+Antworte mit diesem JSON:
+{{
+  "contact_seniority": "junior|mid|senior",
+  "recommended_action": "1-2 prägnante Sätze, was die Sales-Person als nächstes tun sollte"
+}}"""
 
 
 async def qualify_business_fit_node(state: LeadState) -> LeadState:
-    """
-    Score business fit for all 4 platforms via a single LLM call.
-
-    Reads:  state["current_lead"], enrichment fields
-    Writes: business_fit_*, score_total, classification, recommended_action
-    """
-    lead = state.get("current_lead", {})
-    vorname = str(lead.get("Vorname", "")).strip()
+    lead     = state.get("current_lead", {})
+    vorname  = str(lead.get("Vorname", "")).strip()
     nachname = str(lead.get("Nachname", "")).strip()
-    firma = str(lead.get("Firma", "")).strip()
-    name = f"{vorname} {nachname}".strip()
-
-    contact_title           = state.get("contact_title", "")
-    company_website         = state.get("company_website", "")
-    company_description     = state.get("_company_description", "")
-    industry                = state.get("_industry", "")
-    employee_count_estimate = state.get("_employee_count_estimate", "") or state.get("company_employees", "")
-    news_summary            = state.get("news_summary", "")
-    company_revenue         = state.get("company_revenue", "")
-    company_hq              = state.get("company_hq", "")
-    business_model          = state.get("business_model", "")
-    primary_markets         = state.get("primary_markets") or []
-    sales_signals           = state.get("sales_signals", "")
-    pepper_target_summary   = state.get("pepper_target_summary", "")
-    pepper_cross_summary    = state.get("pepper_cross_summary", "")
-    validated_brands        = state.get("validated_brands") or []
-
-    validated_brands_text = ", ".join(
-        b.get("name", "") for b in validated_brands if isinstance(b, dict) and b.get("name")
-    ) or "(keine identifiziert)"
+    firma    = str(lead.get("Firma", "")).strip()
+    name     = f"{vorname} {nachname}".strip()
 
     logger.info("qualify_business_fit: '%s' @ '%s'", name, firma)
 
-    prompt = QUALIFICATION_USER.format(
+    # ── 1. Deterministischer Score (erstmal ohne contact_seniority, das kommt vom LLM) ──
+    score_result = compute_score(state)
+    classification = score_result["classification"]
+    score_total    = score_result["score_total"]
+
+    # ── 2. Kompakter LLM-Call für recommended_action + contact_seniority ──
+    validated = state.get("validated_brands") or []
+    brands_text = ", ".join(
+        b.get("name", "") for b in validated if isinstance(b, dict) and b.get("name")
+    ) or "(keine identifiziert)"
+
+    prompt = _SALES_ACTION_USER.format(
         name=name,
-        contact_title=contact_title or "(unbekannt)",
         firma=firma,
-        company_website=company_website or "(nicht gefunden)",
-        company_description=company_description or "(keine Beschreibung)",
-        industry=industry or "(unbekannt)",
-        employee_count_estimate=employee_count_estimate or "(unbekannt)",
-        company_revenue=company_revenue or "(unbekannt)",
-        company_hq=company_hq or "(unbekannt)",
-        business_model=business_model or "(unbekannt)",
-        primary_markets=", ".join(primary_markets) if primary_markets else "(unbekannt)",
-        validated_brands_text=validated_brands_text,
-        sales_signals=sales_signals or "(keine)",
-        pepper_target_summary=pepper_target_summary or "(keine Daten)",
-        pepper_cross_summary=pepper_cross_summary or "(keine Daten)",
-        news_summary=news_summary or "Keine News gefunden.",
+        business_model=state.get("business_model", "") or "(unbekannt)",
+        markets=", ".join(state.get("primary_markets") or []) or "(unbekannt)",
+        brands_text=brands_text,
+        pepper_target=state.get("pepper_target_summary", "") or "(keine Daten)",
+        pepper_cross=state.get("pepper_cross_summary", "") or "(keine Daten)",
+        sales_signals=state.get("sales_signals", "") or "(keine)",
+        classification=classification,
+        score=score_total,
     )
 
-    # Defaults in case LLM fails
-    shoop_score = igraal_score = mydealz_score = gutscheine_score = 0
-    shoop_rationale = igraal_rationale = mydealz_rationale = gutscheine_rationale = ""
+    contact_seniority  = "mid"
     recommended_action = ""
-    contact_seniority = "mid"
-
     try:
-        raw = await ask_llm(user_text=prompt, system_prompt=QUALIFICATION_SYSTEM)
+        raw = await ask_llm(user_text=prompt, system_prompt=_SALES_ACTION_SYSTEM)
         match = _JSON_RE.search(raw)
         if match:
             data = json.loads(match.group())
-            shoop_score = int(data.get("shoop", {}).get("score", 0))
-            shoop_rationale = data.get("shoop", {}).get("rationale", "")
-            igraal_score = int(data.get("igraal", {}).get("score", 0))
-            igraal_rationale = data.get("igraal", {}).get("rationale", "")
-            mydealz_score = int(data.get("mydealz", {}).get("score", 0))
-            mydealz_rationale = data.get("mydealz", {}).get("rationale", "")
-            gutscheine_score = int(data.get("gutscheine", {}).get("score", 0))
-            gutscheine_rationale = data.get("gutscheine", {}).get("rationale", "")
-            recommended_action = data.get("recommended_action", "")
-            contact_seniority = data.get("contact_seniority", "mid")
-        else:
-            logger.warning("qualify_business_fit: Kein JSON in LLM-Antwort für '%s'", name)
+            contact_seniority  = str(data.get("contact_seniority", "mid")).lower().strip()
+            recommended_action = str(data.get("recommended_action", "")).strip()
     except Exception as exc:
-        logger.warning("qualify_business_fit: LLM Fehler für '%s': %s", name, exc)
+        logger.warning("qualify_business_fit: LLM-Action-Fehler für '%s': %s", name, exc)
 
-    classification, score_total = classify(
-        shoop_score, igraal_score, mydealz_score, gutscheine_score, contact_seniority
-    )
+    # Score nochmal NEU berechnen mit der ermittelten Seniority (kann +5 Punkte geben)
+    # und Klassifikation re-evaluieren — wichtig wenn Senior die Schwelle bricht.
+    state_with_seniority = {**state, "contact_seniority": contact_seniority}
+    score_result    = compute_score(state_with_seniority)
+    classification  = score_result["classification"]
+    score_total     = score_result["score_total"]
+    breakdown_str   = format_breakdown(score_result)
 
     logger.info(
-        "qualify_business_fit: %s | Shoop=%d iGraal=%d mydealz=%d Gutscheine=%d | Total=%d",
-        classification, shoop_score, igraal_score, mydealz_score, gutscheine_score, score_total,
+        "qualify_business_fit: %s | %d/100 | seniority=%s | %s",
+        classification, score_total, contact_seniority, breakdown_str,
     )
 
     return {
         **state,
-        "business_fit_shoop": _fmt_score(shoop_score, shoop_rationale),
-        "business_fit_igraal": _fmt_score(igraal_score, igraal_rationale),
-        "business_fit_mydealz": _fmt_score(mydealz_score, mydealz_rationale),
-        "business_fit_gutscheine": _fmt_score(gutscheine_score, gutscheine_rationale),
-        "score_total": score_total,
-        "classification": classification,
-        "recommended_action": recommended_action,
+        # Neuer deterministischer Score
+        "score_total":         score_total,
+        "classification":      classification,
+        "contact_seniority":   contact_seniority,
+        "recommended_action":  recommended_action,
+        # Score-Audit für Sheet/Logs
+        "score_breakdown":     breakdown_str,
+        "score_override":      score_result.get("override_reason", ""),
+        # Legacy-Felder leer halten (QualifiedLeadRow erwartet sie)
+        "business_fit_shoop":      "",
+        "business_fit_igraal":     "",
+        "business_fit_mydealz":    "",
+        "business_fit_gutscheine": "",
     }

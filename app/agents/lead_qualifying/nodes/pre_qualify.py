@@ -75,31 +75,29 @@ def _looks_random(s: str) -> bool:
 
 
 def _name_looks_fake(name: str) -> str | None:
-    """Returns reason-string falls Name verdächtig ist, sonst None."""
+    """Returns English reason string if name looks fake, else None."""
     if not name:
         return None
     low = name.strip().lower()
     if low in _SPAM_NAME_TOKENS:
-        return f"Name '{name}' ist ein typisches Fake-/Test-Token"
-    # "Test Test", "User User" → Wiederholungen
+        return f"Name '{name}' is a typical fake/test token"
     tokens = low.split()
     if len(tokens) >= 2 and len(set(tokens)) == 1:
-        return f"Name '{name}' wiederholt sich identisch (Test-Eintrag?)"
+        return f"Name '{name}' repeats itself (test entry?)"
     if _looks_random(low.replace(" ", "")):
-        return f"Name '{name}' wirkt zufällig getippt (kein Vokal / Tastatur-Roll / Wiederholungen)"
+        return f"Name '{name}' looks randomly typed (no vowels / keyboard roll / repeats)"
     return None
 
 
 def _firma_looks_fake(firma: str) -> str | None:
-    """Returns reason-string falls Firma verdächtig ist, sonst None."""
+    """Returns English reason string if company looks fake, else None."""
     if not firma:
         return None
     low = firma.strip().lower()
     if low in _SPAM_NAME_TOKENS:
-        return f"Firma '{firma}' ist ein typisches Fake-/Test-Token"
+        return f"Company '{firma}' is a typical fake/test token"
     if _looks_random(low):
-        return f"Firma '{firma}' wirkt zufällig getippt"
-    # Firma identisch zu Vor- oder Nachname → meist Auto-Fill-Müll
+        return f"Company '{firma}' looks randomly typed"
     return None
 
 
@@ -114,19 +112,19 @@ def _deterministic_skip(vorname: str, nachname: str, firma: str, email: str) -> 
       5. Fake-Firma-Patterns (Zufalls-Strings, Spam-Token)
     """
     if len(firma) < _MIN_FIRMA_LEN and not nachname:
-        return f"Firmenname und Nachname zu kurz ('{firma}', '{nachname}') — keine verwertbaren Daten"
+        return f"Company and last name too short ('{firma}', '{nachname}') — no usable data"
     if len(firma) < _MIN_FIRMA_LEN and len(vorname) < _MIN_NAME_LEN:
-        return f"Firma '{firma}' und Vorname '{vorname}' zu kurz — ungültiger Lead"
+        return f"Company '{firma}' and first name '{vorname}' too short — invalid lead"
     if not firma and not email:
-        return "Weder Firma noch E-Mail vorhanden"
+        return "Neither company nor email present"
 
     email_low = email.lower()
     for pat in _SPAM_EMAIL_PATTERNS:
         if pat in email_low:
-            return f"E-Mail enthält Spam-/Test-Muster '{pat}'"
+            return f"Email contains spam/test pattern '{pat}'"
 
     if vorname and firma and vorname.lower() == firma.lower() and len(firma) <= 3:
-        return f"Identische Müll-Daten ('{firma}'={vorname}) — kein echter Lead"
+        return f"Identical junk data ('{firma}'={vorname}) — not a real lead"
 
     full_name = f"{vorname} {nachname}".strip()
     if (reason := _name_looks_fake(full_name)):
@@ -136,9 +134,8 @@ def _deterministic_skip(vorname: str, nachname: str, firma: str, email: str) -> 
     if (reason := _firma_looks_fake(firma)):
         return reason
 
-    # Firma exakt gleich Vor- oder Nachname (Auto-Fill-Müll bei kurzen Strings)
     if firma and vorname and firma.lower() == vorname.lower() and len(firma) <= 6:
-        return f"Firma '{firma}' identisch zu Vorname — wahrscheinlich Auto-Fill-Müll"
+        return f"Company '{firma}' identical to first name — likely auto-fill junk"
 
     return None
 

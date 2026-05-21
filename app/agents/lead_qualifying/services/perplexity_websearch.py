@@ -68,24 +68,36 @@ async def _call_perplexity(
 
 
 async def enrich_contact(vorname: str, nachname: str, firma: str) -> dict:
-    """B2B-Recherche zu einer Kontaktperson. Drop-in-Replacement für gemini-Variante."""
+    """B2B contact research with role-match + decision authority. Output in English."""
     name = f"{vorname} {nachname}".strip()
-    prompt = f"""Recherchiere die Person "{name}", die bei "{firma}" arbeitet.
+    prompt = f"""Research the person "{name}" who works at "{firma}".
 
-Finde:
-1. Aktuelle Berufsbezeichnung / Position (z.B. "Head of Marketing", "Geschäftsführer", "E-Commerce Manager")
-2. LinkedIn-Profil-URL falls öffentlich auffindbar
+Find:
+1. Current job title / position (e.g. "Head of Marketing", "CEO", "E-Commerce Manager")
+2. Public LinkedIn profile URL if available
+3. Whether this person is likely a decision-maker for affiliate/cashback/coupon partnerships
+4. Whether the role is relevant for Atolls' platforms (Shoop cashback, iGraal cashback/coupons, mydealz deal-community)
 
-Antworte AUSSCHLIESSLICH mit validem JSON, kein Text davor oder danach, keine Markdown-Fences:
+Reply ONLY with valid JSON, no surrounding text, no markdown fences:
 {{
-  "contact_title": "Berufsbezeichnung oder leer",
-  "linkedin_url": "https://linkedin.com/in/... oder leer",
+  "contact_title": "Job title in English (translate if necessary), or empty string",
+  "linkedin_url": "https://linkedin.com/in/... or empty",
+  "authority": "decision_maker | influencer | other",
+  "role_match": true|false,
   "confidence": "high|medium|low"
-}}"""
+}}
+
+authority guidance:
+- decision_maker = C-level, Founder, Director, Head of, VP — can sign partnership deals
+- influencer = Manager, Lead, Senior Specialist — influences but doesn't sign
+- other = Junior, Specialist, unclear, unknown
+
+role_match = true if the role is in Marketing / E-Commerce / Performance Marketing / Partnerships / Affiliate / Sales / Digital / Growth.
+role_match = false for IT/Tech/Operations/HR/Finance/Legal/Customer Service unless explicitly tied to performance marketing."""
 
     system = (
-        "Du bist ein B2B-Researcher mit Live-Web-Suche. "
-        "Antworte ausschließlich mit dem angeforderten JSON-Objekt — kein erklärender Text."
+        "You are a B2B contact researcher with live web search. "
+        "Reply ONLY with the requested JSON object — no surrounding prose."
     )
 
     try:
@@ -94,21 +106,22 @@ Antworte AUSSCHLIESSLICH mit validem JSON, kein Text davor oder danach, keine Ma
         if match:
             data = json.loads(match.group())
             logger.info(
-                "perplexity_websearch.enrich_contact: '%s' → title='%s' confidence=%s",
-                name, data.get("contact_title"), data.get("confidence"),
+                "perplexity_websearch.enrich_contact: '%s' → title='%s' auth=%s role_match=%s",
+                name, data.get("contact_title"), data.get("authority"), data.get("role_match"),
             )
             return data
-        logger.warning("perplexity_websearch.enrich_contact: kein JSON in Antwort für '%s'", name)
+        logger.warning("perplexity_websearch.enrich_contact: no JSON returned for '%s'", name)
     except httpx.HTTPStatusError as exc:
-        logger.warning("perplexity enrich_contact HTTP %s für '%s'", exc.response.status_code, name)
+        logger.warning("perplexity enrich_contact HTTP %s for '%s'", exc.response.status_code, name)
     except httpx.TimeoutException:
-        logger.warning("perplexity enrich_contact Timeout für '%s'", name)
+        logger.warning("perplexity enrich_contact timeout for '%s'", name)
     except json.JSONDecodeError as exc:
-        logger.warning("perplexity enrich_contact JSON-Fehler für '%s': %s", name, exc)
+        logger.warning("perplexity enrich_contact JSON error for '%s': %s", name, exc)
     except Exception as exc:
-        logger.warning("perplexity enrich_contact Fehler für '%s': %s", name, exc)
+        logger.warning("perplexity enrich_contact error for '%s': %s", name, exc)
 
-    return {"contact_title": "", "linkedin_url": "", "confidence": "low"}
+    return {"contact_title": "", "linkedin_url": "", "authority": "other",
+            "role_match": False, "confidence": "low"}
 
 
 async def enrich_company(firma: str) -> dict:
@@ -181,34 +194,35 @@ async def discover_ecommerce_brands(firma: str) -> dict:
         "is_holding": bool   # True wenn Holding/Group mit mehreren eCom-Marken
       }
     """
-    prompt = f"""Recherchiere für das Unternehmen "{firma}":
+    prompt = f"""Research the company "{firma}":
 
-Welche eCommerce-nahen Marken/Shops/Online-Plattformen betreibt, besitzt oder verantwortet dieses Unternehmen?
+Which eCommerce-related brands / shops / online platforms does this company operate, own, or run?
 
-Berücksichtige:
-- Eigene Online-Shops (z.B. www.firma.de)
-- Tochtermarken und Untermarken
-- White-Label-/Private-Label-Brands
-- Marketplaces, auf denen das Unternehmen verkauft
-- D2C-Konzepte, Cashback-/Coupon-Aktivitäten
+Consider:
+- Own online shops (e.g. www.company.com)
+- Subsidiary brands and sub-brands
+- White-label / private-label brands
+- Marketplaces where the company sells
+- D2C concepts, cashback / coupon activities
 
-Wenn das Unternehmen eine Holding ist: nenne max. 12 relevanteste eCommerce-Töchter (nach Bekanntheit/Umsatz priorisieren).
-Wenn das Unternehmen B2B-only / kein eCom-Bezug hat: brands=[] und is_holding=false setzen.
+If the company is a holding: list at most 12 most-relevant eCommerce subsidiaries (prioritise by visibility / revenue).
+If the company is B2B-only / has no eCom relevance: set brands=[] and is_holding=false.
 
-Halte rationale SEHR KURZ (max 8 Wörter), damit das JSON kompakt bleibt.
+Keep "rationale" VERY SHORT (max 8 words in English) so the JSON stays compact.
 
-Antworte AUSSCHLIESSLICH mit validem JSON, kein Text davor/danach, keine Markdown-Fences:
+Reply ONLY with valid JSON, no surrounding text, no markdown fences:
 {{
   "brands": [
-    {{"name": "Markenname", "domain": "domain.de oder leer", "category": "Marketplace|Online-Shop|Marketplace-Seller|D2C|White-Label|Affiliate|Andere", "rationale": "max 8 Wörter"}}
+    {{"name": "Brand Name", "domain": "domain.com or empty", "category": "Marketplace|Online-Shop|Marketplace-Seller|D2C|White-Label|Affiliate|Other", "rationale": "max 8 English words"}}
   ],
   "is_holding": true|false,
   "confidence": "high|medium|low"
 }}"""
 
     system = (
-        "Du bist ein B2B-Researcher mit Live-Web-Suche, spezialisiert auf "
-        "eCommerce-/Marken-Discovery. Antworte ausschließlich mit dem angeforderten JSON."
+        "You are a B2B researcher with live web search, specialised in "
+        "eCommerce brand discovery. Reply ONLY with the requested JSON. "
+        "Always respond in English, regardless of the company's home language."
     )
 
     try:
@@ -262,43 +276,44 @@ async def validate_company_sales(firma: str, brands: list[dict]) -> dict:
         for b in brands
     ) or "(keine eCommerce-Marken identifiziert)"
 
-    prompt = f"""Recherchiere und validiere das Unternehmen "{firma}" für eine B2B-Sales-Qualifizierung.
+    prompt = f"""Research and validate the company "{firma}" for B2B sales qualification.
 
-Bisher identifizierte eCommerce-Marken (nicht alle müssen stimmen):
+Previously identified eCommerce brands (not all may be accurate):
 {brand_block}
 
-Bitte prüfe und ergänze:
+Please verify and enrich:
 
-1. **Brand-Validierung**: Welche der oben gelisteten Marken gehören NACHWEISLICH zum Unternehmen?
-   Entferne falsche Treffer, ergänze fehlende.
+1. **Brand validation**: Which of the brands above demonstrably belong to the company?
+   Remove false matches, add any that were missed.
 
-2. **Firmenfakten** für Sales-Kontext:
-   - Umsatzschätzung (z.B. "<10M EUR", "10-50M EUR", "50-200M EUR", "200M-1B EUR", ">1B EUR")
-   - Mitarbeiterzahl
-   - Hauptsitz / Ländercode
-   - Wichtigste Märkte (max 5 ISO-Codes)
-   - Geschäftsmodell (B2C / B2B / Marketplace / Hybrid / Manufacturer-Direct)
+2. **Company facts** for sales context:
+   - Revenue estimate (e.g. "<10M EUR", "10-50M EUR", "50-200M EUR", "200M-1B EUR", ">1B EUR")
+   - Employee count
+   - Headquarters / country code
+   - Primary markets (max 5 ISO codes)
+   - Business model (B2C / B2B / Marketplace / Hybrid / Manufacturer-Direct)
 
-3. **Sales-Signale**: 2-3 Sätze relevante Informationen für Cashback-/Affiliate-/Deal-Kooperationen:
-   Wachstum, Funding, Expansion, Performance-Marketing-Bedarf, vorhandene Affiliate-Programme.
+3. **Sales signals**: 2-3 sentences relevant for cashback / affiliate / deal partnerships:
+   growth, funding, expansion, performance-marketing needs, existing affiliate programs.
 
-Antworte AUSSCHLIESSLICH mit validem JSON, kein Text davor/danach:
+Reply ONLY with valid JSON, no surrounding text:
 {{
   "validated_brands": [
-    {{"name": "Markenname", "domain": "domain.de", "category": "...", "rationale": "..."}}
+    {{"name": "Brand Name", "domain": "domain.com", "category": "...", "rationale": "max 8 English words"}}
   ],
-  "revenue_estimate": "z.B. 50-200M EUR oder unbekannt",
-  "employee_count": "z.B. 200-500 oder unbekannt",
-  "headquarters": "z.B. Köln, DE oder leer",
+  "revenue_estimate": "e.g. 50-200M EUR or unknown",
+  "employee_count": "e.g. 200-500 or unknown",
+  "headquarters": "e.g. Cologne, DE or empty",
   "primary_markets": ["DE", "AT", "CH"],
-  "business_model": "B2C|B2B|Marketplace|Hybrid|Manufacturer-Direct|Unbekannt",
-  "sales_signals": "2-3 Sätze auf Deutsch zu Wachstum/Funding/Expansion/Affiliate-Bedarf",
+  "business_model": "B2C|B2B|Marketplace|Hybrid|Manufacturer-Direct|Unknown",
+  "sales_signals": "2-3 sentences in English on growth/funding/expansion/affiliate needs",
   "confidence": "high|medium|low"
 }}"""
 
     system = (
-        "Du bist ein B2B-Sales-Researcher mit Live-Web-Suche. "
-        "Antworte ausschließlich mit dem angeforderten JSON. Nutze 'unbekannt' für nicht-recherchierbare Felder."
+        "You are a B2B sales researcher with live web search. "
+        "Reply ONLY with the requested JSON, in English. "
+        "Use 'unknown' for fields that cannot be researched."
     )
 
     try:
@@ -322,47 +337,47 @@ Antworte AUSSCHLIESSLICH mit validem JSON, kein Text davor/danach:
         logger.warning("perplexity validate unbekannter Fehler für '%s': %s", firma, exc)
 
     return {
-        "validated_brands": brands,  # Fallback: unvalidierte Input-Liste
-        "revenue_estimate": "unbekannt",
-        "employee_count":   "unbekannt",
+        "validated_brands": brands,
+        "revenue_estimate": "unknown",
+        "employee_count":   "unknown",
         "headquarters":     "",
         "primary_markets":  [],
-        "business_model":   "Unbekannt",
+        "business_model":   "Unknown",
         "sales_signals":    "",
         "confidence":       "low",
     }
 
 
 async def get_news_summary(firma: str) -> str:
-    """Aktuelle News-Zusammenfassung in 2-3 deutschen Sätzen."""
-    prompt = f"""Suche nach aktuellen Nachrichten (2024-2026) über das Unternehmen "{firma}".
+    """Recent-news summary in 2-3 English sentences."""
+    prompt = f"""Search recent news (2024-2026) about the company "{firma}".
 
-Fokus auf:
-- Finanzierungsrunden, Wachstum, Expansion
-- Partnerschaften, Kooperationen
-- E-Commerce, Affiliate-Marketing, Performance-Marketing, D2C
-- Internationalisierung
-- Relevante Änderungen im Geschäftsmodell
+Focus on:
+- Funding rounds, growth, expansion
+- Partnerships, cooperations
+- E-Commerce, affiliate marketing, performance marketing, D2C
+- Internationalisation
+- Relevant changes in business model
 
-Fasse die wichtigsten Erkenntnisse in 2-3 prägnanten deutschen Sätzen zusammen.
-Falls keine relevanten Nachrichten gefunden: Antworte mit "Keine aktuellen Nachrichten gefunden."
-Nur die Zusammenfassung, kein JSON, kein Titel."""
+Summarise the most important findings in 2-3 concise English sentences.
+If no relevant news is found, reply with: "No recent news found."
+Reply with the summary only — no JSON, no title."""
 
     system = (
-        "Du bist ein B2B-Researcher mit Live-Web-Suche. "
-        "Antworte auf Deutsch, prägnant und faktenbasiert."
+        "You are a B2B researcher with live web search. "
+        "Reply in concise factual English."
     )
 
     try:
         summary = await _call_perplexity(prompt, system_prompt=system)
         summary = summary.strip()
-        logger.info("perplexity_websearch.get_news_summary: '%s' → %d Zeichen", firma, len(summary))
-        return summary or "Keine aktuellen Nachrichten gefunden."
+        logger.info("perplexity_websearch.get_news_summary: '%s' → %d chars", firma, len(summary))
+        return summary or "No recent news found."
     except httpx.HTTPStatusError as exc:
-        logger.warning("perplexity news HTTP %s für '%s'", exc.response.status_code, firma)
+        logger.warning("perplexity news HTTP %s for '%s'", exc.response.status_code, firma)
     except httpx.TimeoutException:
-        logger.warning("perplexity news Timeout für '%s'", firma)
+        logger.warning("perplexity news timeout for '%s'", firma)
     except Exception as exc:
-        logger.warning("perplexity news Fehler für '%s': %s", firma, exc)
+        logger.warning("perplexity news error for '%s': %s", firma, exc)
 
-    return "Keine aktuellen Nachrichten gefunden."
+    return "No recent news found."

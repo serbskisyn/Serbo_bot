@@ -33,6 +33,7 @@ from app.agents.lead_qualifying.nodes.pre_qualify import (
 )
 from app.agents.lead_qualifying.nodes.discover_brands import discover_brands_node
 from app.agents.lead_qualifying.nodes.validate_company import validate_company_node
+from app.agents.lead_qualifying.nodes.enrich_contact_v2 import enrich_contact_v2_node
 from app.agents.lead_qualifying.nodes.pepper_multi_country import pepper_multi_country_node
 from app.agents.lead_qualifying.nodes.qualify_business_fit import qualify_business_fit_node
 from app.agents.lead_qualifying.nodes.write_results import (
@@ -58,6 +59,7 @@ def build_per_lead_graph():
     graph.add_node("pre_qualify", pre_qualify_node)
     graph.add_node("discover_brands", discover_brands_node)
     graph.add_node("validate_company", validate_company_node)
+    graph.add_node("enrich_contact_v2", enrich_contact_v2_node)
     graph.add_node("pepper_multi_country", pepper_multi_country_node)
     graph.add_node("qualify_business_fit", qualify_business_fit_node)
     graph.add_node("collect_result", collect_lead_result_node)
@@ -70,15 +72,16 @@ def build_per_lead_graph():
         "pre_qualify",
         route_after_pre_qualify,
         {
-            "enrich_contact": "discover_brands",        # Routing-Key bleibt für Compat
+            "enrich_contact": "discover_brands",        # routing-key for compat
             "collect_filtered_result": "collect_filtered_result",
         },
     )
 
-    # Enrichment-Pipeline:
-    # discover_brands → validate_company → pepper_multi_country → qualify_business_fit
+    # Enrichment pipeline:
+    # discover_brands → validate_company → enrich_contact_v2 → pepper_multi_country → qualify_business_fit
     graph.add_edge("discover_brands", "validate_company")
-    graph.add_edge("validate_company", "pepper_multi_country")
+    graph.add_edge("validate_company", "enrich_contact_v2")
+    graph.add_edge("enrich_contact_v2", "pepper_multi_country")
     graph.add_edge("pepper_multi_country", "qualify_business_fit")
     graph.add_edge("qualify_business_fit", "collect_result")
     graph.add_edge("collect_result", END)
@@ -155,6 +158,11 @@ async def run_pipeline() -> LeadState:
             "pepper_total_mentions_all": 0,
             "pepper_target_summary": "",
             "pepper_cross_summary": "",
+            # Contact (v2)
+            "contact_title": "",
+            "linkedin_url": "",
+            "contact_authority": "other",
+            "contact_role_match": False,
             # Legacy
             "pepper_summary": "",
             "business_fit_shoop": "",

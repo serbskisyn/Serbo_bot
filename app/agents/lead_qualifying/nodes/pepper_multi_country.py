@@ -24,9 +24,9 @@ logger = logging.getLogger(__name__)
 
 
 def _format_legacy_summary(by_brand: dict, total: int) -> str:
-    """Aggregat-Summary über alle Brands+Länder (für Legacy-Spalte Validierung_Sentiment)."""
+    """Aggregate summary across all brands + countries (legacy column)."""
     if total <= 0 or not by_brand:
-        return "Keine Pepper-Mentions"
+        return "No Pepper mentions"
     n_brands = len(by_brand)
     pos = neg = 0
     for stats in by_brand.values():
@@ -34,7 +34,7 @@ def _format_legacy_summary(by_brand: dict, total: int) -> str:
             pos += int(c.get("pos") or 0)
             neg += int(c.get("neg") or 0)
     rate = pos / (pos + neg) if (pos + neg) > 0 else None
-    parts = [f"{total} M ({n_brands}M)", f"{pos}↑/{neg}↓"]
+    parts = [f"{total}m ({n_brands}b)", f"{pos}↑/{neg}↓"]
     if rate is not None:
         parts.append(f"{rate*100:.0f}%↑")
     return " · ".join(parts)
@@ -78,7 +78,7 @@ async def pepper_multi_country_node(state: LeadState) -> LeadState:
             "pepper_target_summary": "—",
             "pepper_cross_summary": "—",
             "target_country_iso": target_iso,
-            "pepper_summary": "Keine Brand-Daten",
+            "pepper_summary": "No brand data",
         }
 
     logger.info("pepper_multi_country: '%s' — %d Brands, target=%s ('%s')",

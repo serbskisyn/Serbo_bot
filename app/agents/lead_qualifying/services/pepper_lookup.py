@@ -221,9 +221,9 @@ async def get_brand_sentiment(firma: str) -> dict:
 
 
 def format_sentiment_summary(result: dict) -> str:
-    """1-Zeilen-Deutsch-Summary für Sheet-Spalte / Telegram."""
+    """One-line English summary for sheet column / Telegram."""
     if not result.get("found"):
-        return "Keine Pepper-Mentions"
+        return "No Pepper mentions"
     pos     = result["pos"]
     neg     = result["neg"]
     total   = result["total_mentions"]

@@ -142,10 +142,22 @@ async def collect_lead_result_node(state: LeadState) -> LeadState:
     employees = (state.get("company_employees", "") or "—")[:50]
     hq        = (state.get("company_hq", "") or "")[:60]
     model     = (state.get("business_model", "") or "")[:30]
-    facts = f"Umsatz: {revenue} · MA: {employees}"
+    facts = f"Revenue: {revenue} · Employees: {employees}"
     if hq:    facts += f" · HQ: {hq}"
-    if model: facts += f" · Modell: {model}"
+    if model: facts += f" · Model: {model}"
     row_dict["_firmenfakten"] = facts
+
+    # Contact details for the sheet (English)
+    title    = (state.get("contact_title") or "").strip()
+    auth     = (state.get("contact_authority") or "other").strip().lower()
+    li       = (state.get("linkedin_url") or "").strip()
+    role     = bool(state.get("contact_role_match", False))
+    contact_parts = []
+    if title:    contact_parts.append(f"Title: {title}")
+    contact_parts.append(f"Authority: {auth}")
+    contact_parts.append(f"Role-match: {'yes' if role else 'no'}")
+    if li:       contact_parts.append("LinkedIn: yes")
+    row_dict["_contact_info"] = " · ".join(contact_parts)[:500]
 
     row_dict["_sentiment_target"] = state.get("pepper_target_summary", "") or "—"
     row_dict["_sentiment_cross"]  = state.get("pepper_cross_summary", "") or "—"
@@ -207,38 +219,40 @@ async def write_results_node(state: LeadState) -> LeadState:
         if row_idx < 2:
             continue
 
-        groesse           = str(lead_dict.get("_employee_count", "")).strip() or "—"
-        marken            = str(lead_dict.get("_brands", "")).strip() or "—"
-        firmenfakten      = str(lead_dict.get("_firmenfakten", "")).strip() or "—"
+        size              = str(lead_dict.get("_employee_count", "")).strip() or "—"
+        brands            = str(lead_dict.get("_brands", "")).strip() or "—"
+        company_facts     = str(lead_dict.get("_firmenfakten", "")).strip() or "—"
+        contact_info      = str(lead_dict.get("_contact_info", "")).strip() or "—"
         sentiment_target  = str(lead_dict.get("_sentiment_target", "")).strip() or "—"
         sentiment_cross   = str(lead_dict.get("_sentiment_cross", "")).strip() or "—"
         sentiment_legacy  = str(lead_dict.get("_pepper_summary", "")).strip() or "—"
         score             = lead_dict.get("score_total", 0)
         classification    = lead_dict.get("classification", "")
 
-        # Notiz: bei FILTERED den Filter-Grund, sonst Action + Breakdown + Override + Sales
+        # Note: for FILTERED leads use the skip-reason, otherwise action + breakdown + override + signals
         if classification == "FILTERED":
-            notiz = lead_dict.get("pre_qualify_reason", "")
+            note = lead_dict.get("pre_qualify_reason", "")
         else:
             action   = str(lead_dict.get("recommended_action", "")).strip()
             override = str(lead_dict.get("_score_override", "")).strip()
             brk      = str(lead_dict.get("_score_breakdown", "")).strip()
-            sales    = str(lead_dict.get("_sales_signals", "")).strip()
-            notiz_parts = [p for p in [action, override, brk, sales] if p]
-            notiz = " | ".join(notiz_parts)
+            signals  = str(lead_dict.get("_sales_signals", "")).strip()
+            parts = [p for p in [action, override, brk, signals] if p]
+            note = " | ".join(parts)
 
         try:
             await write_validation_for_row(row_idx, {
-                "Validierung_Größe":               groesse,
-                "Validierung_Marken":              marken[:500],
-                "Validierung_Firmenfakten":        firmenfakten[:500],
-                "Validierung_Sentiment_Zielland":  sentiment_target[:300],
-                "Validierung_Sentiment_Cross":     sentiment_cross[:300],
-                "Validierung_Sentiment":           sentiment_legacy[:300],
-                "Validierung_Score":               f"{score}/100" if classification != "FILTERED" else "—",
-                "Validierung_Klassifikation":      classification,
-                "Validierung_Notiz":               notiz[:500],
-                "Validierung_Datum":               today_iso,
+                "Validation_Size":              size,
+                "Validation_Brands":            brands[:500],
+                "Validation_Company_Facts":     company_facts[:500],
+                "Validation_Contact":           contact_info[:500],
+                "Validation_Sentiment_Target":  sentiment_target[:400],
+                "Validation_Sentiment_Cross":   sentiment_cross[:400],
+                "Validation_Sentiment":         sentiment_legacy[:300],
+                "Validation_Score":             f"{score}/100" if classification != "FILTERED" else "—",
+                "Validation_Classification":    classification,
+                "Validation_Note":              note[:500],
+                "Validation_Date":              today_iso,
             })
             val_written += 1
         except Exception as exc:

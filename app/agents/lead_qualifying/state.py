@@ -17,6 +17,8 @@ class LeadState(TypedDict, total=False):
     # ── Enrichment ────────────────────────────────────────────────────────────
     contact_title: str
     linkedin_url: str
+    contact_authority: str         # decision_maker | influencer | other
+    contact_role_match: bool       # True if role is marketing/sales/eCom-relevant
     company_website: str
     northdata_summary: str
     news_summary: str

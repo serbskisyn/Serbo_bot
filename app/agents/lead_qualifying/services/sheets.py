@@ -28,16 +28,17 @@ QUALIFIED_COLUMNS = QualifiedLeadRow.COLUMNS
 # Neue Pipeline (2026-05-20 Refactor): Brand-Discovery + Multi-Country-Pepper.
 # Bestehende Spalten werden beibehalten, neue ergänzt.
 VALIDATION_COLUMNS: list[str] = [
-    "Validierung_Größe",                    # Mitarbeiterzahl-Schätzung
-    "Validierung_Marken",                   # eCommerce-Marken (comma-sep)
-    "Validierung_Firmenfakten",             # Umsatz, MA, HQ, Geschäftsmodell
-    "Validierung_Sentiment_Zielland",       # Pepper-Aggregat für Sheet-Spalte-H-Land
-    "Validierung_Sentiment_Cross",          # Top-N Länder mit Pepper-Aktivität
-    "Validierung_Sentiment",                # Legacy: Gesamt-Pepper-Summary
-    "Validierung_Score",                    # Score 0-40 (Kriterien WIP)
-    "Validierung_Klassifikation",           # HOT/WARM/COLD/FILTERED
-    "Validierung_Notiz",                    # Sales-Signale + recommended_action
-    "Validierung_Datum",                    # ISO-Datum, dient als Idempotenz-Marker
+    "Validation_Size",                      # Employee-count estimate
+    "Validation_Brands",                    # eCommerce brands (comma-sep)
+    "Validation_Company_Facts",             # Revenue, employees, HQ, model
+    "Validation_Contact",                   # Title, authority, role-match, LinkedIn
+    "Validation_Sentiment_Target",          # Pepper aggregate for target country
+    "Validation_Sentiment_Cross",           # Top-N other countries with activity
+    "Validation_Sentiment",                 # Legacy: overall Pepper summary
+    "Validation_Score",                     # Score 0-100
+    "Validation_Classification",            # HOT / WARM / COLD / FILTERED
+    "Validation_Note",                      # Recommended action + breakdown + signals
+    "Validation_Date",                      # ISO date, also idempotency marker
 ]
 
 
@@ -66,15 +67,17 @@ def _split_name(full: str) -> tuple[str, str]:
 
 
 def _map_inbound_row(row: dict[str, str], row_index: int) -> dict[str, str]:
-    """Mappe reale Inbound-Spaltennamen auf die pipeline-internen Feldnamen."""
+    """Map real Inbound column names to the pipeline-internal field names."""
     vorname, nachname = _split_name(str(row.get("Name", "")))
+    # Idempotency: prefer the new Validation_Date column, fall back to the legacy
+    # Validierung_Datum for already-processed leads from earlier runs.
+    val_date = (str(row.get("Validation_Date", "")).strip()
+                or str(row.get("Validierung_Datum", "")).strip())
     mapped: dict[str, str] = {
         "Vorname":  vorname,
         "Nachname": nachname,
-        "_row_index": row_index,  # 1-basiert (Header = 1, erste Daten-Zeile = 2)
-        # Wenn Validierung_Datum schon gefüllt ist, wurde der Lead in einer
-        # vorherigen Run-Iteration verarbeitet → fetch_new_leads filtert ihn raus.
-        "_validierung_datum": str(row.get("Validierung_Datum", "")).strip(),
+        "_row_index": row_index,            # 1-based (header = 1, first data row = 2)
+        "_validierung_datum": val_date,
     }
     for src, dst in _FIELD_MAP.items():
         if src in row:

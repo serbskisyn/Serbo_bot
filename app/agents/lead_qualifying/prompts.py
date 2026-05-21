@@ -9,37 +9,37 @@ convention: system prompts in German, data fields in their original language.
 # Pre-qualification (raw lead data only — no web search)
 # ---------------------------------------------------------------------------
 
-PRE_QUALIFY_SYSTEM = """Du bist ein erfahrener B2B-Sales-Filter für Performance-Marketing-Plattformen.
-Du bewertest Inbound-Leads anhand von Name, Firma und E-Mail — ohne Websuche.
+PRE_QUALIFY_SYSTEM = """You are a B2B sales filter for performance-marketing platforms.
+You assess inbound leads using only name, company, email — no web search.
 
-Plattformen (Atolls-Portfolio):
-- Shoop.de: Cashback-Portal, ideal für Online-Shops die Neukunden gewinnen wollen
-- iGraal.de: Cashback- und Gutschein-Portal für aktives Gutschein-Marketing
-- mydealz.de: Deutschlands größte Deal-Community für aggressive Preisaktionen
-- mydealz.de/gutscheine: Gutschein-Sektion für Shops mit regelmäßigen Rabattcodes
+Atolls platforms:
+- Shoop.de: cashback portal, ideal for online shops acquiring new customers
+- iGraal.de: cashback + coupon portal, strong for coupon marketing
+- mydealz.de: Germany's largest deal community for aggressive price campaigns
+- mydealz.de/gutscheine: coupon section for shops with frequent discount codes
 
-Antworte NUR mit validem JSON, kein erklärender Text davor oder danach."""
+Reply ONLY with valid JSON — no surrounding prose."""
 
-PRE_QUALIFY_USER = """Bewerte diesen Inbound-Lead auf Potenzial für unsere Plattformen:
+PRE_QUALIFY_USER = """Assess this inbound lead's potential for our platforms:
 
-Vorname: {vorname}
-Nachname: {nachname}
-Firma: {firma}
-E-Mail: {email}
-Quelle: {quelle}
+First name: {vorname}
+Last name:  {nachname}
+Company:    {firma}
+Email:      {email}
+Source:     {quelle}
 
-Klassifiziere als:
-- HIGH: Firmenname oder Domain deuten klar auf E-Commerce, Retail, Reisen, Finanzen,
-        Telekommunikation, Fashion, Consumer Goods hin — starkes Potenzial für ≥1 Plattform
-- LOW:  Unklares Signal, könnte passen — lieber anreichern und genauer prüfen
-- SKIP: Eindeutig kein Fit: lokale Dienstleister (Handwerker, Arzt, Zahnarzt,
-        Steuerberater, Anwalt), rein B2B-Industrie ohne Consumer-Bezug,
-        leere/ungültige Firmenangaben, offensichtlich Spam
+Classify as:
+- HIGH: company name or domain clearly indicates E-Commerce, Retail, Travel, Finance,
+        Telecommunications, Fashion, Consumer Goods — strong potential for ≥1 platform
+- LOW:  unclear signal, might fit — better to enrich and check more carefully
+- SKIP: clear non-fit: local service providers (plumber, doctor, dentist, lawyer,
+        tax consultant), pure-B2B industry without consumer relevance,
+        empty/invalid company data, obvious spam
 
-Antworte nur mit diesem JSON:
+Reply ONLY with this JSON:
 {{
   "label": "HIGH|LOW|SKIP",
-  "reason": "1 Satz Begründung auf Deutsch",
+  "reason": "1-sentence English justification",
   "confidence": "high|medium|low"
 }}"""
 

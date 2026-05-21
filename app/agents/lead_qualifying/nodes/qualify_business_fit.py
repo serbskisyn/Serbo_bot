@@ -30,26 +30,27 @@ _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
 _SALES_ACTION_SYSTEM = (
-    "Du bist ein erfahrener B2B-Sales-Analyst für Atolls (Shoop, iGraal, mydealz). "
-    "Du formulierst kurze, konkrete Next-Steps für die Sales-Person. "
-    "Antworte AUSSCHLIESSLICH mit dem geforderten JSON, kein Text drumherum."
+    "You are a B2B sales analyst for Atolls (Shoop, iGraal, mydealz). "
+    "You write short, concrete next-steps for the salesperson. "
+    "Reply ONLY with the requested JSON object — no surrounding text. "
+    "Always answer in English, regardless of the input language."
 )
 
-_SALES_ACTION_USER = """Lead-Kurzprofil:
+_SALES_ACTION_USER = """Lead profile:
 - Name: {name}
-- Firma: {firma}
-- Geschäftsmodell: {business_model}
-- Märkte: {markets}
-- Validierte eCom-Marken: {brands_text}
-- Pepper-Sentiment Zielland: {pepper_target}
-- Pepper-Cross-Country: {pepper_cross}
-- Sales-Signale: {sales_signals}
-- Score-Klassifikation: {classification} ({score}/100)
+- Company: {firma}
+- Business model: {business_model}
+- Markets: {markets}
+- Validated eCom brands: {brands_text}
+- Pepper sentiment (target country): {pepper_target}
+- Pepper cross-country signals: {pepper_cross}
+- Sales signals: {sales_signals}
+- Score classification: {classification} ({score}/100)
 
-Antworte mit diesem JSON:
+Reply with this JSON in English:
 {{
   "contact_seniority": "junior|mid|senior",
-  "recommended_action": "1-2 prägnante Sätze, was die Sales-Person als nächstes tun sollte"
+  "recommended_action": "1-2 concise sentences with the next step for sales — in English"
 }}"""
 
 

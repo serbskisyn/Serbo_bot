@@ -19,7 +19,7 @@ from app.services.claude_runner import run_claude_agent
 logger = logging.getLogger(__name__)
 
 _LOOKBACK_DAYS = 180
-_TIMEOUT_SEC = 90    # 90 s pro Pepper-Subprocess (vorher 120s, x2 für multi-brand)
+_TIMEOUT_SEC = 150   # product_mentions JOIN canonical_products braucht etwas länger
 
 
 _PROMPT_TEMPLATE = """Hi! I'm running the Atolls Lead-Qualifying-Bot and need brand-sentiment data from Pepper Intelligence to enrich an inbound lead.
@@ -249,61 +249,44 @@ def format_sentiment_summary(result: dict) -> str:
 
 _MULTI_PROMPT = """Hi! I'm running the Atolls Lead-Qualifying-Bot. I need brand-sentiment data from Pepper for the company "{firma}" (matching brands: {brand_names_csv}).
 
-Please run BOTH of these SQL queries via mcp__claude_ai_Pepper_Intelligence__query_intelligence, then combine the results into one JSON object.
+Please run this SQL via mcp__claude_ai_Pepper_Intelligence__query_intelligence:
 
-QUERY A — pivoted sentiment per brand per country:
-
-SELECT canonical_retailer_name AS brand,
-       country_code AS country,
-       sum(CASE WHEN sentiment='positive' THEN 1 ELSE 0 END) AS pos,
-       sum(CASE WHEN sentiment='negative' THEN 1 ELSE 0 END) AS neg,
-       sum(CASE WHEN sentiment='neutral'  THEN 1 ELSE 0 END) AS neu,
-       count(*) AS total,
-       count(DISTINCT deal_id) AS deals
-FROM v_retailer_mentions
-WHERE ({where_clause}) AND comment_created_at >= current_date - {lookback}
-GROUP BY brand, country
+SELECT
+  cp.brand,
+  pm.country_code                                                        AS country,
+  COUNT(*)                                                               AS total,
+  COUNT(*) FILTER (WHERE pm.sentiment = 'positive')                     AS pos,
+  COUNT(*) FILTER (WHERE pm.sentiment = 'neutral')                      AS neu,
+  COUNT(*) FILTER (WHERE pm.sentiment = 'negative')                     AS neg,
+  COUNT(*) FILTER (WHERE pm.sentiment = 'mixed')                        AS mixed,
+  COUNT(DISTINCT pm.deal_id)                                             AS deals
+FROM product_mentions pm
+JOIN canonical_products cp ON cp.id = pm.canonical_product_id
+WHERE ({where_clause})
+  AND pm.comment_created_at >= current_date - {lookback}
+GROUP BY cp.brand, pm.country_code
 ORDER BY total DESC
 LIMIT 200;
 
-QUERY B — top-3-aspects per brand per country (only the rows we need):
-
-SELECT brand, country, aspect, pos, neg, neu, total FROM (
-  SELECT canonical_retailer_name AS brand,
-         country_code AS country,
-         aspect,
-         sum(CASE WHEN sentiment='positive' THEN 1 ELSE 0 END) AS pos,
-         sum(CASE WHEN sentiment='negative' THEN 1 ELSE 0 END) AS neg,
-         sum(CASE WHEN sentiment='neutral'  THEN 1 ELSE 0 END) AS neu,
-         count(*) AS total,
-         row_number() OVER (PARTITION BY canonical_retailer_name, country_code ORDER BY count(*) DESC) AS rn
-  FROM v_retailer_mentions
-  WHERE ({where_clause}) AND comment_created_at >= current_date - {lookback}
-    AND aspect IS NOT NULL
-  GROUP BY brand, country, aspect
-) ranked
-WHERE rn <= 3;
-
-Combine into this exact JSON (a Python script parses with json.loads):
+A Python script reads your reply with json.loads(). Return the rows as a JSON object with this exact shape:
 
 {{"by_brand":{{
   "<brand>":{{
     "total_mentions":<int>,
     "total_deals":<int>,
     "by_country":{{
-      "<country>":{{"pos":int,"neg":int,"neu":int,"total":int,"deals":int,
-        "top_aspects":[{{"aspect":"<x>","pos":int,"neg":int,"neu":int,"total":int}},...up to 3]}}
+      "<country>":{{"pos":int,"neu":int,"neg":int,"mixed":int,"total":int,"deals":int}}
     }}
   }}
 }},"brands_found":<int>,"total_mentions_all":<int>,"total_deals_all":<int>}}
 
-If both queries return zero rows: {{"by_brand":{{}},"brands_found":0,"total_mentions_all":0,"total_deals_all":0}}
+If the query returns zero rows: {{"by_brand":{{}},"brands_found":0,"total_mentions_all":0,"total_deals_all":0}}
 
 Respond with the bare JSON only, no markdown fences. Thanks!"""
 
 
 def _build_where_clause(brand_names: list[str]) -> str:
-    """Baut OR-verkettete ILIKE-Bedingungen für mehrere Brand-Patterns."""
+    """Baut OR-verkettete ILIKE-Bedingungen auf cp.brand für mehrere Brand-Patterns."""
     if not brand_names:
         return "1=0"
     clauses = []
@@ -311,9 +294,8 @@ def _build_where_clause(brand_names: list[str]) -> str:
         pat = _normalize_brand(n)
         if not pat:
             continue
-        # SQL-Escape Single-Quotes
         pat_sql = pat.replace("'", "''")
-        clauses.append(f"canonical_retailer_name ILIKE '%{pat_sql}%'")
+        clauses.append(f"cp.brand ILIKE '%{pat_sql}%'")
     return " OR ".join(clauses) if clauses else "1=0"
 
 
@@ -419,55 +401,42 @@ def _aggregate_country(by_brand: dict, country_iso: str) -> dict:
     """Aggregiert Brand-Daten für ein Country zu einem flachen Dict."""
     if not by_brand or not country_iso:
         return {}
-    pos = neg = neu = total_deals = 0
+    pos = neg = neu = mixed = total = total_deals = 0
     brands_seen: list[str] = []
-    aspect_acc: dict[str, dict[str, int]] = {}      # aspect → {pos, neg, neu, total}
     for brand, stats in by_brand.items():
         c = (stats.get("by_country") or {}).get(country_iso)
         if not c:
             continue
-        cp = int(c.get("pos") or 0)
-        cn = int(c.get("neg") or 0)
-        cu = int(c.get("neu") or 0)
-        if (cp + cn + cu) == 0:
+        ct = int(c.get("total") or 0)
+        if ct == 0:
             continue
-        pos += cp
-        neg += cn
-        neu += cu
+        pos   += int(c.get("pos")   or 0)
+        neg   += int(c.get("neg")   or 0)
+        neu   += int(c.get("neu")   or 0)
+        mixed += int(c.get("mixed") or 0)
+        total += ct
         total_deals += int(c.get("deals") or 0)
-        brands_seen.append(f"{brand}:{cp+cn+cu}")
-        for a in (c.get("top_aspects") or []):
-            name = (a.get("aspect") or "").strip().lower()
-            if not name:
-                continue
-            row = aspect_acc.setdefault(name, {"pos": 0, "neg": 0, "neu": 0, "total": 0})
-            row["pos"]   += int(a.get("pos") or 0)
-            row["neg"]   += int(a.get("neg") or 0)
-            row["neu"]   += int(a.get("neu") or 0)
-            row["total"] += int(a.get("total") or 0)
-    if (pos + neg + neu) == 0:
+        brands_seen.append(f"{brand}:{ct}")
+    if total == 0:
         return {}
-    top_aspects = sorted(
-        ({"aspect": name, **row} for name, row in aspect_acc.items()),
-        key=lambda r: r["total"], reverse=True,
-    )[:3]
     return {
-        "pos": pos, "neg": neg, "neu": neu,
-        "total": pos + neg + neu,
+        "pos": pos, "neg": neg, "neu": neu, "mixed": mixed,
+        "total": total,
         "deals": total_deals,
-        "pos_rate": round(pos / (pos + neg), 3) if (pos + neg) > 0 else None,
+        "pos_rate": round(pos / total, 3) if total > 0 else None,
+        "neg_rate": round(neg / total, 3) if total > 0 else None,
         "brands": brands_seen,
-        "top_aspects": top_aspects,
     }
 
 
-def _fmt_country_line(iso: str, pos: int, neu: int, neg: int, total: int) -> str:
-    """Formats one country row: 'DE: 200 mentions - 20 positive, 40 neutral, 140 negative - Ratio 10% pos vs 70% neg'."""
+def _fmt_country_line(iso: str, pos: int, neu: int, neg: int, mixed: int, total: int) -> str:
+    """DE: 200 mentions - 20 positive, 40 neutral, 15 mixed, 125 negative - Ratio 10% pos vs 63% neg"""
     pos_pct = round(pos / total * 100) if total > 0 else 0
     neg_pct = round(neg / total * 100) if total > 0 else 0
+    mixed_part = f", {mixed} mixed" if mixed else ""
     return (
         f"{iso.upper()}: {total} mentions"
-        f" - {pos} positive, {neu} neutral, {neg} negative"
+        f" - {pos} positive, {neu} neutral{mixed_part}, {neg} negative"
         f" - Ratio {pos_pct}% pos vs {neg_pct}% neg"
     )
 
@@ -479,7 +448,7 @@ def format_country_sentiment(by_brand: dict, country_iso: str) -> str:
         return "—"
     return _fmt_country_line(
         country_iso,
-        agg["pos"], agg["neu"], agg["neg"], agg["total"],
+        agg["pos"], agg["neu"], agg["neg"], agg["mixed"], agg["total"],
     )
 
 
@@ -487,25 +456,27 @@ def format_cross_country_summary(by_brand: dict, exclude_iso: str | None = None,
                                   top_n: int = 4) -> str:
     """Matrix of all countries with Pepper activity, sorted by total mentions descending.
 
-    One line per country:
-      DE: 200 mentions - 20 positive, 40 neutral, 140 negative - Ratio 10% pos vs 70% neg
+    Uses total from DB (COUNT(*)), not pos+neg+neu sum, to reflect all rows including
+    unclassified sentiment. One line per country.
     """
     if not by_brand:
         return "—"
     per_country: dict[str, dict] = {}
     for brand, stats in by_brand.items():
         for iso, c in (stats.get("by_country") or {}).items():
-            row = per_country.setdefault(iso, {"pos": 0, "neg": 0, "neu": 0})
-            row["pos"] += int(c.get("pos") or 0)
-            row["neg"] += int(c.get("neg") or 0)
-            row["neu"] += int(c.get("neu") or 0)
+            row = per_country.setdefault(iso, {"pos": 0, "neg": 0, "neu": 0, "mixed": 0, "total": 0})
+            row["pos"]   += int(c.get("pos")   or 0)
+            row["neg"]   += int(c.get("neg")   or 0)
+            row["neu"]   += int(c.get("neu")   or 0)
+            row["mixed"] += int(c.get("mixed") or 0)
+            row["total"] += int(c.get("total") or 0)
 
     rows = sorted(
-        ((iso, r["pos"], r["neu"], r["neg"], r["pos"] + r["neg"] + r["neu"])
-         for iso, r in per_country.items() if r["pos"] + r["neg"] + r["neu"] > 0),
-        key=lambda x: x[4], reverse=True,
+        ((iso, r["pos"], r["neu"], r["neg"], r["mixed"], r["total"])
+         for iso, r in per_country.items() if r["total"] > 0),
+        key=lambda x: x[5], reverse=True,
     )
     if not rows:
         return "—"
-    lines = [_fmt_country_line(iso, p, nu, ng, t) for iso, p, nu, ng, t in rows]
+    lines = [_fmt_country_line(iso, p, nu, ng, mx, t) for iso, p, nu, ng, mx, t in rows]
     return "\n".join(lines)

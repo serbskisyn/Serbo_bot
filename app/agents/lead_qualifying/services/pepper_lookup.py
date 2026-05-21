@@ -18,7 +18,7 @@ from app.services.claude_runner import run_claude_agent
 
 logger = logging.getLogger(__name__)
 
-_LOOKBACK_DAYS = 90
+_LOOKBACK_DAYS = 180
 _TIMEOUT_SEC = 90    # 90 s pro Pepper-Subprocess (vorher 120s, x2 für multi-brand)
 
 

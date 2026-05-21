@@ -95,9 +95,11 @@ async def run_claude_agent_continue(prompt: str, timeout: int = 300) -> str:
     _audit("claudex_continue", prompt, stdout, stderr, exit_code)
 
     if proc.returncode != 0:
-        err = stderr.decode(errors="replace")[:500]
-        logger.error("Claude Agent (continue) exit %d: %s", proc.returncode, err)
-        return f"❌ Claude Agent Fehler (exit {proc.returncode}):\n{err}"
+        err_out = stdout.decode(errors="replace")[:400].strip()
+        err_err = stderr.decode(errors="replace")[:400].strip()
+        combined = (err_out or err_err) or f"exit {proc.returncode}"
+        logger.error("Claude Agent (continue) exit %d: %s", proc.returncode, combined[:200])
+        return f"❌ Claude Agent Fehler (exit {proc.returncode}):\n{combined}"
 
     result = stdout.decode(errors="replace").strip()
     logger.info("Claude Agent (continue) fertig | %d Zeichen", len(result))
@@ -133,9 +135,12 @@ async def run_claude_agent(prompt: str, timeout: int = 300) -> str:
     _audit("claudex_agent", prompt, stdout, stderr, exit_code)
 
     if proc.returncode != 0:
-        err = stderr.decode(errors="replace")[:500]
-        logger.error("Claude Agent exit %d: %s", proc.returncode, err)
-        return f"❌ Claude Agent Fehler (exit {proc.returncode}):\n{err}"
+        # Session-limit and other exit messages land in stdout, not stderr
+        err_out = stdout.decode(errors="replace")[:400].strip()
+        err_err = stderr.decode(errors="replace")[:400].strip()
+        combined = (err_out or err_err) or f"exit {proc.returncode}"
+        logger.error("Claude Agent exit %d: %s", proc.returncode, combined[:200])
+        return f"❌ Claude Agent Fehler (exit {proc.returncode}):\n{combined}"
 
     result = stdout.decode(errors="replace").strip()
     logger.info("Claude Agent fertig | %d Zeichen", len(result))

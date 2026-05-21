@@ -88,10 +88,25 @@ async def pepper_multi_country_node(state: LeadState) -> LeadState:
     by_brand     = result.get("by_brand") or {}
     brands_found = int(result.get("brands_found") or 0)
     total_all    = int(result.get("total_mentions_all") or 0)
+    lookup_error = result.get("error") or ""
 
     target_summary = format_country_sentiment(by_brand, target_iso) if target_iso else "—"
     cross_summary  = format_cross_country_summary(by_brand, exclude_iso=target_iso, top_n=4)
-    legacy_summary = _format_legacy_summary(by_brand, total_all)
+
+    if total_all > 0 or by_brand:
+        legacy_summary = _format_legacy_summary(by_brand, total_all)
+    elif lookup_error:
+        # Distinguish genuine "no data" from a failed lookup so the sheet
+        # makes it clear the lookup should be retried.
+        if "session limit" in lookup_error.lower() or "session" in lookup_error.lower():
+            legacy_summary = "⚠ Session limit — retry"
+        elif "mcp" in lookup_error.lower() or "unavail" in lookup_error.lower():
+            legacy_summary = "⚠ Pepper MCP unavailable — retry"
+        else:
+            legacy_summary = f"⚠ Lookup failed — retry"
+        logger.warning("pepper_multi_country: '%s' — Pepper-Fehler: %s", firma, lookup_error[:120])
+    else:
+        legacy_summary = "No Pepper mentions"
 
     return {
         **state,

@@ -123,6 +123,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/health — System-Status prüfen\n"
         f"/tests — Test-Suite beider Bots ausführen\n"
         f"/leads — Lead-Qualifying manuell triggern (Perplexity + Pepper-Sentiment)\n"
+        f"  └ /leads rerun <Zeile> — einzelnen Lead neu verarbeiten (z.B. /leads rerun 90)\n"
         f"/dienstplan — Dienstplan erstellen\n"
         f"/debugwunsch — Sheet-Struktur prüfen (Diagnose)\n\n"
         f"📅 *Kalender*\n"
@@ -418,15 +419,123 @@ async def tests_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(chunk, parse_mode="Markdown")
 
 
+async def _leads_rerun_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    args: list[str],
+) -> None:
+    """Re-verarbeitet einen einzelnen Lead anhand seiner Sheet-Zeile."""
+    import time as _time
+    chat_id = update.effective_chat.id
+
+    if len(args) < 2 or not args[1].isdigit():
+        await update.message.reply_text(
+            "⚠️ Verwendung: `/leads rerun <Zeile>` — z.B. `/leads rerun 90`",
+            parse_mode="Markdown",
+        )
+        return
+
+    target_row = int(args[1])
+    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+    await update.message.reply_text(
+        f"🔄 *Rerun Zeile {target_row}* — lese Sheet …",
+        parse_mode="Markdown",
+    )
+
+    try:
+        from app.agents.lead_qualifying.services.sheets import (
+            read_inbound_leads,
+            write_validation_for_row,
+        )
+        from app.agents.lead_qualifying.graph import _per_lead_graph
+        from app.agents.lead_qualifying.nodes.fetch_new_leads import _compute_lead_key
+        from app.agents.lead_qualifying.nodes.write_results import write_results_node
+        from app.agents.lead_qualifying.state import LeadState
+
+        rows = await read_inbound_leads()
+        lead = next((r for r in rows if r.get("_row_index") == target_row), None)
+        if lead is None:
+            await update.message.reply_text(
+                f"❌ Zeile `{target_row}` nicht im Inbound-Tab gefunden.",
+                parse_mode="Markdown",
+            )
+            return
+
+        firma = lead.get("Firma") or "(unbekannt)"
+        await update.message.reply_text(
+            f"▶️ Verarbeite *{firma}* (Zeile {target_row}) …\n"
+            "Pro Lead ~45 s (Perplexity + Pepper-Subprocess).",
+            parse_mode="Markdown",
+        )
+
+        # Reset idempotency guard so write_results writes a fresh Validation_Date
+        await write_validation_for_row(target_row, {"Validation_Date": ""})
+        lead["_lead_key"] = _compute_lead_key(lead)
+
+        lead_state: LeadState = {
+            "raw_leads": [], "new_leads": [], "processed_leads": [], "errors": [],
+            "current_lead": lead,
+            "pre_qualify_label": "", "pre_qualify_reason": "",
+            "contact_title": "", "linkedin_url": "", "company_website": "",
+            "northdata_summary": "", "news_summary": "",
+            "discovered_brands": [], "is_holding": False, "validated_brands": [],
+            "company_revenue": "", "company_employees": "", "company_hq": "",
+            "primary_markets": [], "business_model": "", "sales_signals": "",
+            "target_country_iso": "",
+            "pepper_by_brand": {}, "pepper_brands_found": 0,
+            "pepper_total_mentions_all": 0,
+            "pepper_target_summary": "", "pepper_cross_summary": "", "pepper_summary": "",
+            "business_fit_shoop": "", "business_fit_igraal": "",
+            "business_fit_mydealz": "", "business_fit_gutscheine": "",
+            "score_total": 0, "classification": "", "recommended_action": "",
+            "_employee_count_estimate": "",
+            "contact_authority": "other", "contact_role_match": False,
+        }
+
+        t0 = _time.monotonic()
+        result = await _per_lead_graph.ainvoke(lead_state)
+        final  = await write_results_node(result)
+        elapsed = _time.monotonic() - t0
+
+        clf    = result.get("classification", "—")
+        score  = result.get("score_total", 0)
+        pepper = result.get("pepper_summary") or "—"
+        errors = final.get("errors", [])
+
+        lines = [
+            f"✅ *Rerun Zeile {target_row} fertig* ({elapsed:.0f} s)",
+            f"Firma: `{firma}` — {clf} (Score: {score}/100)",
+            f"Pepper: {pepper}",
+        ]
+        if errors:
+            lines.append(f"⚠️ Fehler: {errors[0][:200]}")
+
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+    except Exception as exc:
+        logger.error("leads rerun: Fehler Zeile %d: %s", target_row, exc, exc_info=True)
+        await update.message.reply_text(
+            f"❌ *Rerun fehlgeschlagen*\n\n`{exc}`",
+            parse_mode="Markdown",
+        )
+
+
 @require_whitelist
 async def leads_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Manuell den Lead-Qualifying-Agent triggern.
 
-    Verarbeitet bis zu LEAD_QUALIFYING_MAX_PER_RUN Leads (Default 3 für manuelle Runs).
-    Schreibt Validierungsspalten ins Inbound-Sheet + Qualified-Leads-Tab + sendet Summary.
+    /leads              — verarbeitet bis zu LEAD_QUALIFYING_MAX_PER_RUN neue Leads
+    /leads rerun <Zeile> — einzelnen Lead neu verarbeiten (Validation_Date wird zurückgesetzt)
     """
     import time as _time
     chat_id = update.effective_chat.id
+
+    # /leads rerun <row_index>
+    args = (context.args or [])
+    if args and args[0].lower() == "rerun":
+        await _leads_rerun_handler(update, context, args)
+        return
+
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
     await update.message.reply_text(
         "🚀 *Lead-Qualifying gestartet* — verarbeite bis zu "

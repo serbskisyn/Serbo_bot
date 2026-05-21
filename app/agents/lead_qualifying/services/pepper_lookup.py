@@ -19,7 +19,7 @@ from app.services.claude_runner import run_claude_agent
 logger = logging.getLogger(__name__)
 
 _LOOKBACK_DAYS = 90
-_TIMEOUT_SEC = 120
+_TIMEOUT_SEC = 90    # 90 s pro Pepper-Subprocess (vorher 120s, x2 für multi-brand)
 
 
 _PROMPT_TEMPLATE = """Hi! I'm running the Atolls Lead-Qualifying-Bot and need brand-sentiment data from Pepper Intelligence to enrich an inbound lead.
@@ -244,56 +244,62 @@ def format_sentiment_summary(result: dict) -> str:
 
 
 # ── Multi-Brand × Multi-Country Lookup mit Aspects + Deals ───────────────────
+# Strategie: Zwei separate SQL-Queries — beide vorab aggregiert, kein Claude-
+# Side-Aggregation nötig. Subprocess muss nur die Rows in JSON umformatieren.
 
-_MULTI_PROMPT = """Hi! I'm running the Atolls Lead-Qualifying-Bot and need detailed country-level brand-sentiment data from Pepper Intelligence to enrich an inbound lead.
+_MULTI_PROMPT = """Hi! I'm running the Atolls Lead-Qualifying-Bot. I need brand-sentiment data from Pepper for the company "{firma}" (matching brands: {brand_names_csv}).
 
-The lead's company is "{firma}" — they operate the following eCommerce brands:
-{brand_list}
+Please run BOTH of these SQL queries via mcp__claude_ai_Pepper_Intelligence__query_intelligence, then combine the results into one JSON object.
 
-Could you please run this SQL via mcp__claude_ai_Pepper_Intelligence__query_intelligence — it aggregates mentions, deals and aspect-level sentiment per brand per country for the last {lookback} days:
+QUERY A — pivoted sentiment per brand per country:
 
-SELECT canonical_retailer_name,
-       country_code,
-       sentiment,
-       aspect,
-       count(*)                  AS mentions,
-       count(DISTINCT deal_id)   AS deals
+SELECT canonical_retailer_name AS brand,
+       country_code AS country,
+       sum(CASE WHEN sentiment='positive' THEN 1 ELSE 0 END) AS pos,
+       sum(CASE WHEN sentiment='negative' THEN 1 ELSE 0 END) AS neg,
+       sum(CASE WHEN sentiment='neutral'  THEN 1 ELSE 0 END) AS neu,
+       count(*) AS total,
+       count(DISTINCT deal_id) AS deals
 FROM v_retailer_mentions
-WHERE ({where_clause})
-  AND comment_created_at >= current_date - {lookback}
-GROUP BY canonical_retailer_name, country_code, sentiment, aspect
-ORDER BY mentions DESC
-LIMIT 2000;
+WHERE ({where_clause}) AND comment_created_at >= current_date - {lookback}
+GROUP BY brand, country
+ORDER BY total DESC
+LIMIT 200;
 
-A Python script parses your reply with json.loads(). Please aggregate the rows and respond with this JSON shape — brand × country with overall sentiment buckets, deal count, and the TOP 3 aspects per country (by total mentions across all sentiment categories):
+QUERY B — top-3-aspects per brand per country (only the rows we need):
 
-{{
-  "by_brand": {{
-    "<canonical_retailer_name>": {{
-      "total_mentions": <int>,
-      "total_deals": <int>,
-      "by_country": {{
-         "<country_code>": {{
-            "pos": <int>, "neg": <int>, "neu": <int>, "total": <int>,
-            "pos_rate": <float pos/(pos+neg) rounded to 3 decimals, or null>,
-            "deals": <int — distinct deal_id count for this brand+country>,
-            "top_aspects": [
-              {{"aspect": "<name>", "pos": int, "neg": int, "neu": int, "total": int}},
-              ... up to 3 entries, sorted by total descending, skip rows where aspect is null ...
-            ]
-         }}
-      }}
+SELECT brand, country, aspect, pos, neg, neu, total FROM (
+  SELECT canonical_retailer_name AS brand,
+         country_code AS country,
+         aspect,
+         sum(CASE WHEN sentiment='positive' THEN 1 ELSE 0 END) AS pos,
+         sum(CASE WHEN sentiment='negative' THEN 1 ELSE 0 END) AS neg,
+         sum(CASE WHEN sentiment='neutral'  THEN 1 ELSE 0 END) AS neu,
+         count(*) AS total,
+         row_number() OVER (PARTITION BY canonical_retailer_name, country_code ORDER BY count(*) DESC) AS rn
+  FROM v_retailer_mentions
+  WHERE ({where_clause}) AND comment_created_at >= current_date - {lookback}
+    AND aspect IS NOT NULL
+  GROUP BY brand, country, aspect
+) ranked
+WHERE rn <= 3;
+
+Combine into this exact JSON (a Python script parses with json.loads):
+
+{{"by_brand":{{
+  "<brand>":{{
+    "total_mentions":<int>,
+    "total_deals":<int>,
+    "by_country":{{
+      "<country>":{{"pos":int,"neg":int,"neu":int,"total":int,"deals":int,
+        "top_aspects":[{{"aspect":"<x>","pos":int,"neg":int,"neu":int,"total":int}},...up to 3]}}
     }}
-  }},
-  "brands_found": <int>,
-  "total_mentions_all": <int>,
-  "total_deals_all": <int>
-}}
+  }}
+}},"brands_found":<int>,"total_mentions_all":<int>,"total_deals_all":<int>}}
 
-If the query returns no rows, please respond with:
-{{"by_brand": {{}}, "brands_found": 0, "total_mentions_all": 0, "total_deals_all": 0}}
+If both queries return zero rows: {{"by_brand":{{}},"brands_found":0,"total_mentions_all":0,"total_deals_all":0}}
 
-Since json.loads() will fail on surrounding prose or markdown fences, the cleanest reply is the bare JSON object. Thanks!"""
+Respond with the bare JSON only, no markdown fences. Thanks!"""
 
 
 def _build_where_clause(brand_names: list[str]) -> str:
@@ -339,26 +345,27 @@ async def get_multi_brand_sentiment(firma: str, brand_names: list[str]) -> dict:
     if not brand_names:
         return {"by_brand": {}, "brands_found": 0, "total_mentions_all": 0}
 
+    # Cap auf 5 Brands — größere Multi-Brand-SQLs lassen den Subprocess hängen
+    brand_names = brand_names[:5]
     where_clause = _build_where_clause(brand_names)
-    brand_list = "\n".join(f"- {n}" for n in brand_names if n.strip())
+    brand_names_csv = ", ".join(brand_names)
 
     prompt = _MULTI_PROMPT.format(
         firma=firma.replace('"', '\\"'),
-        brand_list=brand_list,
+        brand_names_csv=brand_names_csv,
         where_clause=where_clause,
         lookback=_LOOKBACK_DAYS,
     )
 
     logger.info("pepper_multi: '%s' — %d Brands → Pepper-Subprocess", firma, len(brand_names))
 
-    # Subprocess + 1 Retry bei MCP-Unavailable (Claude Code lädt MCP-Connector
-    # gelegentlich nicht beim ersten Cold-Start, zweiter Versuch klappt oft).
+    # Subprocess + 1 Retry bei MCP-Unavailable. Timeout pro Versuch _TIMEOUT_SEC.
     raw = ""
     attempts = 2
     last_error = ""
     for attempt in range(1, attempts + 1):
         try:
-            raw = await run_claude_agent(prompt, timeout=_TIMEOUT_SEC * 2)
+            raw = await run_claude_agent(prompt, timeout=_TIMEOUT_SEC)
         except Exception as exc:
             logger.warning("pepper_multi: subprocess-Exception (attempt %d): %s", attempt, exc)
             last_error = f"subprocess: {exc}"

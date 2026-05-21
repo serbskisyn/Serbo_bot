@@ -138,10 +138,10 @@ async def collect_lead_result_node(state: LeadState) -> LeadState:
             unique_brand_names.append(n)
     row_dict["_brands"] = ", ".join(unique_brand_names)[:500] or "—"
 
-    revenue   = state.get("company_revenue", "") or "—"
-    employees = state.get("company_employees", "") or "—"
-    hq        = state.get("company_hq", "") or ""
-    model     = state.get("business_model", "") or ""
+    revenue   = (state.get("company_revenue", "") or "—")[:50]
+    employees = (state.get("company_employees", "") or "—")[:50]
+    hq        = (state.get("company_hq", "") or "")[:60]
+    model     = (state.get("business_model", "") or "")[:30]
     facts = f"Umsatz: {revenue} · MA: {employees}"
     if hq:    facts += f" · HQ: {hq}"
     if model: facts += f" · Modell: {model}"

@@ -311,6 +311,20 @@ def _build_where_clause(brand_names: list[str]) -> str:
     return " OR ".join(clauses) if clauses else "1=0"
 
 
+_MCP_UNAVAILABLE_MARKERS = (
+    "is not available in my current toolset",
+    "not listed among my deferred tools",
+    "is not available",
+    "tool not available",
+)
+
+
+def _looks_like_mcp_unavailable(raw: str) -> bool:
+    """Erkennt wenn der Subprocess sagt: MCP-Tool nicht ladbar."""
+    low = raw[:600].lower()
+    return any(marker in low for marker in _MCP_UNAVAILABLE_MARKERS)
+
+
 async def get_multi_brand_sentiment(firma: str, brand_names: list[str]) -> dict:
     """Pepper-Lookup für mehrere Brands gleichzeitig, aufgeschlüsselt nach Land.
 
@@ -337,23 +351,47 @@ async def get_multi_brand_sentiment(firma: str, brand_names: list[str]) -> dict:
 
     logger.info("pepper_multi: '%s' — %d Brands → Pepper-Subprocess", firma, len(brand_names))
 
-    try:
-        raw = await run_claude_agent(prompt, timeout=_TIMEOUT_SEC * 2)
-    except Exception as exc:
-        logger.warning("pepper_multi: subprocess-Exception: %s", exc)
-        return {"by_brand": {}, "brands_found": 0, "total_mentions_all": 0,
-                "error": f"subprocess: {exc}"}
+    # Subprocess + 1 Retry bei MCP-Unavailable (Claude Code lädt MCP-Connector
+    # gelegentlich nicht beim ersten Cold-Start, zweiter Versuch klappt oft).
+    raw = ""
+    attempts = 2
+    last_error = ""
+    for attempt in range(1, attempts + 1):
+        try:
+            raw = await run_claude_agent(prompt, timeout=_TIMEOUT_SEC * 2)
+        except Exception as exc:
+            logger.warning("pepper_multi: subprocess-Exception (attempt %d): %s", attempt, exc)
+            last_error = f"subprocess: {exc}"
+            continue
 
-    if raw.startswith("❌") or raw.startswith("⏳"):
-        logger.warning("pepper_multi: subprocess-Fehler: %s", raw[:200])
+        if raw.startswith("❌") or raw.startswith("⏳"):
+            logger.warning("pepper_multi: subprocess-Fehler (attempt %d): %s", attempt, raw[:200])
+            last_error = raw[:300]
+            continue
+
+        if _looks_like_mcp_unavailable(raw):
+            logger.warning(
+                "pepper_multi: MCP-Tool unavailable (attempt %d) — Pi-Claude hat Pepper-Connector nicht geladen. Raw: %r",
+                attempt, raw[:300],
+            )
+            last_error = "Pepper-MCP nicht verfügbar im Subprocess"
+            if attempt < attempts:
+                import asyncio as _asyncio
+                await _asyncio.sleep(5)   # kurze Pause, dann Retry
+            continue
+
+        # Erfolg: weiter zur JSON-Parsing
+        break
+
+    if _looks_like_mcp_unavailable(raw) or raw.startswith("❌") or raw.startswith("⏳"):
         return {"by_brand": {}, "brands_found": 0, "total_mentions_all": 0,
-                "error": raw[:300]}
+                "total_deals_all": 0, "error": last_error}
 
     parsed = _extract_json(raw)
     if parsed is None:
         logger.warning("pepper_multi: JSON-Parse-Fehler; raw=%r", raw[:300])
         return {"by_brand": {}, "brands_found": 0, "total_mentions_all": 0,
-                "error": "JSON parse failed"}
+                "total_deals_all": 0, "error": "JSON parse failed"}
 
     by_brand = parsed.get("by_brand") or {}
     logger.info(

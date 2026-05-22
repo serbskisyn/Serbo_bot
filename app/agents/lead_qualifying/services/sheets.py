@@ -143,6 +143,10 @@ def _sync_ensure_validation_columns() -> dict[str, int]:
     if missing:
         from gspread.utils import rowcol_to_a1
         start_col = len(header) + 1
+        needed_cols = start_col + len(missing) - 1
+        if needed_cols > ws.col_count:
+            ws.resize(rows=ws.row_count, cols=needed_cols + 4)  # +4 buffer
+            logger.info("Inbound-Tab: Grid auf %d Spalten erweitert", needed_cols + 4)
         ws.update(rowcol_to_a1(1, start_col), [missing])
         for offset, name in enumerate(missing):
             existing[name] = start_col + offset

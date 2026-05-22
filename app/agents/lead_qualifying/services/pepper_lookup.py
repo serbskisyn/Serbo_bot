@@ -429,20 +429,32 @@ def _aggregate_country(by_brand: dict, country_iso: str) -> dict:
     }
 
 
+def _sentiment_emoji(pos: int, neg: int, total: int) -> str:
+    """Traffic-light emoji based on positive vs negative share."""
+    if total <= 0:
+        return "⚪"
+    pos_pct = pos / total
+    neg_pct = neg / total
+    if pos_pct >= 0.55:
+        return "🟢"
+    if neg_pct >= 0.55:
+        return "🔴"
+    return "🟡"
+
+
 def _fmt_country_line(iso: str, pos: int, neu: int, neg: int, mixed: int, total: int) -> str:
-    """DE: 200 mentions - 20 positive, 40 neutral, 15 mixed, 125 negative - Ratio 10% pos vs 63% neg"""
-    pos_pct = round(pos / total * 100) if total > 0 else 0
-    neg_pct = round(neg / total * 100) if total > 0 else 0
-    mixed_part = f", {mixed} mixed" if mixed else ""
-    return (
-        f"{iso.upper()}: {total} mentions"
-        f" - {pos} positive, {neu} neutral{mixed_part}, {neg} negative"
-        f" - Ratio {pos_pct}% pos vs {neg_pct}% neg"
-    )
+    """RAG-compact: 🔴 DE: 3106m (10%↑ 70%↓ 20%~)"""
+    if total <= 0:
+        return f"⚪ {iso.upper()}: 0m"
+    pos_pct = round(pos / total * 100)
+    neg_pct = round(neg / total * 100)
+    neu_pct = round((neu + mixed) / total * 100)
+    emoji = _sentiment_emoji(pos, neg, total)
+    return f"{emoji} {iso.upper()}: {total}m ({pos_pct}%↑ {neg_pct}%↓ {neu_pct}%~)"
 
 
 def format_country_sentiment(by_brand: dict, country_iso: str) -> str:
-    """Detailed sentiment line for a single target country."""
+    """RAG-compact sentiment line for a single target country."""
     agg = _aggregate_country(by_brand, country_iso)
     if not agg:
         return "—"
@@ -454,10 +466,9 @@ def format_country_sentiment(by_brand: dict, country_iso: str) -> str:
 
 def format_cross_country_summary(by_brand: dict, exclude_iso: str | None = None,
                                   top_n: int = 4) -> str:
-    """Matrix of all countries with Pepper activity, sorted by total mentions descending.
+    """RAG-compact matrix of all countries with Pepper activity, sorted by total descending.
 
-    Uses total from DB (COUNT(*)), not pos+neg+neu sum, to reflect all rows including
-    unclassified sentiment. One line per country.
+    One line per country: 🔴 DE: 3106m (10%↑ 70%↓ 20%~)
     """
     if not by_brand:
         return "—"

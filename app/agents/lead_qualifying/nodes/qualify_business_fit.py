@@ -30,10 +30,11 @@ _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
 _SALES_ACTION_SYSTEM = (
-    "You are a B2B sales analyst for Atolls (Shoop, iGraal, mydealz). "
-    "You write short, concrete next-steps for the salesperson. "
-    "Reply ONLY with the requested JSON object — no surrounding text. "
-    "Always answer in English, regardless of the input language."
+    "You are a senior commercial intelligence analyst for Atolls. "
+    "Atolls operates Pepper Community platforms (mydealz.de, dealabs.fr, pepper.com etc.) as PRIMARY business. "
+    "Shoop (cashback), iGraal (cashback/coupons), and Gutscheine.de (vouchers) are secondary products. "
+    "Leads arrive via the Pepper Contact-Us form — always prioritise Pepper Community Brand fit. "
+    "Reply ONLY with the requested JSON object — no surrounding text. Answer in English."
 )
 
 _SALES_ACTION_USER = """Lead profile:
@@ -42,16 +43,37 @@ _SALES_ACTION_USER = """Lead profile:
 - Business model: {business_model}
 - Markets: {markets}
 - Validated eCom brands: {brands_text}
-- Pepper sentiment (target country): {pepper_target}
-- Pepper cross-country signals: {pepper_cross}
+- Revenue estimate: {revenue}
+- Pepper sentiment — domestic: {pepper_target}
+- Pepper sentiment — cross-country: {pepper_cross}
 - Sales signals: {sales_signals}
-- Score classification: {classification} ({score}/100)
+- Performance marketing signals: {perf_mktg_signals}
+- Affiliate likelihood: {affiliate_likelihood}
+- Promo / deal activity: {promo_intensity}
+- Commercial intelligence: {commercial_intel}
+- Score: {classification} ({score}/100)
+
+Evaluate in this order:
+1. **Pepper Community Brands fit** — does the brand have an active Pepper community presence?
+   High deal volume on mydealz/dealabs/pepper.com = strong signal. This is the primary criterion.
+2. **Deal virality** — are deals likely to generate community engagement and organic reach?
+3. **Performance marketing maturity** — does the brand invest in paid channels (PPC, affiliates)?
+4. **Secondary Atolls products** — mention Shoop/iGraal/Gutscheine ONLY if Perplexity signals
+   suggest clear cashback/voucher fit AND primary Pepper fit is strong.
 
 Reply with this JSON in English:
 {{
   "contact_seniority": "junior|mid|senior",
-  "recommended_action": "1-2 concise sentences with the next step for sales — in English"
-}}"""
+  "priority_tier": "LOW|MEDIUM|HIGH|STRATEGIC",
+  "priority_reason": "1 sentence — why this tier, anchored to Pepper Community fit",
+  "recommended_action": "2-3 concise sentences: primary Pepper Brand pitch angle, then deal/promo approach, and optionally Shoop/iGraal if strong secondary fit"
+}}
+
+Priority tier guidance:
+- STRATEGIC: strong Pepper community presence (>500m target or cross-country), deal-viral brand, active perf-mktg
+- HIGH: moderate Pepper mentions (100-500m) or clear affiliate/promo signals with Atolls market overlap
+- MEDIUM: some Pepper activity or affiliate signals but limited reach / narrow markets
+- LOW: weak or no Pepper signals, B2B-leaning, no affiliate signals, or no Atolls market overlap"""
 
 
 async def qualify_business_fit_node(state: LeadState) -> LeadState:
@@ -77,18 +99,24 @@ async def qualify_business_fit_node(state: LeadState) -> LeadState:
     prompt = _SALES_ACTION_USER.format(
         name=name,
         firma=firma,
-        business_model=state.get("business_model", "") or "(unbekannt)",
-        markets=", ".join(state.get("primary_markets") or []) or "(unbekannt)",
+        business_model=state.get("business_model", "") or "(unknown)",
+        markets=", ".join(state.get("primary_markets") or []) or "(unknown)",
         brands_text=brands_text,
-        pepper_target=state.get("pepper_target_summary", "") or "(keine Daten)",
-        pepper_cross=state.get("pepper_cross_summary", "") or "(keine Daten)",
-        sales_signals=state.get("sales_signals", "") or "(keine)",
+        revenue=state.get("company_revenue", "") or "(unknown)",
+        pepper_target=state.get("pepper_target_summary", "") or "(no data)",
+        pepper_cross=state.get("pepper_cross_summary", "") or "(no data)",
+        sales_signals=state.get("sales_signals", "") or "(none)",
+        perf_mktg_signals=state.get("perf_mktg_signals", "") or "(none)",
+        affiliate_likelihood=state.get("affiliate_likelihood", "") or "(none)",
+        promo_intensity=state.get("promo_intensity", "") or "(none)",
+        commercial_intel=state.get("commercial_intel_summary", "") or "(none)",
         classification=classification,
         score=score_total,
     )
 
     contact_seniority  = "mid"
     recommended_action = ""
+    priority_tier      = ""
     try:
         raw = await ask_llm(user_text=prompt, system_prompt=_SALES_ACTION_SYSTEM)
         match = _JSON_RE.search(raw)
@@ -96,6 +124,10 @@ async def qualify_business_fit_node(state: LeadState) -> LeadState:
             data = json.loads(match.group())
             contact_seniority  = str(data.get("contact_seniority", "mid")).lower().strip()
             recommended_action = str(data.get("recommended_action", "")).strip()
+            priority_tier      = str(data.get("priority_tier", "")).upper().strip()
+            priority_reason    = str(data.get("priority_reason", "")).strip()
+            if priority_reason and priority_tier:
+                priority_tier = f"{priority_tier} — {priority_reason}"
     except Exception as exc:
         logger.warning("qualify_business_fit: LLM-Action-Fehler für '%s': %s", name, exc)
 
@@ -119,6 +151,7 @@ async def qualify_business_fit_node(state: LeadState) -> LeadState:
         "classification":      classification,
         "contact_seniority":   contact_seniority,
         "recommended_action":  recommended_action,
+        "priority_tier":       priority_tier,
         # Score-Audit für Sheet/Logs
         "score_breakdown":     breakdown_str,
         "score_override":      score_result.get("override_reason", ""),

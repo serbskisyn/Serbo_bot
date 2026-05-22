@@ -64,6 +64,14 @@ class LeadState(TypedDict, total=False):
     pepper_top_country: str
     pepper_summary: str            # 1-Zeilen-DE-Summary für Sheet/Telegram
 
+    # ── Commercial Intelligence (enrich_commercial_intelligence node) ────────
+    marketing_spend_estimate: str  # e.g. "~2-5M EUR/year" or "unknown"
+    perf_mktg_signals: str         # Google Shopping / Meta / TikTok / Amazon signals
+    affiliate_likelihood: str      # high / medium / low + short rationale
+    promo_intensity: str           # coupon/deal/promo frequency summary
+    commercial_intel_summary: str  # 2-3 sentence structured summary for LLM context
+    priority_tier: str             # LOW / MEDIUM / HIGH / STRATEGIC
+
     # ── Qualification ─────────────────────────────────────────────────────────
     business_fit_shoop: str        # Legacy (jetzt leer)
     business_fit_igraal: str

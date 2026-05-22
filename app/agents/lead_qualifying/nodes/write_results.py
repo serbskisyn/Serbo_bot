@@ -165,6 +165,19 @@ async def collect_lead_result_node(state: LeadState) -> LeadState:
     row_dict["_score_breakdown"]  = state.get("score_breakdown", "") or ""
     row_dict["_score_override"]   = state.get("score_override", "") or ""
 
+    # Commercial intelligence fields
+    comm_parts = []
+    spend  = (state.get("marketing_spend_estimate") or "").strip()
+    perf   = (state.get("perf_mktg_signals") or "").strip()
+    affil  = (state.get("affiliate_likelihood") or "").strip()
+    promo  = (state.get("promo_intensity") or "").strip()
+    if spend: comm_parts.append(f"Spend: {spend}")
+    if perf:  comm_parts.append(f"PerfMktg: {perf}")
+    if affil: comm_parts.append(f"Affiliate: {affil}")
+    if promo: comm_parts.append(f"Promo: {promo}")
+    row_dict["_commercial_intel"] = " · ".join(comm_parts)[:500] or "—"
+    row_dict["_priority_tier"]    = (state.get("priority_tier") or "—").strip()
+
     processed.append(row_dict)
     logger.info(
         "collect_lead_result: '%s %s' @ '%s' → %s (score=%d)",
@@ -226,6 +239,8 @@ async def write_results_node(state: LeadState) -> LeadState:
         sentiment_target  = str(lead_dict.get("_sentiment_target", "")).strip() or "—"
         sentiment_cross   = str(lead_dict.get("_sentiment_cross", "")).strip() or "—"
         sentiment_legacy  = str(lead_dict.get("_pepper_summary", "")).strip() or "—"
+        commercial_intel  = str(lead_dict.get("_commercial_intel", "")).strip() or "—"
+        priority_tier     = str(lead_dict.get("_priority_tier", "")).strip() or "—"
         score             = lead_dict.get("score_total", 0)
         classification    = lead_dict.get("classification", "")
 
@@ -249,6 +264,8 @@ async def write_results_node(state: LeadState) -> LeadState:
                 "Validation_Sentiment_Target":  sentiment_target[:400],
                 "Validation_Sentiment_Cross":   sentiment_cross[:400],
                 "Validation_Sentiment":         sentiment_legacy[:300],
+                "Validation_Commercial_Intel":  commercial_intel[:500],
+                "Validation_Priority_Tier":     priority_tier[:100],
                 "Validation_Score":             f"{score}/100" if classification != "FILTERED" else "—",
                 "Validation_Classification":    classification,
                 "Validation_Note":              note[:500],

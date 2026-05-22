@@ -32,9 +32,11 @@ VALIDATION_COLUMNS: list[str] = [
     "Validation_Brands",                    # eCommerce brands (comma-sep)
     "Validation_Company_Facts",             # Revenue, employees, HQ, model
     "Validation_Contact",                   # Title, authority, role-match, LinkedIn
-    "Validation_Sentiment_Target",          # Pepper aggregate for target country
-    "Validation_Sentiment_Cross",           # Top-N other countries with activity
+    "Validation_Sentiment_Target",          # Pepper RAG-compact for target country
+    "Validation_Sentiment_Cross",           # All countries with Pepper activity
     "Validation_Sentiment",                 # Legacy: overall Pepper summary
+    "Validation_Commercial_Intel",          # Marketing spend, perf-mktg, affiliate signals
+    "Validation_Priority_Tier",             # LOW / MEDIUM / HIGH / STRATEGIC
     "Validation_Score",                     # Score 0-100
     "Validation_Classification",            # HOT / WARM / COLD / FILTERED
     "Validation_Note",                      # Recommended action + breakdown + signals

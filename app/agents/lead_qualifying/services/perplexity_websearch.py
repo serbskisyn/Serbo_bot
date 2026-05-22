@@ -348,6 +348,111 @@ Reply ONLY with valid JSON, no surrounding text:
     }
 
 
+async def enrich_commercial_intelligence(
+    firma: str,
+    brands: list[dict],
+    business_model: str,
+    primary_markets: list[str],
+    revenue_estimate: str,
+) -> dict:
+    """Research performance marketing maturity, affiliate signals, and promo behavior.
+
+    Output:
+      {
+        "marketing_spend_estimate": "~2-5M EUR/year or unknown",
+        "google_shopping_presence": "high|medium|low|none",
+        "meta_tiktok_activity": "high|medium|low|none",
+        "amazon_ads_presence": "high|medium|low|none",
+        "affiliate_networks": ["AWIN", "CJ"],
+        "coupon_promo_frequency": "frequent|occasional|rare|none",
+        "bf_prime_day_signals": true|false,
+        "deal_community_presence": "active|occasional|none",
+        "cashback_platform_presence": ["Shoop", "iGraal"],
+        "perf_mktg_sophistication": "high|medium|low",
+        "affiliate_likelihood": "high|medium|low",
+        "promo_intensity_summary": "2 sentences",
+        "confidence": "high|medium|low"
+      }
+    """
+    brand_text = ", ".join(b.get("name", "") for b in brands if b.get("name")) or "(none identified)"
+    markets_text = ", ".join(primary_markets) if primary_markets else "unknown"
+
+    prompt = f"""Research the performance marketing maturity and affiliate signals for "{firma}"
+(eCommerce brands: {brand_text}, business model: {business_model},
+revenue: {revenue_estimate}, primary markets: {markets_text}).
+
+Investigate:
+1. **Marketing spend** — triangulate from headcount, revenue scale, visible ad activity.
+   Give a rough EUR/year estimate (e.g. "~2-5M EUR/year" or "unknown").
+2. **Performance channels** — is the brand running Google Shopping (product listing ads)?
+   Active on Meta Ads / Instagram / TikTok Ads? Using Amazon Sponsored Products?
+3. **Affiliate & deal activity** — affiliate network memberships (AWIN, CJ, Tradedoubler,
+   Webgains, etc.), coupon code distribution (RetailMeNot, Gutscheinpanda, honey, etc.),
+   Black Friday / Cyber Monday campaign history, Prime Day-equivalent promotions.
+4. **Deal community presence** — posts/deals on mydealz.de, hotukdeals, dealabs.fr,
+   cashback listings on Shoop.de, iGraal.fr, TopCashback, Quidco, etc.
+
+Reply ONLY with valid JSON, no surrounding text:
+{{
+  "marketing_spend_estimate": "~X-YM EUR/year or unknown",
+  "google_shopping_presence": "high|medium|low|none",
+  "meta_tiktok_activity": "high|medium|low|none",
+  "amazon_ads_presence": "high|medium|low|none",
+  "affiliate_networks": ["AWIN", "CJ"],
+  "coupon_promo_frequency": "frequent|occasional|rare|none",
+  "bf_prime_day_signals": true,
+  "deal_community_presence": "active|occasional|none",
+  "cashback_platform_presence": ["Shoop", "iGraal"],
+  "perf_mktg_sophistication": "high|medium|low",
+  "affiliate_likelihood": "high|medium|low",
+  "promo_intensity_summary": "2 sentences on promo/coupon/deal behaviour",
+  "confidence": "high|medium|low"
+}}"""
+
+    system = (
+        "You are a commercial intelligence analyst with live web search specialised in "
+        "eCommerce performance marketing and affiliate programs. "
+        "Reply ONLY with the requested JSON object, in English."
+    )
+
+    try:
+        raw = await _call_perplexity(prompt, system_prompt=system, timeout=60.0, max_tokens=1024)
+        match = _JSON_RE.search(raw)
+        if match:
+            data = json.loads(match.group())
+            logger.info(
+                "perplexity.enrich_commercial_intelligence: '%s' → perf_mktg=%s affiliate=%s confidence=%s",
+                firma, data.get("perf_mktg_sophistication"), data.get("affiliate_likelihood"),
+                data.get("confidence"),
+            )
+            return data
+        logger.warning("perplexity.enrich_commercial_intelligence: kein JSON für '%s'", firma)
+    except httpx.HTTPStatusError as exc:
+        logger.warning("perplexity commercial_intel HTTP %s für '%s'", exc.response.status_code, firma)
+    except httpx.TimeoutException:
+        logger.warning("perplexity commercial_intel Timeout für '%s'", firma)
+    except json.JSONDecodeError as exc:
+        logger.warning("perplexity commercial_intel JSON-Fehler für '%s': %s", firma, exc)
+    except Exception as exc:
+        logger.warning("perplexity commercial_intel Fehler für '%s': %s", firma, exc)
+
+    return {
+        "marketing_spend_estimate": "unknown",
+        "google_shopping_presence": "none",
+        "meta_tiktok_activity": "none",
+        "amazon_ads_presence": "none",
+        "affiliate_networks": [],
+        "coupon_promo_frequency": "none",
+        "bf_prime_day_signals": False,
+        "deal_community_presence": "none",
+        "cashback_platform_presence": [],
+        "perf_mktg_sophistication": "low",
+        "affiliate_likelihood": "low",
+        "promo_intensity_summary": "",
+        "confidence": "low",
+    }
+
+
 async def get_news_summary(firma: str) -> str:
     """Recent-news summary in 2-3 English sentences."""
     prompt = f"""Search recent news (2024-2026) about the company "{firma}".

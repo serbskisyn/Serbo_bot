@@ -525,6 +525,7 @@ async def leads_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Manuell den Lead-Qualifying-Agent triggern.
 
     /leads              — verarbeitet bis zu LEAD_QUALIFYING_MAX_PER_RUN neue Leads
+    /leads <N>          — verarbeitet genau N Leads (Override)
     /leads rerun <Zeile> — einzelnen Lead neu verarbeiten (Validation_Date wird zurückgesetzt)
     """
     import time as _time
@@ -536,18 +537,30 @@ async def leads_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _leads_rerun_handler(update, context, args)
         return
 
+    # /leads <N> — run exactly N leads
+    max_leads_override: int | None = None
+    if args and args[0].isdigit():
+        max_leads_override = int(args[0])
+
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
-    await update.message.reply_text(
-        "🚀 *Lead-Qualifying gestartet* — verarbeite bis zu "
-        f"`{__import__('os').getenv('LEAD_QUALIFYING_MAX_PER_RUN', '3')}` Leads. "
-        "Pro Lead ~45 s (Perplexity + Pepper-Subprocess).",
-        parse_mode="Markdown",
-    )
+    if max_leads_override is not None:
+        await update.message.reply_text(
+            f"🚀 *Lead-Qualifying gestartet* — verarbeite genau `{max_leads_override}` Lead(s). "
+            "Pro Lead ~45 s (Perplexity + Pepper-Subprocess).",
+            parse_mode="Markdown",
+        )
+    else:
+        await update.message.reply_text(
+            "🚀 *Lead-Qualifying gestartet* — verarbeite bis zu "
+            f"`{__import__('os').getenv('LEAD_QUALIFYING_MAX_PER_RUN', '30')}` Leads. "
+            "Pro Lead ~45 s (Perplexity + Pepper-Subprocess).",
+            parse_mode="Markdown",
+        )
 
     t0 = _time.monotonic()
     try:
         from app.agents.lead_qualifying.graph import run_pipeline
-        final_state = await run_pipeline()
+        final_state = await run_pipeline(max_leads=max_leads_override)
     except Exception as exc:
         logger.error("leads_handler: Pipeline-Fehler: %s", exc, exc_info=True)
         await update.message.reply_text(

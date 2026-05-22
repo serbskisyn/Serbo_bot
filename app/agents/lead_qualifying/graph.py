@@ -10,13 +10,20 @@ Pipeline overview (per-lead loop handled in run_pipeline()):
                   │
                   ├─ SKIP ──────────► collect_filtered_result → END
                   │
-                  └─ HIGH / LOW ───► enrich_contact
+                  └─ HIGH / LOW ───► discover_brands
                                           │
-                                     enrich_company
+                                     validate_company
                                           │
-                                     qualify_business_fit
+                                     enrich_contact_v2
                                           │
-                                     collect_result → END
+                                     [Hard-Skip Check]
+                                     ├─ B2B / no eCommerce signal ─► skip_pepper
+                                     │                                    │
+                                     └─ eCommerce relevant ─────────► pepper_multi_country
+                                                                          │
+                                                                     qualify_business_fit
+                                                                          │
+                                                                     collect_result → END
       │
   write_results  (flush all to sheet + Telegram, FILTERED excluded from Telegram)
 """
@@ -46,6 +53,67 @@ from app.agents.lead_qualifying.nodes.fetch_new_leads import fetch_new_leads_nod
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Pepper hard-skip logic
+# ---------------------------------------------------------------------------
+
+def route_after_contact(state: LeadState) -> str:
+    """
+    Routing function called after enrich_contact_v2.
+
+    Returns "skip_pepper" when Pepper would yield no signal:
+      - business_model is 'B2B' (pure B2B, no consumer deal-platform presence)
+      - OR all three weak signals are absent:
+          validated_brands is empty AND contact_role_match is False
+          AND contact_authority == "other"
+
+    Otherwise returns "pepper_multi_country" to run the full Pepper lookup.
+    """
+    business_model = (state.get("business_model") or "").strip().upper()
+    validated_brands = state.get("validated_brands") or []
+    contact_role_match = state.get("contact_role_match", False)
+    contact_authority = (state.get("contact_authority") or "other").lower()
+
+    if business_model == "B2B":
+        logger.info(
+            "route_after_contact: '%s' — Pepper übersprungen (B2B)",
+            state.get("current_lead", {}).get("Firma", "?"),
+        )
+        return "skip_pepper"
+
+    if not validated_brands and not contact_role_match and contact_authority == "other":
+        logger.info(
+            "route_after_contact: '%s' — Pepper übersprungen (no eCommerce signal)",
+            state.get("current_lead", {}).get("Firma", "?"),
+        )
+        return "skip_pepper"
+
+    return "pepper_multi_country"
+
+
+async def skip_pepper_node(state: LeadState) -> LeadState:
+    """
+    Tiny node that populates pepper fields with skip-sentinel values and
+    routes directly to qualify_business_fit (bypassing the Pepper MCP call).
+    """
+    business_model = (state.get("business_model") or "").strip().upper()
+    reason = "B2B" if business_model == "B2B" else "no eCommerce signal"
+    logger.info(
+        "skip_pepper: '%s' — Pepper übersprungen (%s)",
+        state.get("current_lead", {}).get("Firma", "?"),
+        reason,
+    )
+    return {
+        **state,
+        "pepper_by_brand": {},
+        "pepper_brands_found": 0,
+        "pepper_total_mentions_all": 0,
+        "pepper_target_summary": "—",
+        "pepper_cross_summary": "—",
+        "pepper_summary": f"Skipped ({reason})",
+    }
+
+
 def build_per_lead_graph():
     """
     Build the sub-graph that processes a single lead end-to-end.
@@ -60,6 +128,7 @@ def build_per_lead_graph():
     graph.add_node("discover_brands", discover_brands_node)
     graph.add_node("validate_company", validate_company_node)
     graph.add_node("enrich_contact_v2", enrich_contact_v2_node)
+    graph.add_node("skip_pepper", skip_pepper_node)
     graph.add_node("pepper_multi_country", pepper_multi_country_node)
     graph.add_node("qualify_business_fit", qualify_business_fit_node)
     graph.add_node("collect_result", collect_lead_result_node)
@@ -78,10 +147,20 @@ def build_per_lead_graph():
     )
 
     # Enrichment pipeline:
-    # discover_brands → validate_company → enrich_contact_v2 → pepper_multi_country → qualify_business_fit
+    # discover_brands → validate_company → enrich_contact_v2
+    #   → [Hard-Skip Check] → skip_pepper OR pepper_multi_country
+    #   → qualify_business_fit
     graph.add_edge("discover_brands", "validate_company")
     graph.add_edge("validate_company", "enrich_contact_v2")
-    graph.add_edge("enrich_contact_v2", "pepper_multi_country")
+    graph.add_conditional_edges(
+        "enrich_contact_v2",
+        route_after_contact,
+        {
+            "pepper_multi_country": "pepper_multi_country",
+            "skip_pepper": "skip_pepper",
+        },
+    )
+    graph.add_edge("skip_pepper", "qualify_business_fit")
     graph.add_edge("pepper_multi_country", "qualify_business_fit")
     graph.add_edge("qualify_business_fit", "collect_result")
     graph.add_edge("collect_result", END)
@@ -96,7 +175,7 @@ def build_per_lead_graph():
 _per_lead_graph = build_per_lead_graph()
 
 
-async def run_pipeline() -> LeadState:
+async def run_pipeline(max_leads: int | None = None) -> LeadState:
     """
     Run the full lead qualifying pipeline.
 
@@ -106,6 +185,10 @@ async def run_pipeline() -> LeadState:
        - HIGH / LOW → full enrichment + qualification
     3. Flush all results to Google Sheets and send a Telegram summary.
 
+    Args:
+        max_leads: If provided, overrides the LEAD_QUALIFYING_MAX_PER_RUN env-var
+                   limit. Useful for /leads N to process exactly N leads.
+
     Returns the final LeadState (useful for logging / testing).
     """
     initial_state: LeadState = {
@@ -114,6 +197,8 @@ async def run_pipeline() -> LeadState:
         "processed_leads": [],
         "errors": [],
     }
+    if max_leads is not None:
+        initial_state["max_leads_override"] = max_leads
 
     # ── Step 1: Fetch ────────────────────────────────────────────────────────
     state = await fetch_new_leads_node(initial_state)

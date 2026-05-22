@@ -71,13 +71,16 @@ async def fetch_new_leads_node(state: LeadState) -> LeadState:
     ]
 
     total_candidates = len(new_leads)
-    if _MAX_LEADS_PER_RUN > 0 and total_candidates > _MAX_LEADS_PER_RUN:
+    # max_leads_override (from /leads N) takes precedence over env-var limit
+    effective_max = state.get("max_leads_override") or _MAX_LEADS_PER_RUN
+    if effective_max > 0 and total_candidates > effective_max:
         # Älteste Leads zuerst (Sheet-Reihenfolge = Eingangsdatum)
-        new_leads = new_leads[: _MAX_LEADS_PER_RUN]
+        new_leads = new_leads[:effective_max]
         logger.warning(
             "fetch_new_leads: %d Leads im Backlog — verarbeite nur %d in diesem Run "
-            "(LEAD_QUALIFYING_MAX_PER_RUN). Rest folgt im nächsten Slot.",
-            total_candidates, _MAX_LEADS_PER_RUN,
+            "(%s). Rest folgt im nächsten Slot.",
+            total_candidates, effective_max,
+            "max_leads_override" if state.get("max_leads_override") else "LEAD_QUALIFYING_MAX_PER_RUN",
         )
 
     logger.info(

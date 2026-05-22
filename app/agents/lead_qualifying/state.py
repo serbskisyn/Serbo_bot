@@ -80,6 +80,9 @@ class LeadState(TypedDict, total=False):
     pre_qualify_label: str         # HIGH / LOW / SKIP
     pre_qualify_reason: str        # 1-sentence explanation
 
+    # ── Runtime overrides ────────────────────────────────────────────────────
+    max_leads_override: int        # if set, overrides LEAD_QUALIFYING_MAX_PER_RUN
+
     # ── Output ────────────────────────────────────────────────────────────────
     processed_leads: list[dict]    # finished lead result dicts, accumulated
     telegram_notified: bool

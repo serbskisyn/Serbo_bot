@@ -66,7 +66,7 @@ async def collect_filtered_result_node(state: LeadState) -> LeadState:
         quelle=str(lead.get("Quelle", "")),
         pre_qualify_label=state.get("pre_qualify_label", "SKIP"),
         pre_qualify_reason=state.get("pre_qualify_reason", ""),
-        classification="FILTERED",
+        classification="AGENCY" if state.get("pre_qualify_label") == "AGENCY" else "FILTERED",
         recommended_action=state.get("pre_qualify_reason", ""),
         telegram_notified="nein",
     )
@@ -293,7 +293,7 @@ async def write_results_node(state: LeadState) -> LeadState:
         elif not ADMIN_CHAT_ID:
             logger.warning("write_results: ADMIN_CHAT_ID nicht gesetzt — kein Telegram-Report")
         else:
-            # Only include qualified leads in Telegram — not FILTERED ones
+            # Include HOT/WARM/COLD and AGENCY leads in Telegram — skip FILTERED (spam/fake)
             qualified = [d for d in processed if d.get("classification") != "FILTERED"]
             filtered_count = len(processed) - len(qualified)
             if filtered_count:
@@ -302,16 +302,14 @@ async def write_results_node(state: LeadState) -> LeadState:
             lead_blocks = []
             for i, lead_dict in enumerate(qualified, 1):
                 name = f"{lead_dict.get('vorname', '')} {lead_dict.get('nachname', '')}".strip()
+                classification = lead_dict.get("classification", "")
+                action = lead_dict.get("recommended_action", "") or lead_dict.get("pre_qualify_reason", "")
                 block = TELEGRAM_LEAD_BLOCK_TEMPLATE.format(
                     idx=i,
                     name=name or "(unbekannt)",
                     firma=lead_dict.get("firma", ""),
-                    classification=lead_dict.get("classification", ""),
-                    shoop=lead_dict.get("business_fit_shoop", "—").split(" — ")[0],
-                    igraal=lead_dict.get("business_fit_igraal", "—").split(" — ")[0],
-                    mydealz=lead_dict.get("business_fit_mydealz", "—").split(" — ")[0],
-                    gutscheine=lead_dict.get("business_fit_gutscheine", "—").split(" — ")[0],
-                    action=lead_dict.get("recommended_action", ""),
+                    classification=classification,
+                    action=action,
                 )
                 lead_blocks.append(block)
 

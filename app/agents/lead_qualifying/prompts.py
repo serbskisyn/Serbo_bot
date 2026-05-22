@@ -32,13 +32,15 @@ Classify as:
 - HIGH: company name or domain clearly indicates E-Commerce, Retail, Travel, Finance,
         Telecommunications, Fashion, Consumer Goods — strong potential for ≥1 platform
 - LOW:  unclear signal, might fit — better to enrich and check more carefully
+- AGENCY: media/advertising agency acting on behalf of an advertiser (e.g. Publicis,
+          Dentsu, WPP, OMD, Mindshare, Havas, GroupM) — the actual advertiser is unknown
 - SKIP: clear non-fit: local service providers (plumber, doctor, dentist, lawyer,
         tax consultant), pure-B2B industry without consumer relevance,
         empty/invalid company data, obvious spam
 
 Reply ONLY with this JSON:
 {{
-  "label": "HIGH|LOW|SKIP",
+  "label": "HIGH|LOW|AGENCY|SKIP",
   "reason": "1-sentence English justification",
   "confidence": "high|medium|low"
 }}"""
@@ -179,5 +181,4 @@ https://docs.google.com/spreadsheets/d/{sheet_id}"""
 
 TELEGRAM_LEAD_BLOCK_TEMPLATE = """{idx}. *{name}* — {firma}
    Klassifikation: *{classification}*
-   Shoop: {shoop} | iGraal: {igraal} | mydealz: {mydealz} | Gutscheine: {gutscheine}
    Aktion: {action}"""

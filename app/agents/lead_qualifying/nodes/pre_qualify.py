@@ -29,6 +29,45 @@ _PRE_QUALIFY_MODEL = "openai/gpt-4o-mini"
 # ── Deterministische Fake-Lead-Detektoren ────────────────────────────────────
 # Ziel: Bots/Spam/Test-Einträge ohne LLM-Call rauskicken (spart Geld + Latenz)
 
+# ── Agency-Erkennung ─────────────────────────────────────────────────────────
+# Bekannte Media-/Werbeagenturen und deren E-Mail-Domains — diese Leads kommen
+# im Auftrag eines Advertisers, der Advertiser selbst ist aber unbekannt.
+
+_AGENCY_COMPANY_TOKENS = (
+    "publicis", "dentsu", "wpp ", "omnicom", "interpublic", "havas",
+    "ogilvy", "bbdo", "mccann", "grey ", "saatchi", "tbwa", "jwt ",
+    "leo burnett", "mindshare", "mediacom", "zenith media", "zenithoptimedia",
+    "starcom", "wavemaker", "carat ", "mediaedge", "cheil",
+    "razorfish", "digitas", "vccp", "iris worldwide",
+    "media agency", "advertising agency", "media group",
+    "publicisgroupe", "publicis groupe", "publicis media",
+    "dentsuaegis", "dentsu aegis",
+)
+
+_AGENCY_EMAIL_DOMAINS = (
+    "@publicisgroupe.com", "@publicismedia.com",
+    "@dentsuaegis.com", "@dentsu.com",
+    "@wpp.com", "@ogilvy.com", "@bbdo.com", "@mccann.com",
+    "@interpublic.com", "@havas.com", "@omnicom.com",
+    "@mindshareworld.com", "@mediacom.com", "@carat.com",
+    "@zenithmedia.com", "@wavemaker.com", "@starcom.com",
+    "@tbwa.com", "@saatchi.com",
+)
+
+
+def _deterministic_agency(firma: str, email: str) -> str | None:
+    """Returns reason string if company is clearly a media/advertising agency, else None."""
+    firma_low = firma.strip().lower()
+    email_low = email.strip().lower()
+    for token in _AGENCY_COMPANY_TOKENS:
+        if token in firma_low:
+            return f"'{firma}' is a media/advertising agency — actual advertiser not identified"
+    for domain in _AGENCY_EMAIL_DOMAINS:
+        if email_low.endswith(domain):
+            return f"Email domain '{domain}' belongs to a known media agency network"
+    return None
+
+
 _SPAM_EMAIL_PATTERNS = (
     "test@", "asdf", "foo@", "bar@", "noreply", "no-reply",
     "example.com", "tempmail", "mailinator", "yopmail", "guerrillamail",
@@ -160,7 +199,17 @@ async def pre_qualify_node(state: LeadState) -> LeadState:
 
     logger.info("pre_qualify: '%s %s' @ '%s'", vorname, nachname, firma)
 
-    # 1. Schneller deterministischer SKIP-Check
+    # 1a. Agentur-Erkennung (vor Spam-Check, da Agenturen gültige Daten haben)
+    agency_reason = _deterministic_agency(firma, email)
+    if agency_reason:
+        logger.info("pre_qualify: '%s' → AGENCY (deterministisch) | %s", firma, agency_reason)
+        return {
+            **state,
+            "pre_qualify_label": "AGENCY",
+            "pre_qualify_reason": agency_reason,
+        }
+
+    # 1b. Schneller deterministischer SKIP-Check
     auto_skip = _deterministic_skip(vorname, nachname, firma, email)
     if auto_skip:
         logger.info("pre_qualify: '%s' → SKIP (deterministisch) | %s", firma, auto_skip)
@@ -189,7 +238,7 @@ async def pre_qualify_node(state: LeadState) -> LeadState:
         if match:
             data = json.loads(match.group())
             raw_label = str(data.get("label", "LOW")).upper().strip()
-            label = raw_label if raw_label in ("HIGH", "LOW", "SKIP") else "LOW"
+            label = raw_label if raw_label in ("HIGH", "LOW", "SKIP", "AGENCY") else "LOW"
             reason = str(data.get("reason", "")).strip()
         else:
             logger.warning("pre_qualify: kein JSON in Antwort für '%s'", firma)
@@ -214,8 +263,8 @@ def route_after_pre_qualify(state: LeadState) -> str:
     HIGH / LOW → enrich_contact (full pipeline)
     """
     label = state.get("pre_qualify_label", "LOW")
-    if label == "SKIP":
-        logger.info("pre_qualify router: SKIP → collect_filtered_result")
+    if label in ("SKIP", "AGENCY"):
+        logger.info("pre_qualify router: %s → collect_filtered_result", label)
         return "collect_filtered_result"
     logger.info("pre_qualify router: %s → enrich_contact", label)
     return "enrich_contact"

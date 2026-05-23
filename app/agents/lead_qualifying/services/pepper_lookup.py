@@ -453,23 +453,52 @@ def _fmt_country_line(iso: str, pos: int, neu: int, neg: int, mixed: int, total:
     return f"{emoji} {iso.upper()}: {total}m ({pos_pct}%↑ {neg_pct}%↓ {neu_pct}%~)"
 
 
+def _sentiment_label(pos: int, neg: int, total: int) -> str:
+    """Short dominant-sentiment label for summary lines."""
+    if total <= 0:
+        return "no data"
+    pos_pct = pos / total
+    neg_pct = neg / total
+    if pos_pct >= 0.55:
+        return f"mostly positive ({pos_pct*100:.0f}%↑)"
+    if neg_pct >= 0.55:
+        return f"mostly negative ({neg_pct*100:.0f}%↓)"
+    if pos_pct >= 0.40:
+        return f"leaning positive ({pos_pct*100:.0f}%↑)"
+    if neg_pct >= 0.40:
+        return f"leaning negative ({neg_pct*100:.0f}%↓)"
+    return "mixed"
+
+
 def format_country_sentiment(by_brand: dict, country_iso: str) -> str:
-    """RAG-compact sentiment line for a single target country."""
+    """RAG-compact domestic target sentiment: summary header + detail line."""
     agg = _aggregate_country(by_brand, country_iso)
     if not agg:
         return "—"
-    return _fmt_country_line(
+    total = agg["total"]
+    pos   = agg["pos"]
+    neg   = agg["neg"]
+    deals = agg.get("deals", 0)
+    n_brands = len([b for b in (agg.get("brands") or []) if b])
+
+    label = _sentiment_label(pos, neg, total)
+    summary_parts = [f"{total:,}m — {label}"]
+    if n_brands > 1:
+        summary_parts.append(f"{n_brands} brands")
+    if deals:
+        summary_parts.append(f"{deals:,} deals")
+    summary = "Domestic · " + " · ".join(summary_parts)
+
+    detail = _fmt_country_line(
         country_iso,
         agg["pos"], agg["neu"], agg["neg"], agg["mixed"], agg["total"],
     )
+    return f"{summary}\n{detail}"
 
 
 def format_cross_country_summary(by_brand: dict, exclude_iso: str | None = None,
                                   top_n: int = 4) -> str:
-    """RAG-compact matrix of all countries with Pepper activity, sorted by total descending.
-
-    One line per country: 🔴 DE: 3106m (10%↑ 70%↓ 20%~)
-    """
+    """RAG-compact cross-country matrix: summary header + one line per country."""
     if not by_brand:
         return "—"
     per_country: dict[str, dict] = {}
@@ -489,5 +518,18 @@ def format_cross_country_summary(by_brand: dict, exclude_iso: str | None = None,
     )
     if not rows:
         return "—"
-    lines = [_fmt_country_line(iso, p, nu, ng, mx, t) for iso, p, nu, ng, mx, t in rows]
+
+    grand_total = sum(r[5] for r in rows)
+    grand_pos   = sum(r[1] for r in rows)
+    grand_neg   = sum(r[3] for r in rows)
+    n_markets   = len(rows)
+    top_market  = rows[0][0].upper()
+
+    label = _sentiment_label(grand_pos, grand_neg, grand_total)
+    summary = (
+        f"Cross-country · {grand_total:,}m across {n_markets} market{'s' if n_markets != 1 else ''}"
+        f" — {label} · top: {top_market}"
+    )
+
+    lines = [summary] + [_fmt_country_line(iso, p, nu, ng, mx, t) for iso, p, nu, ng, mx, t in rows]
     return "\n".join(lines)

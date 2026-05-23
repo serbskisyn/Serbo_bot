@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+_BERLIN = ZoneInfo("Europe/Berlin")
 
 from app.agents.lead_qualifying.schemas import QualifiedLeadRow
 from app.agents.lead_qualifying.services.sheets import (
@@ -58,7 +61,7 @@ async def collect_filtered_result_node(state: LeadState) -> LeadState:
 
     row = QualifiedLeadRow(
         lead_key=str(lead.get("_lead_key", "")),
-        processed_at=datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        processed_at=datetime.now(tz=_BERLIN).strftime("%Y-%m-%dT%H:%M:%S"),
         vorname=str(lead.get("Vorname", "")),
         nachname=str(lead.get("Nachname", "")),
         firma=str(lead.get("Firma", "")),
@@ -95,7 +98,7 @@ async def collect_lead_result_node(state: LeadState) -> LeadState:
 
     row = QualifiedLeadRow(
         lead_key=str(lead.get("_lead_key", "")),
-        processed_at=datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        processed_at=datetime.now(tz=_BERLIN).strftime("%Y-%m-%dT%H:%M:%S"),
         vorname=str(lead.get("Vorname", "")),
         nachname=str(lead.get("Nachname", "")),
         firma=str(lead.get("Firma", "")),
@@ -224,7 +227,7 @@ async def write_results_node(state: LeadState) -> LeadState:
     except Exception as exc:
         logger.warning("write_results: Validierungsspalten konnten nicht angelegt werden: %s", exc)
 
-    today_iso = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+    today_iso = datetime.now(tz=_BERLIN).strftime("%Y-%m-%d")
     val_errors = 0
     val_written = 0
     for lead_dict in processed:

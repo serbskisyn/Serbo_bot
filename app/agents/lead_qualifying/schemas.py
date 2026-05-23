@@ -39,7 +39,7 @@ class QualifiedLeadRow(BaseModel):
     model_config = {"extra": "allow"}
 
     lead_key: str
-    processed_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat(timespec="seconds") + "Z")
+    processed_at: str = Field(default_factory=lambda: datetime.now(tz=__import__("zoneinfo").ZoneInfo("Europe/Berlin")).strftime("%Y-%m-%dT%H:%M:%S"))
 
     # Identity
     vorname: str = ""

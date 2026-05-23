@@ -25,22 +25,15 @@ QUALIFIED_TAB_NAME = "Qualified Leads"
 QUALIFIED_COLUMNS = QualifiedLeadRow.COLUMNS
 
 # Validation columns appended to the Inbound tab (header names).
-# Neue Pipeline (2026-05-20 Refactor): Brand-Discovery + Multi-Country-Pepper.
-# Bestehende Spalten werden beibehalten, neue ergänzt.
 VALIDATION_COLUMNS: list[str] = [
-    "Validation_Company_Employees",          # Employee-count estimate
-    "Validation_Brands",                    # eCommerce brands (comma-sep)
-    "Validation_Company_Facts",             # Revenue, employees, HQ, model
-    "Validation_Contact",                   # Title, authority, role-match, LinkedIn
-    "Validation_Sentiment_Target",          # Pepper RAG-compact for target country
-    "Validation_Sentiment_Cross",           # All countries with Pepper activity
-    "Validation_Sentiment",                 # Legacy: overall Pepper summary
-    "Validation_Commercial_Intel",          # Marketing spend, perf-mktg, affiliate signals
-    "Validation_Priority_Tier",             # LOW / MEDIUM / HIGH / STRATEGIC
-    "Validation_Score",                     # Score 0-100
-    "Validation_Classification",            # HOT / WARM / COLD / FILTERED
-    "Validation_Note",                      # Recommended action + breakdown + signals
-    "Validation_Date",                      # ISO date, also idempotency marker
+    "Validation_Brands",          # eCommerce brand names (comma-sep)
+    "Validation_Pepper",          # Target + cross-country Pepper sentiment (merged)
+    "Validation_Context",         # Company facts + contact + commercial intel (merged)
+    "Validation_Score",           # Score 0-100
+    "Validation_Classification",  # HOT / WARM / COLD / FILTERED / AGENCY
+    "Validation_Priority_Tier",   # LOW / MEDIUM / HIGH / STRATEGIC
+    "Validation_Note",            # Recommended action + score breakdown + signals
+    "Validation_Date",            # ISO date, idempotency marker
 ]
 
 

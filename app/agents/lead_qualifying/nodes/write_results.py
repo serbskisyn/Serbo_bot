@@ -235,44 +235,47 @@ async def write_results_node(state: LeadState) -> LeadState:
         if row_idx < 2:
             continue
 
-        size              = str(lead_dict.get("_employee_count", "")).strip() or "—"
-        brands            = str(lead_dict.get("_brands", "")).strip() or "—"
-        company_facts     = str(lead_dict.get("_firmenfakten", "")).strip() or "—"
-        contact_info      = str(lead_dict.get("_contact_info", "")).strip() or "—"
-        sentiment_target  = str(lead_dict.get("_sentiment_target", "")).strip() or "—"
-        sentiment_cross   = str(lead_dict.get("_sentiment_cross", "")).strip() or "—"
-        sentiment_legacy  = str(lead_dict.get("_pepper_summary", "")).strip() or "—"
-        commercial_intel  = str(lead_dict.get("_commercial_intel", "")).strip() or "—"
-        priority_tier     = str(lead_dict.get("_priority_tier", "")).strip() or "—"
-        score             = lead_dict.get("score_total", 0)
-        classification    = lead_dict.get("classification", "")
+        brands         = str(lead_dict.get("_brands", "")).strip() or "—"
+        priority_tier  = str(lead_dict.get("_priority_tier", "")).strip() or "—"
+        score          = lead_dict.get("score_total", 0)
+        classification = lead_dict.get("classification", "")
 
-        # Note: for FILTERED leads use the skip-reason, otherwise action + breakdown + override + signals
-        if classification == "FILTERED":
+        # Merge target + cross-country Pepper sentiment into one cell
+        t = str(lead_dict.get("_sentiment_target", "")).strip()
+        x = str(lead_dict.get("_sentiment_cross", "")).strip()
+        pepper_parts = [p for p in [t, x] if p and p != "—"]
+        pepper = "\n".join(pepper_parts) or "—"
+
+        # Merge company facts + contact + commercial intel into one context cell
+        ctx_parts = [
+            p for p in [
+                str(lead_dict.get("_firmenfakten", "")).strip(),
+                str(lead_dict.get("_contact_info", "")).strip(),
+                str(lead_dict.get("_commercial_intel", "")).strip(),
+            ] if p and p not in ("—", "")
+        ]
+        context = " | ".join(ctx_parts) or "—"
+
+        # Note: skip-reason for FILTERED, else action + override + breakdown + signals
+        if classification in ("FILTERED", "AGENCY"):
             note = lead_dict.get("pre_qualify_reason", "")
         else:
             action   = str(lead_dict.get("recommended_action", "")).strip()
             override = str(lead_dict.get("_score_override", "")).strip()
             brk      = str(lead_dict.get("_score_breakdown", "")).strip()
             signals  = str(lead_dict.get("_sales_signals", "")).strip()
-            parts = [p for p in [action, override, brk, signals] if p]
-            note = " | ".join(parts)
+            note = " | ".join(p for p in [action, override, brk, signals] if p)
 
         try:
             await write_validation_for_row(row_idx, {
-                "Validation_Company_Employees":  size,
-                "Validation_Brands":            brands[:500],
-                "Validation_Company_Facts":     company_facts[:500],
-                "Validation_Contact":           contact_info[:500],
-                "Validation_Sentiment_Target":  sentiment_target[:400],
-                "Validation_Sentiment_Cross":   sentiment_cross[:400],
-                "Validation_Sentiment":         sentiment_legacy[:300],
-                "Validation_Commercial_Intel":  commercial_intel[:500],
-                "Validation_Priority_Tier":     priority_tier[:100],
-                "Validation_Score":             f"{score}/100" if classification != "FILTERED" else "—",
-                "Validation_Classification":    classification,
-                "Validation_Note":              note[:500],
-                "Validation_Date":              today_iso,
+                "Validation_Brands":         brands[:500],
+                "Validation_Pepper":         pepper[:800],
+                "Validation_Context":        context[:800],
+                "Validation_Score":          f"{score}/100" if classification not in ("FILTERED", "AGENCY") else "—",
+                "Validation_Classification": classification,
+                "Validation_Priority_Tier":  priority_tier[:100],
+                "Validation_Note":           note[:600],
+                "Validation_Date":           today_iso,
             })
             val_written += 1
         except Exception as exc:

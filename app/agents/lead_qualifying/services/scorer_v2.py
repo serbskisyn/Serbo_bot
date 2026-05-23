@@ -9,6 +9,7 @@ Score composition (total 100):
 
 Override rules:
   HARD: No Pepper signal at all (target + cross both 0) → max COLD (cap 39)
+  Micro-signal: ≤20 total mentions AND 0 positive across all brands → cap at COLD
   Auto-HOT: target_total > 2000 AND pos_rate ≥ 0.55 → forces HOT (min 70)
   Auto-COLD: B2B/Manufacturer AND 0 brands AND 0 mentions
 
@@ -82,7 +83,7 @@ def _target_volume_score(target_total: int) -> int:
     if target_total >= 500: return 20
     if target_total >= 100: return 15
     if target_total >= 20:  return 10
-    if target_total >= 1:   return 5
+    if target_total >= 5:   return 5   # < 5 is noise floor
     return 0
 
 
@@ -240,6 +241,21 @@ def compute_score(state: dict) -> dict:
         override = "No Pepper signal in target or cross-country — capped at COLD"
         if score > 39:
             score = 39
+    # Micro-signal: ≤20 total mentions + zero positive across all brands/countries → noise
+    elif total_pepper <= 20:
+        total_all_pos = sum(
+            int(c.get("pos") or 0)
+            for stats in by_brand.values()
+            for c in (stats.get("by_country") or {}).values()
+        )
+        if total_all_pos == 0:
+            classification = "COLD"
+            override = f"Micro Pepper signal ({total_pepper}m, 0 positive) — no actionable community presence, capped at COLD"
+            if score > 39:
+                score = 39
+        elif score >= 70:   classification = "HOT"
+        elif score >= 40:   classification = "WARM"
+        else:               classification = "COLD"
     # Auto-HOT: target >2000 mentions AND pos_rate ≥ 55%
     elif target_total > 2000 and target_pos_rate is not None and target_pos_rate >= 0.55:
         classification = "HOT"

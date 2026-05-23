@@ -86,40 +86,87 @@ Memory extraction --> reply to Telegram
 Inbound Google Sheet (new rows)
   |
   v
-pre_qualify (fast LLM filter -- HIGH / LOW / SKIP)
-  |-- SKIP --> FILTERED (written to sheet, no Telegram)
+pre_qualify  (fast LLM filter — HIGH / LOW / AGENCY / SKIP)
+  |-- SKIP / AGENCY --> collect_filtered_result (written to sheet, no Telegram)
   |
   v (HIGH / LOW)
-discover_brands (Perplexity: find eCommerce brands)
+discover_brands  (Perplexity: find eCommerce brands under the company)
   |
   v
-validate_company (Perplexity: validate brands + revenue / employees / HQ)
+validate_company  (Perplexity: validate brands + revenue / employees / HQ / model)
   |
   v
-enrich_contact_v2 (Perplexity: title, authority, role-match)
+enrich_commercial_intelligence  (Perplexity: marketing spend, affiliate networks,
+                                  perf-mktg signals, promo intensity)
+  |
+  v
+enrich_contact_v2  (Perplexity: title, seniority, authority, role-match, LinkedIn)
   |
   v
 [Hard-Skip Check]
   |-- B2B / no eCommerce signal --> skip_pepper --> qualify_business_fit
   |
   v (eCommerce relevant)
-pepper_multi_country (Pepper Intelligence MCP -- sentiment per brand, multi-country)
+pepper_multi_country  (Pepper Intelligence MCP — RAG-compact sentiment per brand,
+                        domestic target country + cross-country)
   |
   v
-qualify_business_fit (deterministic score 0-100 + LLM action recommendation)
+qualify_business_fit  (deterministic score 0-100 + LLM priority tier + action)
   |
   v
 collect_result
   |
   v
-write_results --> Google Sheet (Validation columns) + Telegram summary
+write_results  --> Google Sheet (8 Validation columns) + Telegram summary
 ```
 
-**Hard-skip conditions** (Pepper is bypassed when ANY is true):
-- `business_model` == `"B2B"` — pure B2B, no consumer deal-platform presence
-- `validated_brands` is empty AND `contact_role_match` is `False` AND `contact_authority` == `"other"`
+**Pre-qualify labels:**
+- `HIGH` — clear eCommerce/Retail/Travel/Finance signal → full enrichment
+- `LOW` — unclear, enriched anyway for safety
+- `AGENCY` — media/ad agency (Publicis, Dentsu, WPP etc.) → written as AGENCY, skips enrichment
+- `SKIP` → written as FILTERED, no Telegram notification
 
-When skipped, `pepper_summary` is set to `"Skipped (B2B)"` or `"Skipped (no eCommerce signal)"`.
+**Hard-skip conditions** (Pepper lookup bypassed when ANY is true):
+- `business_model == "B2B"` — pure B2B, no consumer deal-platform presence
+- `validated_brands` is empty AND `contact_role_match` is `False` AND `contact_authority == "other"`
+
+**Scoring (scorer_v2.py) — deterministic, 0-100:**
+
+| Component | Max | Key inputs |
+| :--- | ---: | :--- |
+| Business model | 12 | B2C/D2C/Marketplace/B2B |
+| Company size | 10 | Employee count + revenue |
+| Brand count | 8 | Validated eCommerce brands |
+| Pepper target volume | 20 | Mentions in target country (noise floor: < 5 = 0 pts) |
+| Pepper sentiment | 10 | Positive rate in target country |
+| Pepper cross-country | 10 | Markets with ≥ 50 mentions |
+| Contact seniority | 8 | Senior / Mid / Junior |
+| Contact authority | 4 | Decision-maker / influencer |
+| LinkedIn found | 2 | URL present |
+| Role match | 1 | Marketing / eCommerce role |
+| Market overlap | 8 | Primary markets ∩ Atolls markets |
+| Sales signals | 7 | Keyword density in signals text |
+
+**Override rules (applied after raw score):**
+- `total_pepper == 0` → cap at COLD (≤ 39)
+- `total_pepper ≤ 20 AND 0 positive mentions` → cap at COLD (micro-signal noise)
+- `target > 2000 mentions AND pos_rate ≥ 55%` → force HOT (≥ 70)
+- `B2B/Manufacturer AND 0 brands AND 0 pepper` → force COLD
+
+**Classification:** HOT ≥ 70 · WARM 40–69 · COLD < 40
+
+**Google Sheet — Validation columns (8):**
+
+| Column | Content |
+| :--- | :--- |
+| `Validation_Brands` | Validated eCommerce brand names |
+| `Validation_Pepper` | Target + cross-country Pepper sentiment (RAG-compact) |
+| `Validation_Context` | Company facts + contact details + commercial intel |
+| `Validation_Score` | Score 0-100 |
+| `Validation_Classification` | HOT / WARM / COLD / FILTERED / AGENCY |
+| `Validation_Priority_Tier` | LOW / MEDIUM / HIGH / STRATEGIC |
+| `Validation_Note` | Recommended action + score breakdown + sales signals |
+| `Validation_Date` | ISO date — also used as idempotency marker |
 
 **Triggering manually:**
 ```

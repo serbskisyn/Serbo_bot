@@ -257,7 +257,7 @@ async def write_results_node(state: LeadState) -> LeadState:
 
         try:
             await write_validation_for_row(row_idx, {
-                "Validation_Size":              size,
+                "Validation_Company_Employees":  size,
                 "Validation_Brands":            brands[:500],
                 "Validation_Company_Facts":     company_facts[:500],
                 "Validation_Contact":           contact_info[:500],

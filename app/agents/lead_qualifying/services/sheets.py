@@ -28,7 +28,7 @@ QUALIFIED_COLUMNS = QualifiedLeadRow.COLUMNS
 # Neue Pipeline (2026-05-20 Refactor): Brand-Discovery + Multi-Country-Pepper.
 # Bestehende Spalten werden beibehalten, neue ergänzt.
 VALIDATION_COLUMNS: list[str] = [
-    "Validation_Size",                      # Employee-count estimate
+    "Validation_Company_Employees",          # Employee-count estimate
     "Validation_Brands",                    # eCommerce brands (comma-sep)
     "Validation_Company_Facts",             # Revenue, employees, HQ, model
     "Validation_Contact",                   # Title, authority, role-match, LinkedIn

@@ -65,7 +65,7 @@ class QualifiedLeadRow(BaseModel):
     business_fit_mydealz: str = ""
     business_fit_gutscheine: str = ""
     score_total: int = 0
-    classification: Literal["HOT", "WARM", "COLD", "FILTERED", ""] = ""
+    classification: Literal["HOT", "WARM", "COLD", "FILTERED", "AGENCY", ""] = ""
     recommended_action: str = ""
 
     # Bookkeeping

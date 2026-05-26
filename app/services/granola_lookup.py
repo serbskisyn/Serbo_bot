@@ -30,35 +30,40 @@ from app.services.mcp_runner import run_mcp_subprocess
 
 logger = logging.getLogger(__name__)
 
-_TIMEOUT_SEC = 180
+_TIMEOUT_SEC = 240
+_MAX_ATTEMPTS = 2
 
 
-_PROMPT_TEMPLATE = """Hi! I'm running an inbox-aware briefing bot and need a structured digest of recent meetings from Granola.
+_PROMPT_TEMPLATE = """You are extracting meeting commitments for a personal-productivity bot.
 
-Could you please call mcp__claude_ai_Granola__list_meetings (or query_granola_meetings) to fetch the meetings from the last {lookback_hours} hours, then for each meeting fetch the transcript via mcp__claude_ai_Granola__get_meeting_transcript.
+STEP 1 — MUST: call `mcp__claude_ai_Granola__list_meetings` to enumerate ALL meetings from the last {lookback_hours} hours. Do NOT skip this call. Do NOT answer from memory.
 
-For each meeting, extract:
-  • commitments      — concrete action items the user appeared to commit to (verbs: send, prepare, share, follow up, schedule, draft, review, decide…)
-  • decisions        — explicit decisions reached during the meeting
-  • mentioned_people — distinct names of people mentioned (not the user)
+STEP 2 — For each meeting returned, call `mcp__claude_ai_Granola__get_meeting_transcript` to fetch its notes/transcript.
 
-Reply with a single JSON object — a Python script will json.loads() the answer, so no surrounding prose / no markdown fences:
+STEP 3 — For each meeting build an entry with:
+  • title              — verbatim
+  • date               — ISO YYYY-MM-DD
+  • commitments        — concrete action items the user committed to (verbs: send, prepare, share, follow up, schedule, draft, review). Max 5, each ≤ 80 chars, imperative voice.
+  • decisions          — explicit decisions made in the meeting. Max 5.
+  • mentioned_people   — distinct names of people other than the user. Max 5.
+
+STEP 4 — Reply with ONLY this JSON object (no prose, no markdown fences, no commentary):
 
 {{
   "meetings": [
     {{
-      "title":  "<meeting title>",
-      "date":   "<ISO date YYYY-MM-DD>",
-      "commitments":      ["<short imperative phrase>", ...],
-      "decisions":        ["<short phrase>", ...],
-      "mentioned_people": ["<name>", ...]
+      "title":  "...",
+      "date":   "YYYY-MM-DD",
+      "commitments":      ["..."],
+      "decisions":        ["..."],
+      "mentioned_people": ["..."]
     }}
   ]
 }}
 
-If the Granola tool returns no meetings, reply: {{"meetings": []}}
-If a meeting has no commitments, use an empty list.
-Limit each list to 5 items max per meeting. Keep each phrase under 80 chars."""
+If `list_meetings` returns zero meetings for the window, reply with the literal: {{"meetings": []}}
+If the MCP tool errors or is unavailable, reply with: {{"meetings": [], "error": "<short reason>"}}
+A Python script will json.loads() your reply — surrounding text breaks it."""
 
 
 def _extract_json(raw: str) -> dict | None:
@@ -85,28 +90,67 @@ def _extract_json(raw: str) -> dict | None:
 _EMPTY_RESULT: dict = {"meetings": [], "error": None}
 
 
-async def get_recent_meetings(lookback_hours: int = 30) -> dict:
-    """Query Granola via the MCP subprocess. Always returns a dict.
-
-    Schema: {"meetings": [{"title", "date", "commitments", "decisions", "mentioned_people"}], "error": str|None}.
-    """
+async def _one_attempt(lookback_hours: int, attempt: int) -> tuple[dict | None, str]:
+    """Single subprocess call. Returns (parsed_payload or None, error_marker)."""
     prompt = _PROMPT_TEMPLATE.format(lookback_hours=int(lookback_hours))
-    logger.info("granola_lookup: starting (lookback=%dh)", lookback_hours)
-
     try:
-        raw = await run_mcp_subprocess(prompt, timeout=_TIMEOUT_SEC, label="granola")
+        raw = await run_mcp_subprocess(prompt, timeout=_TIMEOUT_SEC, label=f"granola#{attempt}")
     except Exception as exc:
-        logger.warning("granola_lookup: subprocess-Exception: %s", exc)
-        return {**_EMPTY_RESULT, "error": f"subprocess: {exc}"}
+        return None, f"subprocess: {exc}"
 
     if not raw or raw.startswith("❌") or raw.startswith("⏳"):
-        logger.warning("granola_lookup: subprocess returned error marker: %s", (raw or "")[:200])
-        return {**_EMPTY_RESULT, "error": (raw or "no output")[:300]}
+        return None, f"runner-error: {(raw or 'no output')[:200]}"
 
     parsed = _extract_json(raw)
     if parsed is None:
-        logger.warning("granola_lookup: JSON parse failed; raw=%r", raw[:300])
-        return {**_EMPTY_RESULT, "error": "JSON parse failed"}
+        return None, f"json-parse-failed: {raw[:200]!r}"
+
+    return parsed, ""
+
+
+async def get_recent_meetings(lookback_hours: int = 30) -> dict:
+    """Query Granola via the MCP subprocess. Always returns a dict.
+
+    Retries up to _MAX_ATTEMPTS times — Pi-Claude cold-starts sometimes
+    skip the MCP tool entirely and reply with an empty list. A second
+    attempt usually succeeds because the subprocess pool is warm.
+
+    Schema: {"meetings": [{"title", "date", "commitments", "decisions", "mentioned_people"}], "error": str|None}.
+    """
+    logger.info("granola_lookup: starting (lookback=%dh)", lookback_hours)
+
+    parsed: dict | None = None
+    last_error = ""
+
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        parsed, err = await _one_attempt(lookback_hours, attempt)
+        if parsed is None:
+            last_error = err
+            logger.warning("granola_lookup: attempt %d failed: %s", attempt, err)
+            continue
+
+        # If we got a parseable payload with meetings — success
+        meetings_in = parsed.get("meetings") or []
+        if meetings_in:
+            last_error = ""
+            break
+
+        # Empty list with an explicit error → treat as failure for retry
+        if parsed.get("error"):
+            last_error = f"mcp-error: {parsed['error']}"
+            logger.warning("granola_lookup: attempt %d MCP-error: %s", attempt, parsed["error"])
+            continue
+
+        # Empty meetings without error — could be Cold-Start swallowing the
+        # tool call OR genuinely no meetings. Retry once to disambiguate.
+        if attempt < _MAX_ATTEMPTS:
+            logger.info("granola_lookup: attempt %d empty — retrying", attempt)
+            continue
+        last_error = ""  # final attempt also empty → genuinely no meetings
+        break
+
+    if parsed is None:
+        return {**_EMPTY_RESULT, "error": last_error or "unknown failure"}
 
     raw_meetings = parsed.get("meetings") or []
     meetings = []
@@ -125,4 +169,4 @@ async def get_recent_meetings(lookback_hours: int = 30) -> dict:
         "granola_lookup: %d meetings, %d total commitments",
         len(meetings), sum(len(m["commitments"]) for m in meetings),
     )
-    return {"meetings": meetings, "error": None}
+    return {"meetings": meetings, "error": last_error or None}

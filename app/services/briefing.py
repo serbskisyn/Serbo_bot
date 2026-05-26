@@ -129,8 +129,8 @@ def _relationship_alerts(user_id: int, threshold_days: int) -> list[tuple[str, i
     return alerts[:5]
 
 
-async def _yesterday_decisions(user_id: int) -> list[str]:
-    """Granola-sourced decisions added in the last ~36h."""
+async def _yesterday_decisions_with_notes(user_id: int) -> list[tuple[str, str]]:
+    """Granola-sourced decisions added in the last ~36h, as (text, notes) tuples."""
     await todos_svc.init_db()
     cutoff = (datetime.now(tz=timezone.utc) - timedelta(hours=36)).strftime("%Y-%m-%dT%H:%M:%SZ")
     import aiosqlite
@@ -145,7 +145,7 @@ async def _yesterday_decisions(user_id: int) -> list[str]:
             (user_id, cutoff),
         ) as cur:
             rows = await cur.fetchall()
-    return [r[0] for r in rows][:5]
+    return [(r[0], r[1] or "") for r in rows][:8]
 
 
 async def assemble_briefing(user_id: int) -> str:
@@ -183,18 +183,32 @@ async def assemble_briefing(user_id: int) -> str:
             mentions = int(t.get("mention_count") or 1)
             heat = " 🔥" if mentions >= 3 else ""
             todo_lines.append(f"• {id_s} {t['text']}{due_part}{badge}{heat}")
+            ctx = todos_svc.parse_meeting_context(t.get("notes"))
+            if ctx:
+                todo_lines.append(f"   ↳ _Meeting: {ctx[0]}_")
         todos_block = "\n".join(todo_lines)
     else:
         todos_block = "\n✅ *Keine offenen Todos — Glückwunsch!*"
 
-    # Yesterday's decisions
-    decisions = await _yesterday_decisions(user_id)
-    if decisions:
+    # Yesterday's decisions — grouped by their source meeting
+    decisions_rows = await _yesterday_decisions_with_notes(user_id)
+    if decisions_rows:
+        groups: dict[str, list[str]] = {}
+        ungrouped: list[str] = []
+        for text, notes in decisions_rows:
+            clean = text.split("Entscheidung:", 1)[-1].strip()
+            ctx = todos_svc.parse_meeting_context(notes)
+            if ctx:
+                groups.setdefault(ctx[0], []).append(clean)
+            else:
+                ungrouped.append(clean)
         dec_lines = ["\n💡 *Aus gestrigen Meetings*"]
-        for d in decisions:
-            # Strip the "Entscheidung: " prefix for cleaner display
-            text = d.split("Entscheidung:", 1)[-1].strip()
-            dec_lines.append(f"• {text}")
+        for meeting_title, items in groups.items():
+            dec_lines.append(f"\n*{meeting_title}*")
+            for item in items:
+                dec_lines.append(f"• {item}")
+        for item in ungrouped:
+            dec_lines.append(f"• {item}")
         decisions_block = "\n".join(dec_lines)
     else:
         decisions_block = ""

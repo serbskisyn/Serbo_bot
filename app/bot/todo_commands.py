@@ -24,6 +24,20 @@ from telegram.ext import ContextTypes
 from app.bot.whitelist import require_whitelist
 from app.services import todos as todos_svc
 
+
+def _meeting_line(notes: str | None) -> str:
+    """Render the meeting-context sub-line for a granola todo, or ''."""
+    ctx = todos_svc.parse_meeting_context(notes)
+    if not ctx:
+        return ""
+    title, iso = ctx
+    try:
+        d = date.fromisoformat(iso)
+        date_str = d.strftime("%d.%m.")
+    except Exception:
+        date_str = iso
+    return f"\n   ↳ _Meeting: {title} ({date_str})_"
+
 logger = logging.getLogger(__name__)
 
 
@@ -75,7 +89,8 @@ def _fmt_todo_row(t: dict) -> str:
         src_badge = " · 🗓"
     elif source == "chat":
         src_badge = " · 💬"
-    return f"*#{t['id']}* {t['text']}" + (f" — {due}" if due else "") + badge + src_badge
+    head = f"*#{t['id']}* {t['text']}" + (f" — {due}" if due else "") + badge + src_badge
+    return head + _meeting_line(t.get("notes"))
 
 
 @require_whitelist

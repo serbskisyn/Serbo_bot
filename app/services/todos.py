@@ -303,6 +303,26 @@ async def _semantic_cleanup(user_id: int, todo_id: int) -> None:
         logger.debug("semantic cleanup skipped for #%s: %s", todo_id, exc)
 
 
+# ── Notes-parsing helpers (used by all renderers) ────────────────────────────
+
+
+_MEETING_NOTE_RE = re.compile(r"aus Meeting:\s*(.+?)\s*\((\d{4}-\d{2}-\d{2})\)\s*$")
+
+
+def parse_meeting_context(notes: str | None) -> tuple[str, str] | None:
+    """If `notes` is in 'aus Meeting: <title> (YYYY-MM-DD)' form, return (title, iso).
+
+    Used by todo_commands, briefing, and evening_reflection to render the
+    meeting-of-origin underneath granola-sourced todos.
+    """
+    if not notes:
+        return None
+    m = _MEETING_NOTE_RE.match(notes.strip())
+    if not m:
+        return None
+    return m.group(1).strip(), m.group(2)
+
+
 async def snooze_todo(user_id: int, todo_id: int, days: int) -> str | None:
     """Snooze for N days. Returns the new snoozed_until ISO date or None."""
     await init_db()

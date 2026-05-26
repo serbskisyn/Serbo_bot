@@ -56,7 +56,7 @@ async def _decisions_logged_today(user_id: int) -> list[dict]:
     async with aiosqlite.connect(todos_svc.TODOS_DB) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            """SELECT id, text
+            """SELECT id, text, notes
                FROM todos
                WHERE user_id = ? AND source = 'granola'
                  AND text LIKE 'Entscheidung:%'
@@ -99,12 +99,27 @@ async def assemble_evening_reflection(user_id: int) -> str:
         for t in open_today[:6]:
             badge = _source_badge(t.get("source", ""))
             lines.append(f"• #{t['id']} {t['text']}{badge}")
+            ctx = todos_svc.parse_meeting_context(t.get("notes"))
+            if ctx:
+                lines.append(f"   ↳ _Meeting: {ctx[0]}_")
 
     if decisions:
         lines.append(f"\n💡 *Entscheidungen geloggt ({len(decisions)})*")
-        for d in decisions[:5]:
-            text = d["text"].split("Entscheidung:", 1)[-1].strip()
-            lines.append(f"• {text}")
+        groups: dict[str, list[str]] = {}
+        ungrouped: list[str] = []
+        for d in decisions[:8]:
+            clean = d["text"].split("Entscheidung:", 1)[-1].strip()
+            ctx = todos_svc.parse_meeting_context(d.get("notes"))
+            if ctx:
+                groups.setdefault(ctx[0], []).append(clean)
+            else:
+                ungrouped.append(clean)
+        for meeting_title, items in groups.items():
+            lines.append(f"\n*{meeting_title}*")
+            for item in items:
+                lines.append(f"• {item}")
+        for item in ungrouped:
+            lines.append(f"• {item}")
 
     lines.append(
         "\n_Hast du noch was geschafft, das nicht in der Liste war?_\n"

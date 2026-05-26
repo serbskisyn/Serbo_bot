@@ -52,13 +52,13 @@ STEP 3 — For each meeting build an entry with:
                             • the user states it in first person ("I will", "I'll send", "let me handle this")
                          EXCLUDE anything another participant said they would do.
                          If a meeting has NO {user_name}-owned action items → return an empty list.
-                         Max 5, each ≤ 80 chars, imperative voice.
+                         Max 15, each ≤ 80 chars, imperative voice. Order: most concrete / time-sensitive first.
 
   • decisions          — explicit decisions made in the meeting that affect {user_name}'s scope of work.
                          Skip purely-others'-domain decisions.
-                         Max 5, each ≤ 100 chars.
+                         Max 15, each ≤ 100 chars. Order: most consequential first.
 
-  • mentioned_people   — distinct names of OTHER people in the meeting (not {user_name}). Max 5.
+  • mentioned_people   — distinct names of OTHER people in the meeting (not {user_name}). Max 10.
 
 STEP 4 — Reply with ONLY this JSON object (no prose, no markdown fences, no commentary):
 
@@ -183,9 +183,9 @@ async def get_recent_meetings(lookback_hours: int = 30, user_name: str = "") -> 
         meetings.append({
             "title":            str(m.get("title") or "").strip(),
             "date":             str(m.get("date") or "").strip(),
-            "commitments":      [str(c).strip() for c in (m.get("commitments") or []) if str(c).strip()][:5],
-            "decisions":        [str(d).strip() for d in (m.get("decisions") or []) if str(d).strip()][:5],
-            "mentioned_people": [str(p).strip() for p in (m.get("mentioned_people") or []) if str(p).strip()][:5],
+            "commitments":      [str(c).strip() for c in (m.get("commitments") or []) if str(c).strip()][:15],
+            "decisions":        [str(d).strip() for d in (m.get("decisions") or []) if str(d).strip()][:15],
+            "mentioned_people": [str(p).strip() for p in (m.get("mentioned_people") or []) if str(p).strip()][:10],
         })
 
     logger.info(

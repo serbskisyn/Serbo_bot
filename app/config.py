@@ -102,6 +102,11 @@ BRIEFING_ENABLED: bool = os.getenv("BRIEFING_ENABLED", "true").lower() == "true"
 BRIEFING_TOP_TODOS: int = int(os.getenv("BRIEFING_TOP_TODOS", "6"))
 BRIEFING_RELATIONSHIP_ALERT_DAYS: int = int(os.getenv("BRIEFING_RELATIONSHIP_ALERT_DAYS", "21"))
 
+# ── Evening Reflection ───────────────────────────────────────────────────────
+REFLECTION_HOUR: int = int(os.getenv("REFLECTION_HOUR", "21"))
+REFLECTION_MINUTE: int = int(os.getenv("REFLECTION_MINUTE", "30"))
+REFLECTION_ENABLED: bool = os.getenv("REFLECTION_ENABLED", "true").lower() == "true"
+
 
 # ── Trading Bot (Freqtrade / Crypto) ─────────────────────────────────────────
 FREQTRADE_API_URL:      str = os.getenv("FREQTRADE_API_URL", "http://localhost:8080")

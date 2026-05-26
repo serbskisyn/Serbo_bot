@@ -7,6 +7,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from app.services.profile_learner import learn as profile_learn
 from app.services.todo_extractor import extract_from_chat as todo_extract
+from app.services.completion_extractor import extract_from_chat as completion_extract
 from app.services.speech_to_text import transcribe_voice
 from app.services.tts import synthesize as tts_synthesize
 from app.security.injection_guard import is_injection_async
@@ -95,10 +96,11 @@ async def _process_message(user_id: int, text: str, update: Update, context) -> 
     response = result if isinstance(result, str) else result.get("response", "")
     add_message(user_id, "user", text)
     add_message(user_id, "assistant", response)
-    # Fire-and-forget the 3-stage profile learner + todo extractor so we
-    # don't block the reply.
+    # Fire-and-forget the 3-stage profile learner + todo extractor +
+    # completion extractor so we don't block the reply.
     asyncio.create_task(profile_learn(user_id, text, response))
     asyncio.create_task(todo_extract(user_id, text, response))
+    asyncio.create_task(completion_extract(user_id, text, response))
     await update.message.reply_text(response)
     return response
 
@@ -115,6 +117,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/forget — Mein Gedächtnis löschen\n"
         f"/todo — ToDos (add | list | done | snooze | stats)\n"
         f"/briefing — Morgen-Briefing manuell anzeigen\n"
+        f"/reflect — Tagesabschluss anzeigen (was geschafft / offen)\n"
         f"/news — Aktuelle News deiner Lieblingsclubs\n"
         f"/news fresh — News sofort neu laden (Live-Fetch)\n"
         f"/xnews <thema> — X.com Live-Recherche via Grok\n"

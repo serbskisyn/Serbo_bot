@@ -166,8 +166,13 @@ async def assemble_briefing(user_id: int) -> str:
     else:
         events_block = "\n📅 *Heute keine Termine*"
 
-    # Top todos
-    today_todos = await todos_svc.list_todos(user_id, scope="today")
+    # Top todos — decisions surface under their own "💡 Aus gestrigen Meetings"
+    # section, not as open work items.
+    today_todos_raw = await todos_svc.list_todos(user_id, scope="today")
+    today_todos = [
+        t for t in today_todos_raw
+        if not (t.get("text") or "").startswith("Entscheidung:")
+    ]
     if today_todos:
         todo_lines = [f"\n✅ *Top Todos ({len(today_todos)} offen)*"]
         for t in today_todos[:BRIEFING_TOP_TODOS]:

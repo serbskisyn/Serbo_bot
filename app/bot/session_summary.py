@@ -2,8 +2,12 @@ import logging
 from datetime import date
 from pathlib import Path
 
+from telegram import Update
+from telegram.ext import ContextTypes
+
 from app.bot.conversation import get_history
 from app.bot.memory import get_confirmed
+from app.bot.whitelist import require_whitelist
 from app.config import (
     ALLOWED_USER_IDS, SESSION_SUMMARY_MIN_MESSAGES,
     ADMIN_CHAT_ID,
@@ -69,3 +73,44 @@ async def create_daily_summaries(context=None) -> None:
                 )
         except Exception as e:
             logger.warning("Session Summary für user %d fehlgeschlagen: %s", user_id, e)
+
+
+@require_whitelist
+async def summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Manual trigger — show the current user's session summary now.
+
+    Mirrors the scheduled 23:00 job but only for the requesting user, and
+    bypasses the "already exists" file-skip so it can be regenerated.
+    """
+    user_id = update.effective_user.id
+    await update.message.reply_text("⏳ Tageszusammenfassung wird erstellt …")
+    try:
+        summary = await _summarize_user(user_id)
+    except Exception as exc:
+        logger.error("summary_handler: %s", exc, exc_info=True)
+        await update.message.reply_text("❌ Zusammenfassung fehlgeschlagen.")
+        return
+
+    if not summary:
+        await update.message.reply_text(
+            f"_Heute noch nichts Substantielles im Chat — "
+            f"mindestens {SESSION_SUMMARY_MIN_MESSAGES} Nachrichten nötig._",
+            parse_mode="Markdown",
+        )
+        return
+
+    today = date.today().isoformat()
+    _SUMMARY_DIR.mkdir(parents=True, exist_ok=True)
+    out_file = _SUMMARY_DIR / f"{user_id}_{today}.md"
+    try:
+        out_file.write_text(
+            f"# Gesprächszusammenfassung {today}\n\n{summary}\n",
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        logger.warning("summary_handler: write failed: %s", exc)
+
+    await update.message.reply_text(
+        f"📋 *Tageszusammenfassung {today}*\n\n{summary}",
+        parse_mode="Markdown",
+    )

@@ -24,7 +24,7 @@ from app.bot.schedule_dialog import get_schedule_handler
 from app.bot.debug_handler import get_debug_handler
 from app.bot.daily_news_job import register_daily_news_job
 from app.bot.bot_context import set_bot
-from app.bot.session_summary import create_daily_summaries
+from app.bot.session_summary import create_daily_summaries, summary_handler
 from app.services.health_check import send_daily_health_check
 from app.bot.gcal_reminder_job import register_gcal_reminder_job, send_daily_calendar_summary
 from app.agents.schedule.lead_qualifying_agent import register_lead_qualifying_job
@@ -118,6 +118,7 @@ def main():
     app.add_handler(CommandHandler("todos",    todo_handler))
     app.add_handler(CommandHandler("briefing", briefing_handler))
     app.add_handler(CommandHandler("reflect",  reflect_handler))
+    app.add_handler(CommandHandler("summary",  summary_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_handler(MessageHandler(filters.VOICE, voice_handler))
     app.add_error_handler(error_handler)

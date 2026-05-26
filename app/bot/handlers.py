@@ -118,6 +118,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/todo — ToDos (add | list | done | snooze | stats)\n"
         f"/briefing — Morgen-Briefing manuell anzeigen\n"
         f"/reflect — Tagesabschluss anzeigen (was geschafft / offen)\n"
+        f"/summary — Tageszusammenfassung des Chats erstellen\n"
         f"/news — Aktuelle News deiner Lieblingsclubs\n"
         f"/news fresh — News sofort neu laden (Live-Fetch)\n"
         f"/xnews <thema> — X.com Live-Recherche via Grok\n"

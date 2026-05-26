@@ -95,6 +95,14 @@ GCAL_DAILY_SUMMARY_HOUR: int = int(os.getenv("GCAL_DAILY_SUMMARY_HOUR", "6"))
 GCAL_DAILY_SUMMARY_MINUTE: int = int(os.getenv("GCAL_DAILY_SUMMARY_MINUTE", "30"))
 
 
+# ── Morning Briefing ──────────────────────────────────────────────────────────
+BRIEFING_HOUR: int = int(os.getenv("BRIEFING_HOUR", "7"))
+BRIEFING_MINUTE: int = int(os.getenv("BRIEFING_MINUTE", "30"))
+BRIEFING_ENABLED: bool = os.getenv("BRIEFING_ENABLED", "true").lower() == "true"
+BRIEFING_TOP_TODOS: int = int(os.getenv("BRIEFING_TOP_TODOS", "6"))
+BRIEFING_RELATIONSHIP_ALERT_DAYS: int = int(os.getenv("BRIEFING_RELATIONSHIP_ALERT_DAYS", "21"))
+
+
 # ── Trading Bot (Freqtrade / Crypto) ─────────────────────────────────────────
 FREQTRADE_API_URL:      str = os.getenv("FREQTRADE_API_URL", "http://localhost:8080")
 FREQTRADE_API_USERNAME: str = os.getenv("FREQTRADE_API_USERNAME", "admin")

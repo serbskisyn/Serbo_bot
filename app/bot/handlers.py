@@ -114,6 +114,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/memory — Was ich über dich weiß\n"
         f"/forget — Mein Gedächtnis löschen\n"
         f"/todo — ToDos (add | list | done | snooze | stats)\n"
+        f"/briefing — Morgen-Briefing manuell anzeigen\n"
         f"/news — Aktuelle News deiner Lieblingsclubs\n"
         f"/news fresh — News sofort neu laden (Live-Fetch)\n"
         f"/xnews <thema> — X.com Live-Recherche via Grok\n"

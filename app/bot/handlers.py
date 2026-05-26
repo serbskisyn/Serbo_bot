@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from telegram import Update
 from telegram.ext import ContextTypes
 from app.services.profile_learner import learn as profile_learn
+from app.services.todo_extractor import extract_from_chat as todo_extract
 from app.services.speech_to_text import transcribe_voice
 from app.services.tts import synthesize as tts_synthesize
 from app.security.injection_guard import is_injection_async
@@ -94,8 +95,10 @@ async def _process_message(user_id: int, text: str, update: Update, context) -> 
     response = result if isinstance(result, str) else result.get("response", "")
     add_message(user_id, "user", text)
     add_message(user_id, "assistant", response)
-    # Fire-and-forget the 3-stage profile learner so we don't block the reply.
+    # Fire-and-forget the 3-stage profile learner + todo extractor so we
+    # don't block the reply.
     asyncio.create_task(profile_learn(user_id, text, response))
+    asyncio.create_task(todo_extract(user_id, text, response))
     await update.message.reply_text(response)
     return response
 

@@ -30,6 +30,7 @@ from app.bot.gcal_reminder_job import register_gcal_reminder_job, send_daily_cal
 from app.agents.schedule.lead_qualifying_agent import register_lead_qualifying_job
 from app.bot.trading_job import tradebot_handler, register_trading_stats_job
 from app.bot.alpaca_job import register_alpaca_jobs
+from app.bot.sync_jobs import register_sync_jobs
 
 _BERLIN = ZoneInfo("Europe/Berlin")
 
@@ -64,6 +65,7 @@ async def _post_init(application) -> None:
     register_lead_qualifying_job(application)
     register_trading_stats_job(application)
     register_alpaca_jobs(application)
+    register_sync_jobs(application)
 
     if GCAL_CALENDAR_ID_1 or GCAL_CALENDAR_ID_2:
         jq.run_daily(

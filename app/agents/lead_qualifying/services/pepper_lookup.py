@@ -14,7 +14,7 @@ import json
 import logging
 import re
 
-from app.services.claude_runner import run_claude_agent
+from app.services.mcp_runner import run_mcp_subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -181,7 +181,7 @@ async def get_brand_sentiment(firma: str) -> dict:
     logger.info("pepper_lookup: '%s' (pattern='%s')", firma, pattern)
 
     try:
-        raw = await run_claude_agent(prompt, timeout=_TIMEOUT_SEC)
+        raw = await run_mcp_subprocess(prompt, timeout=_TIMEOUT_SEC, label="pepper")
     except Exception as exc:
         logger.warning("pepper_lookup: subprocess-Exception '%s': %s", firma, exc)
         return {**_EMPTY_RESULT, "error": f"subprocess: {exc}"}
@@ -347,7 +347,7 @@ async def get_multi_brand_sentiment(firma: str, brand_names: list[str]) -> dict:
     last_error = ""
     for attempt in range(1, attempts + 1):
         try:
-            raw = await run_claude_agent(prompt, timeout=_TIMEOUT_SEC)
+            raw = await run_mcp_subprocess(prompt, timeout=_TIMEOUT_SEC, label="pepper_multi")
         except Exception as exc:
             logger.warning("pepper_multi: subprocess-Exception (attempt %d): %s", attempt, exc)
             last_error = f"subprocess: {exc}"

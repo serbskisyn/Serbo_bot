@@ -60,30 +60,10 @@ async def ask_llm(
 
 
 async def extract_facts(user_text: str, assistant_response: str) -> dict:
-    messages = [
-        {"role": "system", "content": EXTRACTOR_PROMPT},
-        {"role": "user", "content": f"User: {user_text}\nAssistent: {assistant_response}"}
-    ]
-    payload = {
-        "model": EXTRACTOR_MODEL,
-        "messages": messages,
-        "temperature": 0.0,
-        "max_tokens": 256,
-    }
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(OPENROUTER_URL, json=payload, headers=headers)
-            response.raise_for_status()
-            raw = response.json()["choices"][0]["message"]["content"]
-            match = re.search(r'\{.*\}', raw, re.DOTALL)
-            if not match:
-                return {"direct": {}, "indirect": []}
-            return json.loads(match.group())
+    """Deprecated. Kept only for backwards compat with very old callers.
 
-    except Exception as e:
-        logger.warning(f"Fakten-Extraktion fehlgeschlagen: {e}")
-        return {"direct": {}, "indirect": []}
+    Returns an empty payload; real extraction now happens through
+    app.services.profile_learner.learn() which is called directly from
+    handlers.py.
+    """
+    return {"direct": {}, "indirect": []}

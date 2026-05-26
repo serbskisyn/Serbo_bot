@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from telegram import Update
 from telegram.ext import ContextTypes
-from app.services.openrouter_client import extract_facts
+from app.services.profile_learner import learn as profile_learn
 from app.services.speech_to_text import transcribe_voice
 from app.services.tts import synthesize as tts_synthesize
 from app.security.injection_guard import is_injection_async
@@ -94,11 +94,8 @@ async def _process_message(user_id: int, text: str, update: Update, context) -> 
     response = result if isinstance(result, str) else result.get("response", "")
     add_message(user_id, "user", text)
     add_message(user_id, "assistant", response)
-    facts = await extract_facts(text, response)
-    for key, value in facts.get("direct", {}).items():
-        await add_direct(user_id, key, value)
-    for fact in facts.get("indirect", []):
-        await add_indirect(user_id, fact)
+    # Fire-and-forget the 3-stage profile learner so we don't block the reply.
+    asyncio.create_task(profile_learn(user_id, text, response))
     await update.message.reply_text(response)
     return response
 

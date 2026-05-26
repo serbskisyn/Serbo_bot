@@ -75,9 +75,22 @@ async def test_extract_handles_llm_failure(monkeypatch):
 @pytest.mark.anyio
 async def test_extract_caps_at_3_todos(monkeypatch):
     """LLM may suggest 10 — extractor should add at most 3."""
+    # Use truly distinct phrases so semantic dedup (Phase 5) doesn't collapse them.
+    distinct_texts = [
+        "Brot kaufen",
+        "Steuererklärung einreichen",
+        "Auto zur Inspektion bringen",
+        "Geschenk für Mama besorgen",
+        "Domain renewal verlängern",
+        "Backup-Festplatte tauschen",
+        "Pull-Request reviewen",
+        "Architektur-Dokumentation aktualisieren",
+        "Mitarbeitergespräch vorbereiten",
+        "Reisepass beantragen",
+    ]
     async def fake_llm(user_text, assistant_response):
         items = ", ".join(
-            f'{{"text": "todo{i} item", "due_hint": null}}' for i in range(10)
+            f'{{"text": "{t}", "due_hint": null}}' for t in distinct_texts
         )
         return f'{{"todos": [{items}]}}'
 

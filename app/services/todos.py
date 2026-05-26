@@ -170,7 +170,11 @@ async def add_todo(
     due_date: str | None = None,
     notes: str | None = None,
 ) -> int:
-    """Insert a new todo. Returns the new row id."""
+    """Insert a new todo. Returns the new row id.
+
+    Side-effect: embeds the text into the semantic store (fire-and-forget)
+    so subsequent `mention_existing` calls can detect paraphrases.
+    """
     await init_db()
     now = _now_iso()
     async with aiosqlite.connect(TODOS_DB) as db:
@@ -182,11 +186,23 @@ async def add_todo(
             (user_id, text.strip(), source, due_date, now, now, now, notes),
         )
         await db.commit()
-        return cur.lastrowid or 0
+        new_id = cur.lastrowid or 0
+
+    if new_id:
+        try:
+            from app.services import semantic
+            await semantic.store("todos", new_id, user_id, text.strip())
+        except Exception as exc:
+            logger.debug("add_todo: semantic store skipped: %s", exc)
+    return new_id
 
 
 async def mention_existing(user_id: int, text: str) -> int | None:
     """If a similar open todo exists, bump mention_count + last_mentioned_at.
+
+    Match order:
+      1. exact string (case-insensitive)  — fast path
+      2. semantic match via sqlite-vec     — paraphrase / synonym detection
 
     Returns the id of the matched todo, or None.
     """
@@ -194,26 +210,58 @@ async def mention_existing(user_id: int, text: str) -> int | None:
     norm = text.strip().lower()
     if not norm:
         return None
+
+    # 1) Exact-match fast path
     async with aiosqlite.connect(TODOS_DB) as db:
         async with db.execute(
             "SELECT id, text FROM todos WHERE user_id = ? AND status = 'open'",
             (user_id,),
         ) as cur:
             rows = await cur.fetchall()
+        open_ids = {int(r[0]) for r in rows}
         for row in rows:
             if (row[1] or "").strip().lower() == norm:
-                now = _now_iso()
-                await db.execute(
-                    """UPDATE todos
-                       SET mention_count = mention_count + 1,
-                           last_mentioned_at = ?,
-                           updated_at = ?
-                       WHERE id = ?""",
-                    (now, now, row[0]),
-                )
-                await db.commit()
+                await _bump(db, int(row[0]))
                 return int(row[0])
+
+    # 2) Semantic-match fallback. Cheap (~5ms after first embed) and
+    # gracefully degrades to "no match" if embeddings are unavailable.
+    try:
+        from app.services import semantic
+        hits = await semantic.find_similar(
+            "todos", user_id, text,
+            threshold=semantic.DIST_STRICT_DEDUP, limit=3,
+        )
+    except Exception as exc:
+        logger.debug("mention_existing: semantic lookup skipped: %s", exc)
+        hits = []
+
+    # Only treat a semantic hit as a match if the referenced todo is still
+    # open — done/dropped todos shouldn't be revived.
+    for ref_id, hit_text, dist in hits:
+        if ref_id in open_ids:
+            async with aiosqlite.connect(TODOS_DB) as db:
+                await _bump(db, ref_id)
+            logger.info(
+                "mention_existing: semantic match user=%s '%s' ≈ '%s' (d=%.2f)",
+                user_id, text[:50], hit_text[:50], dist,
+            )
+            return ref_id
+
     return None
+
+
+async def _bump(db, todo_id: int) -> None:
+    now = _now_iso()
+    await db.execute(
+        """UPDATE todos
+           SET mention_count = mention_count + 1,
+               last_mentioned_at = ?,
+               updated_at = ?
+           WHERE id = ?""",
+        (now, now, todo_id),
+    )
+    await db.commit()
 
 
 async def mark_done(user_id: int, todo_id: int) -> bool:
@@ -225,7 +273,10 @@ async def mark_done(user_id: int, todo_id: int) -> bool:
             (_now_iso(), todo_id, user_id),
         )
         await db.commit()
-        return (cur.rowcount or 0) > 0
+        ok = (cur.rowcount or 0) > 0
+    if ok:
+        await _semantic_cleanup(user_id, todo_id)
+    return ok
 
 
 async def drop_todo(user_id: int, todo_id: int) -> bool:
@@ -237,7 +288,19 @@ async def drop_todo(user_id: int, todo_id: int) -> bool:
             (_now_iso(), todo_id, user_id),
         )
         await db.commit()
-        return (cur.rowcount or 0) > 0
+        ok = (cur.rowcount or 0) > 0
+    if ok:
+        await _semantic_cleanup(user_id, todo_id)
+    return ok
+
+
+async def _semantic_cleanup(user_id: int, todo_id: int) -> None:
+    """Best-effort embedding-row deletion when a todo leaves the open state."""
+    try:
+        from app.services import semantic
+        await semantic.delete("todos", todo_id, user_id)
+    except Exception as exc:
+        logger.debug("semantic cleanup skipped for #%s: %s", todo_id, exc)
 
 
 async def snooze_todo(user_id: int, todo_id: int, days: int) -> str | None:

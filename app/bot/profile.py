@@ -153,26 +153,83 @@ async def append_list(user_id: int, section: str, value: str) -> None:
 async def add_dict_item(user_id: int, section: str, item: dict) -> None:
     """Append a structured dict to people/projects/goals.
 
-    Deduplicates on the `name` or `text` key.
+    Deduplicates by:
+      1. exact lowercase match on `name`/`text` — fast path
+      2. (only for `people`) semantic match on name via sqlite-vec —
+         "Ollie" ≈ "Oliver", "Kim" ≈ "Kimberly"
+
+    On a semantic hit the new item is merged into the existing entry
+    (the canonical-spelling row stays, fields get updated).
     """
+    ident = (item.get("name") or item.get("text") or "").strip()
+    if not ident:
+        return
+    ident_low = ident.lower()
+
+    # Exact-match dedup under lock
     async with _lock:
         user = _get_user(user_id)
         bucket = user.setdefault(section, [])
         if not isinstance(bucket, list):
             return
-        ident = (item.get("name") or item.get("text") or "").strip().lower()
-        if not ident:
-            return
         for existing in bucket:
             ex_ident = (existing.get("name") or existing.get("text") or "").strip().lower()
-            if ex_ident == ident:
+            if ex_ident == ident_low:
                 existing.update(item)
                 user.setdefault("meta", {})["updated_at"] = _now()
                 _save(_store)
                 return
+
+    # Semantic dedup — only for people. Done outside the lock because the
+    # embed call is async and can be slow on cache-miss.
+    if section == "people":
+        try:
+            from app.services import semantic
+            hits = await semantic.find_similar(
+                "people", user_id, ident,
+                threshold=semantic.DIST_PEOPLE_DEDUP, limit=3,
+            )
+        except Exception:
+            hits = []
+
+        if hits:
+            async with _lock:
+                user = _get_user(user_id)
+                bucket = user.setdefault("people", [])
+                hit_names_lower = {h[1].strip().lower() for h in hits}
+                for existing in bucket:
+                    ex = (existing.get("name") or "").strip().lower()
+                    if ex in hit_names_lower:
+                        # Merge into canonical existing entry, keep its name
+                        merged = {**item, "name": existing.get("name")}
+                        existing.update(merged)
+                        user.setdefault("meta", {})["updated_at"] = _now()
+                        _save(_store)
+                        logger.info(
+                            "add_dict_item: semantic merge '%s' → '%s'",
+                            ident, existing.get("name"),
+                        )
+                        return
+
+    # No match — append and store embedding (only for people)
+    async with _lock:
+        user = _get_user(user_id)
+        bucket = user.setdefault(section, [])
         bucket.append(item)
         user.setdefault("meta", {})["updated_at"] = _now()
         _save(_store)
+        new_index = len(bucket) - 1
+
+    if section == "people":
+        try:
+            from app.services import semantic
+            # Use the negative new_index as a synthetic ref_id so people-rows
+            # don't collide with todo-rows. Stable across runs because
+            # bucket order is preserved by yaml.safe_dump(sort_keys=False).
+            ref_id = -(new_index + 1)
+            await semantic.store("people", ref_id, user_id, ident)
+        except Exception as exc:
+            logger.debug("add_dict_item: semantic store skipped: %s", exc)
 
 
 async def add_fact(user_id: int, key: str, value: Any) -> None:

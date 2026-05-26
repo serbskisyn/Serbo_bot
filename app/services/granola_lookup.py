@@ -36,16 +36,29 @@ _MAX_ATTEMPTS = 2
 
 _PROMPT_TEMPLATE = """You are extracting meeting commitments for a personal-productivity bot.
 
+THE USER is {user_name}. In Granola transcripts they may appear as "{user_name}" or as the meeting host / note-taker / "me" / "I". Treat anyone else as a third party.
+
 STEP 1 — MUST: call `mcp__claude_ai_Granola__list_meetings` to enumerate ALL meetings from the last {lookback_hours} hours. Do NOT skip this call. Do NOT answer from memory.
 
 STEP 2 — For each meeting returned, call `mcp__claude_ai_Granola__get_meeting_transcript` to fetch its notes/transcript.
 
 STEP 3 — For each meeting build an entry with:
+
   • title              — verbatim
   • date               — ISO YYYY-MM-DD
-  • commitments        — concrete action items the user committed to (verbs: send, prepare, share, follow up, schedule, draft, review). Max 5, each ≤ 80 chars, imperative voice.
-  • decisions          — explicit decisions made in the meeting. Max 5.
-  • mentioned_people   — distinct names of people other than the user. Max 5.
+
+  • commitments        — STRICTLY action items that {user_name} personally owns. Include only items where:
+                            • {user_name} is named as the owner ("Benno will / Benno to / @Benno"), OR
+                            • the user states it in first person ("I will", "I'll send", "let me handle this")
+                         EXCLUDE anything another participant said they would do.
+                         If a meeting has NO {user_name}-owned action items → return an empty list.
+                         Max 5, each ≤ 80 chars, imperative voice.
+
+  • decisions          — explicit decisions made in the meeting that affect {user_name}'s scope of work.
+                         Skip purely-others'-domain decisions.
+                         Max 5, each ≤ 100 chars.
+
+  • mentioned_people   — distinct names of OTHER people in the meeting (not {user_name}). Max 5.
 
 STEP 4 — Reply with ONLY this JSON object (no prose, no markdown fences, no commentary):
 
@@ -90,9 +103,12 @@ def _extract_json(raw: str) -> dict | None:
 _EMPTY_RESULT: dict = {"meetings": [], "error": None}
 
 
-async def _one_attempt(lookback_hours: int, attempt: int) -> tuple[dict | None, str]:
+async def _one_attempt(lookback_hours: int, user_name: str, attempt: int) -> tuple[dict | None, str]:
     """Single subprocess call. Returns (parsed_payload or None, error_marker)."""
-    prompt = _PROMPT_TEMPLATE.format(lookback_hours=int(lookback_hours))
+    prompt = _PROMPT_TEMPLATE.format(
+        lookback_hours=int(lookback_hours),
+        user_name=user_name or "the user",
+    )
     try:
         raw = await run_mcp_subprocess(prompt, timeout=_TIMEOUT_SEC, label=f"granola#{attempt}")
     except Exception as exc:
@@ -108,22 +124,29 @@ async def _one_attempt(lookback_hours: int, attempt: int) -> tuple[dict | None, 
     return parsed, ""
 
 
-async def get_recent_meetings(lookback_hours: int = 30) -> dict:
+async def get_recent_meetings(lookback_hours: int = 30, user_name: str = "") -> dict:
     """Query Granola via the MCP subprocess. Always returns a dict.
 
     Retries up to _MAX_ATTEMPTS times — Pi-Claude cold-starts sometimes
     skip the MCP tool entirely and reply with an empty list. A second
     attempt usually succeeds because the subprocess pool is warm.
 
+    `user_name` is woven into the prompt so the model only extracts
+    commitments owned by that specific person. Pass an empty string
+    to keep the pre-Phase-6 behaviour (extract for "the user").
+
     Schema: {"meetings": [{"title", "date", "commitments", "decisions", "mentioned_people"}], "error": str|None}.
     """
-    logger.info("granola_lookup: starting (lookback=%dh)", lookback_hours)
+    logger.info(
+        "granola_lookup: starting (lookback=%dh, user=%s)",
+        lookback_hours, user_name or "<unspecified>",
+    )
 
     parsed: dict | None = None
     last_error = ""
 
     for attempt in range(1, _MAX_ATTEMPTS + 1):
-        parsed, err = await _one_attempt(lookback_hours, attempt)
+        parsed, err = await _one_attempt(lookback_hours, user_name, attempt)
         if parsed is None:
             last_error = err
             logger.warning("granola_lookup: attempt %d failed: %s", attempt, err)

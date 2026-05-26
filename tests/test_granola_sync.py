@@ -63,7 +63,7 @@ async def test_sync_creates_todos_and_people(monkeypatch):
         "error": None,
     }
 
-    async def fake_lookup(lookback_hours=30):
+    async def fake_lookup(lookback_hours=30, user_name=""):
         return fake_payload
 
     monkeypatch.setattr(granola_lookup, "get_recent_meetings", fake_lookup)
@@ -98,7 +98,7 @@ async def test_sync_idempotent_on_rerun(monkeypatch):
         "error": None,
     }
 
-    async def fake_lookup(lookback_hours=30):
+    async def fake_lookup(lookback_hours=30, user_name=""):
         return payload
 
     monkeypatch.setattr(granola_lookup, "get_recent_meetings", fake_lookup)
@@ -113,10 +113,44 @@ async def test_sync_idempotent_on_rerun(monkeypatch):
 
 @pytest.mark.anyio
 async def test_sync_returns_error_when_lookup_fails(monkeypatch):
-    async def fake_lookup(lookback_hours=30):
+    async def fake_lookup(lookback_hours=30, user_name=""):
         return {"meetings": [], "error": "subprocess: boom"}
 
     monkeypatch.setattr(granola_lookup, "get_recent_meetings", fake_lookup)
     out = await granola_sync.sync_for_user(1)
     assert out["error"] == "subprocess: boom"
     assert out["commitments_added"] == 0
+
+
+@pytest.mark.anyio
+async def test_sync_passes_profile_name_to_lookup(monkeypatch):
+    """Identity name from profile must reach granola_lookup so the LLM can filter."""
+    await profile.set_scalar(1, "identity", "name", "Benno")
+    captured: dict = {}
+
+    async def fake_lookup(lookback_hours=30, user_name=""):
+        captured["user_name"] = user_name
+        captured["lookback_hours"] = lookback_hours
+        return {"meetings": [], "error": None}
+
+    monkeypatch.setattr(granola_lookup, "get_recent_meetings", fake_lookup)
+    await granola_sync.sync_for_user(1, lookback_hours=24)
+    assert captured["user_name"] == "Benno"
+    assert captured["lookback_hours"] == 24
+
+
+@pytest.mark.anyio
+async def test_sync_warns_and_continues_without_profile_name(monkeypatch, caplog):
+    """No identity.name → still queries, but with empty user_name + warning."""
+    captured: dict = {}
+
+    async def fake_lookup(lookback_hours=30, user_name=""):
+        captured["user_name"] = user_name
+        return {"meetings": [], "error": None}
+
+    monkeypatch.setattr(granola_lookup, "get_recent_meetings", fake_lookup)
+    import logging
+    with caplog.at_level(logging.WARNING):
+        await granola_sync.sync_for_user(1)
+    assert captured["user_name"] == ""
+    assert any("no identity.name" in rec.message for rec in caplog.records)

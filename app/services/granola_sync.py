@@ -39,10 +39,25 @@ def _parse_meeting_date(s: str) -> date:
 async def sync_for_user(user_id: int, lookback_hours: int = 30) -> dict:
     """Pull Granola, persist into todos + profile.
 
+    The user's name from profile.identity is passed into the lookup so the
+    LLM filters commitments to only those that the user personally owns.
+
     Returns counters: {meetings, commitments_added, commitments_mentioned,
                        decisions_added, people_added, error}.
     """
-    result = await granola_lookup.get_recent_meetings(lookback_hours=lookback_hours)
+    identity = profile.get_section(user_id, "identity") or {}
+    user_name = (identity.get("name") or "").strip()
+    if not user_name:
+        logger.warning(
+            "granola_sync: no identity.name for user=%s — falling back to "
+            "unfiltered extraction. Set the name with /memory or chat.",
+            user_id,
+        )
+
+    result = await granola_lookup.get_recent_meetings(
+        lookback_hours=lookback_hours,
+        user_name=user_name,
+    )
     if result.get("error"):
         return {
             "meetings": 0, "commitments_added": 0, "commitments_mentioned": 0,

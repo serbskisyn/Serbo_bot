@@ -29,7 +29,7 @@ _BERLIN = ZoneInfo("Europe/Berlin")
 
 _SYSTEM_PROMPT = (
     "Kalender-Assistent. Deutsch. Du bekommst die echten Kalendertermine des Users "
-    "aus allen seinen Kalendern (Gmail + Workspace). "
+    "aus allen seinen Kalendern. "
     "Beantworte die Frage präzise auf Basis dieser Termine — Uhrzeiten nennen, "
     "kein Fülltext. Wenn die Frage z.B. nach freien Slots fragt, leite das aus den "
     "Terminen ab. Wenn keine Termine im relevanten Zeitraum sind, sag das klar. "
@@ -41,9 +41,9 @@ def _configured_calendars() -> list[tuple[str, str]]:
     """Return [(calendar_id, label), ...] for every configured calendar."""
     cals = []
     if GCAL_CALENDAR_ID_1:
-        cals.append((GCAL_CALENDAR_ID_1, "Gmail"))
+        cals.append((GCAL_CALENDAR_ID_1, "Familienkalender"))
     if GCAL_CALENDAR_ID_2:
-        cals.append((GCAL_CALENDAR_ID_2, "Workspace"))
+        cals.append((GCAL_CALENDAR_ID_2, "Bennoschwede@gmail.com"))
     return cals
 
 

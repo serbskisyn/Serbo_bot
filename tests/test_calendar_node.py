@@ -71,7 +71,7 @@ def test_configured_calendars_both(monkeypatch):
     monkeypatch.setattr(cal_node, "GCAL_CALENDAR_ID_2", "b@x.com")
     cals = cal_node._configured_calendars()
     assert [c[0] for c in cals] == ["a@x.com", "b@x.com"]
-    assert [c[1] for c in cals] == ["Gmail", "Workspace"]
+    assert [c[1] for c in cals] == ["Familienkalender", "Bennoschwede@gmail.com"]
 
 
 def test_configured_calendars_only_one(monkeypatch):
@@ -107,7 +107,7 @@ async def test_calendar_node_merges_both_calendars(monkeypatch):
     # Both events present in the LLM prompt
     assert "Lead-Sync" in captured["prompt"] and "1:1 Kim" in captured["prompt"]
     # Calendar labels attached
-    assert "[Gmail]" in captured["prompt"] and "[Workspace]" in captured["prompt"]
+    assert "[Familienkalender]" in captured["prompt"] and "[Bennoschwede@gmail.com]" in captured["prompt"]
     # Sorted: 10:00 1:1 Kim must appear before 14:30 Lead-Sync
     assert captured["prompt"].index("1:1 Kim") < captured["prompt"].index("Lead-Sync")
     assert "Lead-Sync" in out["response"]

@@ -28,8 +28,8 @@
  *   4. Open script.google.com WHILE LOGGED INTO THE ATOLLS ACCOUNT →
  *      New project → paste this whole file → Save.
  *   5. Run `mirrorCalendar` once → authorize when prompted.
- *   6. Run `installTrigger` once → installs a 30-minute time-trigger.
- *      (Check Triggers panel ⏰ to confirm.)
+ *   6. Run `installTrigger` once → installs a time-trigger every
+ *      TRIGGER_MINUTES (default 5). (Check Triggers panel ⏰ to confirm.)
  *   7. Send the "Atolls Arbeit" Calendar ID to the bot maintainer so it can
  *      be wired into GCAL_CALENDAR_ID_1.
  *
@@ -45,7 +45,7 @@
 const SOURCE_CALENDAR_ID = 'primary';   // the Atolls work calendar (this account's primary)
 const TARGET_CALENDAR_ID = 'PASTE_ATOLLS_ARBEIT_CALENDAR_ID_HERE';
 const DAYS_AHEAD = 30;
-const TRIGGER_MINUTES = 30;
+const TRIGGER_MINUTES = 5;   // Apps Script minimum is 1; 5 is the quota-safe sweet spot
 
 
 function mirrorCalendar() {

@@ -62,28 +62,75 @@ def test_fmt_event_allday():
 
 @pytest.fixture(autouse=True)
 def cal_configured(monkeypatch):
-    monkeypatch.setattr(cal_node, "GCAL_CALENDAR_ID_1", "primary@example.com")
+    monkeypatch.setattr(cal_node, "GCAL_CALENDAR_ID_1", "gmail@example.com")
+    monkeypatch.setattr(cal_node, "GCAL_CALENDAR_ID_2", "workspace@example.com")
+
+
+def test_configured_calendars_both(monkeypatch):
+    monkeypatch.setattr(cal_node, "GCAL_CALENDAR_ID_1", "a@x.com")
+    monkeypatch.setattr(cal_node, "GCAL_CALENDAR_ID_2", "b@x.com")
+    cals = cal_node._configured_calendars()
+    assert [c[0] for c in cals] == ["a@x.com", "b@x.com"]
+    assert [c[1] for c in cals] == ["Gmail", "Workspace"]
+
+
+def test_configured_calendars_only_one(monkeypatch):
+    monkeypatch.setattr(cal_node, "GCAL_CALENDAR_ID_1", "a@x.com")
     monkeypatch.setattr(cal_node, "GCAL_CALENDAR_ID_2", "")
+    cals = cal_node._configured_calendars()
+    assert len(cals) == 1
 
 
 @pytest.mark.anyio
-async def test_calendar_node_answers_with_events(monkeypatch):
-    fake_events = [
-        {"summary": "Lead-Sync", "start": {"dateTime": "2026-05-27T14:30:00+02:00"}},
-        {"summary": "1:1 Kim", "start": {"dateTime": "2026-05-27T10:00:00+02:00"}},
-    ]
+async def test_calendar_node_merges_both_calendars(monkeypatch):
+    """Events from both calendars must be fetched, merged + sorted by start."""
+    def fake_get_events(cal_id, start=None, end=None, max_results=25):
+        if cal_id == "gmail@example.com":
+            return [{"summary": "Lead-Sync", "start": {"dateTime": "2026-05-27T14:30:00+02:00"}}]
+        if cal_id == "workspace@example.com":
+            return [{"summary": "1:1 Kim", "start": {"dateTime": "2026-05-27T10:00:00+02:00"}}]
+        return []
+
     import app.services.gcal_client as gcal_client
-    monkeypatch.setattr(gcal_client, "get_events", lambda *a, **k: fake_events)
+    monkeypatch.setattr(gcal_client, "get_events", fake_get_events)
+
+    captured = {}
 
     async def fake_ask_llm(prompt, history=None, system_prompt=""):
-        assert "Lead-Sync" in prompt and "1:1 Kim" in prompt
-        return "Heute: 10:00 1:1 Kim, 14:30 Lead-Sync."
+        captured["prompt"] = prompt
+        return "Heute: 10:00 1:1 Kim (Workspace), 14:30 Lead-Sync (Gmail)."
 
     monkeypatch.setattr(cal_node, "ask_llm", fake_ask_llm)
 
     state = {"user_id": 1, "text": "habe ich heute termine?", "messages": []}
     out = await cal_node.calendar_node(state)
+    # Both events present in the LLM prompt
+    assert "Lead-Sync" in captured["prompt"] and "1:1 Kim" in captured["prompt"]
+    # Calendar labels attached
+    assert "[Gmail]" in captured["prompt"] and "[Workspace]" in captured["prompt"]
+    # Sorted: 10:00 1:1 Kim must appear before 14:30 Lead-Sync
+    assert captured["prompt"].index("1:1 Kim") < captured["prompt"].index("Lead-Sync")
     assert "Lead-Sync" in out["response"]
+
+
+@pytest.mark.anyio
+async def test_calendar_node_one_calendar_errors_other_ok(monkeypatch):
+    """If one calendar fails, the other's events still come through."""
+    def fake_get_events(cal_id, start=None, end=None, max_results=25):
+        if cal_id == "gmail@example.com":
+            raise RuntimeError("gmail down")
+        return [{"summary": "1:1 Kim", "start": {"dateTime": "2026-05-27T10:00:00+02:00"}}]
+
+    import app.services.gcal_client as gcal_client
+    monkeypatch.setattr(gcal_client, "get_events", fake_get_events)
+
+    async def fake_ask_llm(prompt, history=None, system_prompt=""):
+        return "Heute: 10:00 1:1 Kim."
+
+    monkeypatch.setattr(cal_node, "ask_llm", fake_ask_llm)
+    state = {"user_id": 1, "text": "termine heute?", "messages": []}
+    out = await cal_node.calendar_node(state)
+    assert "1:1 Kim" in out["response"]
 
 
 @pytest.mark.anyio
@@ -106,7 +153,7 @@ async def test_calendar_node_no_calendar_configured(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_calendar_node_handles_fetch_error(monkeypatch):
+async def test_calendar_node_all_calendars_error(monkeypatch):
     import app.services.gcal_client as gcal_client
 
     def boom(*a, **k):

@@ -142,7 +142,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/summary — 📋 Chat-Zusammenfassung des Tages (sonst auto 23:00)\n\n"
         f"📅 *Kalender*\n"
         f"/termine [heute|morgen|woche] — Kalendertermine anzeigen\n"
-        f"/kalender1 — Atolls (Arbeit) aktiv\n"
+        f"/kalender1 — Benno@atolls.com aktiv\n"
         f"/kalender2 — Bennoschwede@gmail.com aktiv\n\n"
         f"📈 *Trading Bot (Crypto + Stocks)*\n"
         f"/tradebot — Kombinierter Status (Crypto + Stocks)\n"
@@ -710,7 +710,7 @@ def _cal_id(cal_num: int) -> str:
 
 
 def _cal_label(cal_num: int) -> str:
-    return "Kalender 1 (Atolls Arbeit)" if cal_num == 1 else "Kalender 2 (Bennoschwede@gmail.com)"
+    return "Kalender 1 (Benno@atolls.com)" if cal_num == 1 else "Kalender 2 (Bennoschwede@gmail.com)"
 
 
 @require_whitelist
@@ -787,7 +787,7 @@ async def kalender1_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ GCAL_CALENDAR_ID_1 nicht konfiguriert.")
         return
     set_active_calendar(user_id, 1)
-    await update.message.reply_text("✅ Aktiver Kalender: *Kalender 1 (Atolls Arbeit)*", parse_mode="Markdown")
+    await update.message.reply_text("✅ Aktiver Kalender: *Kalender 1 (Benno@atolls.com)*", parse_mode="Markdown")
 
 
 @require_whitelist

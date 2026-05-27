@@ -7,10 +7,13 @@ participants — the new prompt filters strictly to user-owned items.
 
 Default mode: dry-run. Use --yes to actually delete.
 By default re-syncs after wipe; pass --no-resync to skip.
+Use --reset-people to also wipe profile.people + its embeddings before
+the resync (fixes accumulated first-name/full-name duplicates).
 
 Usage:
     python -m scripts.cleanup_granola_todos                # preview only
     python -m scripts.cleanup_granola_todos --yes          # wipe + resync
+    python -m scripts.cleanup_granola_todos --yes --reset-people
     python -m scripts.cleanup_granola_todos --yes --user 355857037
     python -m scripts.cleanup_granola_todos --yes --no-resync
     python -m scripts.cleanup_granola_todos --yes --lookback 72
@@ -74,6 +77,7 @@ async def main() -> int:
     parser.add_argument("--user", type=int, default=355857037, help="Target user_id")
     parser.add_argument("--yes", action="store_true", help="Actually delete (otherwise dry-run)")
     parser.add_argument("--no-resync", action="store_true", help="Skip the Granola re-sync after wipe")
+    parser.add_argument("--reset-people", action="store_true", help="Also wipe profile.people + embeddings before resync")
     parser.add_argument("--lookback", type=int, default=48, help="Granola lookback hours for re-sync")
     args = parser.parse_args()
 
@@ -102,6 +106,17 @@ async def main() -> int:
         print(f"🗑   {deleted} Zeilen gelöscht (todos + Semantic-Embeddings).")
     else:
         print("⏭   Nichts zu löschen.")
+
+    if args.reset_people:
+        from app.bot import profile
+        from app.services import semantic
+        removed = await profile.clear_section(user_id, "people")
+        try:
+            vecs = await semantic.clear_collection("people", user_id)
+        except Exception as exc:
+            vecs = 0
+            logger.warning("people-embedding wipe skipped: %s", exc)
+        print(f"👥  profile.people zurückgesetzt: {removed} Personen + {vecs} Embeddings gelöscht.")
 
     if args.no_resync:
         print("⏭   Re-sync übersprungen (--no-resync).")

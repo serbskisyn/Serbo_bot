@@ -150,16 +150,33 @@ async def append_list(user_id: int, section: str, value: str) -> None:
             _save(_store)
 
 
+def _token_prefix_match(name_a: str, name_b: str) -> bool:
+    """True if one name's token list is a prefix of the other's.
+
+    Catches first-name ↔ full-name pairs that semantic distance misses:
+      "Martin" ↔ "Martin Gospodinov"  → True
+      "Nick"   ↔ "Nick Nourinik"      → True
+      "Nick"   ↔ "Nicole"             → False (not a whole-token prefix)
+    """
+    ta = name_a.lower().split()
+    tb = name_b.lower().split()
+    if not ta or not tb:
+        return False
+    shorter, longer = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
+    return longer[: len(shorter)] == shorter
+
+
 async def add_dict_item(user_id: int, section: str, item: dict) -> None:
     """Append a structured dict to people/projects/goals.
 
     Deduplicates by:
       1. exact lowercase match on `name`/`text` — fast path
-      2. (only for `people`) semantic match on name via sqlite-vec —
+      2. (only for `people`) token-prefix match — "Martin" ≈ "Martin Gospodinov"
+      3. (only for `people`) semantic match on name via sqlite-vec —
          "Ollie" ≈ "Oliver", "Kim" ≈ "Kimberly"
 
-    On a semantic hit the new item is merged into the existing entry
-    (the canonical-spelling row stays, fields get updated).
+    On a prefix/semantic hit the new item is merged into the existing entry.
+    For prefix hits the LONGER (fuller) name becomes canonical.
     """
     ident = (item.get("name") or item.get("text") or "").strip()
     if not ident:
@@ -178,6 +195,30 @@ async def add_dict_item(user_id: int, section: str, item: dict) -> None:
                 existing.update(item)
                 user.setdefault("meta", {})["updated_at"] = _now()
                 _save(_store)
+                return
+
+    # Token-prefix dedup — people only. Keeps the fuller name as canonical.
+    if section == "people":
+        async with _lock:
+            user = _get_user(user_id)
+            bucket = user.setdefault("people", [])
+            for existing in bucket:
+                ex_name = (existing.get("name") or "").strip()
+                if not ex_name or not _token_prefix_match(ident, ex_name):
+                    continue
+                if len(ident.split()) > len(ex_name.split()):
+                    # Incoming is fuller → promote it to canonical name
+                    merged = {**existing, **item, "name": ident}
+                    existing.clear()
+                    existing.update(merged)
+                    canonical = ident
+                else:
+                    # Existing is fuller (or equal) → keep its name
+                    existing.update({**item, "name": ex_name})
+                    canonical = ex_name
+                user.setdefault("meta", {})["updated_at"] = _now()
+                _save(_store)
+                logger.info("add_dict_item: prefix merge '%s' → '%s'", ident, canonical)
                 return
 
     # Semantic dedup — only for people. Done outside the lock because the
@@ -302,6 +343,19 @@ async def clear(user_id: int) -> None:
     async with _lock:
         _store[str(user_id)] = _empty_profile()
         _save(_store)
+
+
+async def clear_section(user_id: int, section: str) -> int:
+    """Reset one profile section (e.g. 'people') to empty. Returns items removed."""
+    async with _lock:
+        user = _get_user(user_id)
+        old = user.get(section)
+        removed = len(old) if isinstance(old, (list, dict)) else 0
+        empty = _empty_profile().get(section)
+        user[section] = empty if empty is not None else []
+        user.setdefault("meta", {})["updated_at"] = _now()
+        _save(_store)
+        return removed
 
 
 # ── Apply structured ops (used by the 3-stage learner) ───────────────────────

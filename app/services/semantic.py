@@ -188,6 +188,22 @@ async def delete(collection: str, ref_id: int, user_id: int) -> None:
     await asyncio.to_thread(_delete_sync, collection, ref_id, user_id)
 
 
+async def clear_collection(collection: str, user_id: int) -> int:
+    """Delete all vectors in a collection for one user. Returns rows removed."""
+    if collection not in COLLECTIONS:
+        raise ValueError(f"unknown collection: {collection}")
+    await init_db()
+
+    def _clear():
+        with _conn() as con:
+            cur = con.execute(
+                f"DELETE FROM vec_{collection} WHERE user_id = ?", (user_id,)
+            )
+            return cur.rowcount or 0
+
+    return await asyncio.to_thread(_clear)
+
+
 async def count(collection: str, user_id: int | None = None) -> int:
     def _q():
         with _conn() as con:

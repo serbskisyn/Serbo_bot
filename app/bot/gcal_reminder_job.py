@@ -132,7 +132,7 @@ async def send_daily_calendar_summary(context) -> None:
 
     calendars = []
     if GCAL_CALENDAR_ID_1:
-        calendars.append((GCAL_CALENDAR_ID_1, "Familienkalender"))
+        calendars.append((GCAL_CALENDAR_ID_1, "Atolls (Arbeit)"))
     if GCAL_CALENDAR_ID_2:
         calendars.append((GCAL_CALENDAR_ID_2, "Gmail"))
 

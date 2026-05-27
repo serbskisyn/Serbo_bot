@@ -41,7 +41,7 @@ def _configured_calendars() -> list[tuple[str, str]]:
     """Return [(calendar_id, label), ...] for every configured calendar."""
     cals = []
     if GCAL_CALENDAR_ID_1:
-        cals.append((GCAL_CALENDAR_ID_1, "Familienkalender"))
+        cals.append((GCAL_CALENDAR_ID_1, "Atolls (Arbeit)"))
     if GCAL_CALENDAR_ID_2:
         cals.append((GCAL_CALENDAR_ID_2, "Bennoschwede@gmail.com"))
     return cals

@@ -12,6 +12,9 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(todos_svc, "TODOS_DB", tmp_path / "todos.db")
     monkeypatch.setattr(profile, "PROFILE_FILE", tmp_path / "profile.yaml")
     monkeypatch.setattr(evening_reflection, "_SUMMARY_DIR", tmp_path / "summaries")
+    # No calendars in tests → _fetch_tomorrow_events returns [] without a network call
+    monkeypatch.setattr(evening_reflection, "GCAL_CALENDAR_ID_1", "")
+    monkeypatch.setattr(evening_reflection, "GCAL_CALENDAR_ID_2", "")
     profile._store.clear()
     yield
     profile._store.clear()
@@ -66,6 +69,25 @@ async def test_greeting_includes_profile_name():
     await profile.set_scalar(1, "identity", "name", "Benno")
     text = await evening_reflection.assemble_evening_reflection(1)
     assert "Benno" in text
+
+
+@pytest.mark.anyio
+async def test_includes_tomorrow_calendar_both_sources(monkeypatch):
+    monkeypatch.setattr(evening_reflection, "GCAL_CALENDAR_ID_1", "atolls@cal")
+    monkeypatch.setattr(evening_reflection, "GCAL_CALENDAR_ID_2", "gmail@cal")
+
+    def fake_get_events(cal_id, start=None, end=None, max_results=20):
+        if cal_id == "atolls@cal":
+            return [{"summary": "Standup", "start": {"dateTime": "2099-01-02T09:00:00+01:00"}}]
+        return [{"summary": "Zahnarzt", "start": {"dateTime": "2099-01-02T14:00:00+01:00"}}]
+
+    import app.services.gcal_client as gcal_client
+    monkeypatch.setattr(gcal_client, "get_events", fake_get_events)
+
+    text = await evening_reflection.assemble_evening_reflection(1)
+    assert "Morgen" in text
+    assert "Standup" in text and "Zahnarzt" in text
+    assert "[Benno@atolls.com]" in text and "[Bennoschwede@gmail.com]" in text
 
 
 @pytest.mark.anyio

@@ -11,20 +11,72 @@ so a future "weekly recap" feature has a corpus to chew on.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import aiosqlite
 
 from app.bot import profile
+from app.config import GCAL_CALENDAR_ID_1, GCAL_CALENDAR_ID_2
 from app.services import todos as todos_svc
 
 logger = logging.getLogger(__name__)
 
 _SUMMARY_DIR = Path(__file__).parent.parent / "data" / "summaries"
+_BERLIN = ZoneInfo("Europe/Berlin")
+
+# Calendar slot labels — keep in sync with app/agents/nodes/calendar.py
+_CAL_LABELS = ("Benno@atolls.com", "Bennoschwede@gmail.com")
 
 _WEEKDAYS_DE = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
+
+
+async def _fetch_tomorrow_events() -> list[dict]:
+    """Tomorrow's events from both configured calendars, tagged by source."""
+    if not (GCAL_CALENDAR_ID_1 or GCAL_CALENDAR_ID_2):
+        return []
+    from app.services.gcal_client import get_events
+
+    now = datetime.now(tz=_BERLIN)
+    start = datetime.combine(now.date(), time(0, 0), tzinfo=_BERLIN) + timedelta(days=1)
+    end = start + timedelta(days=1)
+
+    loop = asyncio.get_running_loop()
+    events: list[dict] = []
+    for cal_id, cal_label in zip((GCAL_CALENDAR_ID_1, GCAL_CALENDAR_ID_2), _CAL_LABELS):
+        if not cal_id:
+            continue
+        try:
+            evs = await loop.run_in_executor(
+                None, lambda cid=cal_id: get_events(cid, start=start, end=end, max_results=20)
+            )
+            for e in evs:
+                e["_cal_label"] = cal_label
+            events.extend(evs)
+        except Exception as exc:
+            logger.warning("reflection: get_events(%s) failed: %s", cal_label, exc)
+    events.sort(key=lambda e: (
+        "dateTime" in (e.get("start") or {}),
+        (e.get("start") or {}).get("dateTime") or (e.get("start") or {}).get("date", ""),
+    ))
+    return events
+
+
+def _fmt_cal_event(ev: dict) -> str:
+    title = (ev.get("summary") or "(kein Titel)").strip()
+    cal_label = ev.get("_cal_label", "")
+    tag = f" [{cal_label}]" if cal_label else ""
+    start = ev.get("start") or {}
+    if "dateTime" in start:
+        try:
+            dt = datetime.fromisoformat(start["dateTime"]).astimezone(_BERLIN)
+            return f"• {dt.strftime('%H:%M')} — {title}{tag}"
+        except Exception:
+            return f"• {title}{tag}"
+    return f"• 🗓 ganztägig — {title}{tag}"
 
 
 def _today_de(d: date | None = None) -> str:
@@ -120,6 +172,14 @@ async def assemble_evening_reflection(user_id: int) -> str:
                 lines.append(f"• {item}")
         for item in ungrouped:
             lines.append(f"• {item}")
+
+    # Look-ahead: tomorrow's calendar (both calendars, source-tagged)
+    tomorrow_events = await _fetch_tomorrow_events()
+    if tomorrow_events:
+        tmrw = (date.today() + timedelta(days=1))
+        lines.append(f"\n📅 *Morgen ({_WEEKDAYS_DE[tmrw.weekday()]}, {tmrw.strftime('%d.%m.')})*")
+        for ev in tomorrow_events[:10]:
+            lines.append(_fmt_cal_event(ev))
 
     lines.append(
         "\n_Hast du noch was geschafft, das nicht in der Liste war?_\n"

@@ -62,8 +62,12 @@ def _source_badge(source: str) -> str:
     return {"chat": " 💬", "granola": " 🗣", "gcal": " 🗓"}.get(source, "")
 
 
+# Calendar slot labels — keep in sync with app/agents/nodes/calendar.py
+_CAL_LABELS = ("Benno@atolls.com", "Bennoschwede@gmail.com")
+
+
 async def _fetch_today_events() -> list[dict]:
-    """Pull today's events from both configured calendars."""
+    """Pull today's events from both configured calendars, tagged by source."""
     if not (GCAL_CALENDAR_ID_1 or GCAL_CALENDAR_ID_2):
         return []
     from app.services.gcal_client import get_events
@@ -74,16 +78,18 @@ async def _fetch_today_events() -> list[dict]:
 
     loop = asyncio.get_running_loop()
     events: list[dict] = []
-    for cal_id in (GCAL_CALENDAR_ID_1, GCAL_CALENDAR_ID_2):
+    for cal_id, cal_label in zip((GCAL_CALENDAR_ID_1, GCAL_CALENDAR_ID_2), _CAL_LABELS):
         if not cal_id:
             continue
         try:
             evs = await loop.run_in_executor(
                 None, lambda cid=cal_id: get_events(cid, start=start_of_day, end=end_of_day, max_results=20)
             )
+            for e in evs:
+                e["_cal_label"] = cal_label
             events.extend(evs)
         except Exception as exc:
-            logger.warning("briefing: get_events(%s) failed: %s", cal_id, exc)
+            logger.warning("briefing: get_events(%s) failed: %s", cal_label, exc)
     # Sort by start time, all-day events first
     events.sort(key=lambda e: (
         "dateTime" in (e.get("start") or {}),
@@ -94,14 +100,16 @@ async def _fetch_today_events() -> list[dict]:
 
 def _format_event_line(ev: dict) -> str:
     title = (ev.get("summary") or "(kein Titel)").strip()
+    cal_label = ev.get("_cal_label", "")
+    tag = f" [{cal_label}]" if cal_label else ""
     start = ev.get("start") or {}
     if "dateTime" in start:
         try:
             dt = datetime.fromisoformat(start["dateTime"]).astimezone(_BERLIN)
-            return f"• {dt.strftime('%H:%M')} — {title}"
+            return f"• {dt.strftime('%H:%M')} — {title}{tag}"
         except Exception:
-            return f"• {title}"
-    return f"• 🗓 ganztägig — {title}"
+            return f"• {title}{tag}"
+    return f"• 🗓 ganztägig — {title}{tag}"
 
 
 def _relationship_alerts(user_id: int, threshold_days: int) -> list[tuple[str, int]]:

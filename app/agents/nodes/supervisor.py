@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 # Schwelle unter der der vorherige Topic beibehalten wird
 CONFIDENCE_THRESHOLD = 0.60
 
-VALID_AGENTS = {"general", "football", "chart", "web"}
+VALID_AGENTS = {"general", "football", "chart", "web", "weather", "calendar"}
 
 ROUTING_PROMPT = """Routing-Agent. Antworte NUR mit JSON, kein Text drumherum:
 {"agent": "<agent>", "confidence": <0.0-1.0>}
@@ -21,12 +21,17 @@ Agenten:
   und gleichzeitig ein Fussball-Begriff (Tabelle, Platz, Punkte, Kader, Spiel,
   Ergebnis, Trainer, Transfer) -> immer football, auch wenn 'aktuell' oder
   'heute' im Text steht.
+- weather: Wetter, Temperatur, Regen, Schnee, Sonne, Vorhersage, "wie warm",
+  "wie kalt", "muss ich einen Schirm mitnehmen". Auch ohne Ortsangabe (dann
+  Standort des Users). NIEMALS web für Wetter — immer weather.
+- calendar: Termine, Kalender, Meetings, "was steht an", "habe ich heute/morgen
+  Zeit", "wann ist mein nächster Termin", Verfügbarkeit, freie Slots.
 - chart: Diagramme, Grafiken, Plots, Visualisierungen
-- web: Allgemeine aktuelle News, Wetter, Preise, heutige Ereignisse OHNE Fussball-Bezug.
-  NIEMALS web wenn ein Verein + Fussball-Begriff vorkommt.
+- web: Allgemeine aktuelle News, Preise, heutige Ereignisse OHNE Fussball-Bezug
+  und OHNE Wetter/Kalender. NIEMALS web wenn ein Verein + Fussball-Begriff vorkommt.
 - general: alles andere, Small Talk, allgemeine Fragen
 
-Prioritaet: football > web wenn Fussball-Kontext erkennbar.
+Prioritaet: football > weather/calendar > web wenn entsprechender Kontext erkennbar.
 
 Confidence-Regeln:
 - Eindeutiger Intent -> 0.9+

@@ -6,6 +6,8 @@ from app.agents.nodes.general import general_node
 from app.agents.nodes.football import football_node
 from app.agents.nodes.chart import chart_node
 from app.agents.nodes.web import web_node
+from app.agents.nodes.weather import weather_node
+from app.agents.nodes.calendar import calendar_node
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +24,8 @@ def build_graph():
     graph.add_node("football", football_node)
     graph.add_node("chart", chart_node)
     graph.add_node("web", web_node)
+    graph.add_node("weather", weather_node)
+    graph.add_node("calendar", calendar_node)
 
     graph.set_entry_point("supervisor")
 
@@ -30,11 +34,15 @@ def build_graph():
         "football": "football",
         "chart": "chart",
         "web": "web",
+        "weather": "weather",
+        "calendar": "calendar",
     })
 
     graph.add_edge("general", END)
     graph.add_edge("football", END)
     graph.add_edge("chart", END)
     graph.add_edge("web", END)
+    graph.add_edge("weather", END)
+    graph.add_edge("calendar", END)
 
     return graph

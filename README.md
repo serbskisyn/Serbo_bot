@@ -140,12 +140,13 @@ facts, pending                                collections
 
 | Time (Europe/Berlin) | Job | What it does |
 | :--- | :--- | :--- |
-| **06:15** | `granola_daily_pull` | Pulls last 30h Granola meetings → commitments + decisions + people |
+| **06:10** | `daily_backtest_sweep` | Runs the trade-engine R/Kelly sweep (`backtest_exits.py --out …`), appends a JSON line to `sweep_history.jsonl` |
+| **06:15** | `granola_daily_pull` | Pulls last 30h Granola meetings → commitments + decisions + people, filtered to USER-owned items |
 | **06:30** | `gcal_daily_summary` | Pre-existing — pushes today's calendar events |
 | **07:00** | `daily_health_check` | Pre-existing — services / APIs / disk |
-| **07:30** | `daily_briefing` | 🌅 Morning push: today's events + top todos + yesterday's decisions + relationship alerts |
+| **07:30** | `daily_briefing` | 🌅 Morning push: today's events (both calendars, source-tagged) + top todos + yesterday's decisions + relationship alerts + 📊 Backtest-Pulse (R/Kelly) |
 | **+6h** | `gcal_ingest_periodic` | Every 6 hours — scans next 7d events, creates prep-todos for keyword-matched titles |
-| **21:30** | `evening_reflection` | 🌙 Day-end push: what got done today + what's still open + decisions logged |
+| **21:30** | `evening_reflection` | 🌙 Day-end push: what got done today + what's still open + decisions logged + tomorrow's calendar |
 | **23:00** | `daily_session_summaries` | Pre-existing — markdown summary of new info from today's conversation |
 
 ### Layer 1 — Structured profile (`app/bot/profile.py`)
@@ -343,10 +344,12 @@ write_results  --> Google Sheet (8 Validation columns) + Telegram summary
 | Agent | File | Purpose |
 | :--- | :--- | :--- |
 | Supervisor | `agents/nodes/supervisor.py` | LLM routing with confidence scoring + topic-carry |
-| General | `agents/general_agent.py` | General Q&A with per-user memory |
+| General | `agents/nodes/general.py` | General Q&A with per-user memory |
 | Football | `agents/football_news_agent.py` | Live football news + club data via Tavily |
 | Chart | `agents/chart_agent.py` | LLM generates matplotlib code → PNG |
-| Web | `agents/web_agent.py` | Tavily web search → German summary |
+| Web | `agents/nodes/web.py` | Tavily web search → German summary |
+| **Weather** | `agents/nodes/weather.py` | Live weather via Open-Meteo (no API key), location from `profile.identity.location` or query (`Wetter in München`), falls back to Berlin |
+| **Calendar** | `agents/nodes/calendar.py` | Natural-chat calendar access. Merges BOTH configured calendars (Atolls work mirror + personal Gmail), source-tagged. Time-window parsed from query (`heute` / `morgen` / `woche`) |
 | Lead Qualifying | `agents/lead_qualifying/` | B2B lead enrichment pipeline (see above) |
 | XNews | `agents/xnews_agent.py` | X.com live search via Grok (OpenRouter) |
 
@@ -392,8 +395,8 @@ Always call `is_injection_async()` (async two-stage); never the sync wrapper ins
 | `GNEWS_API_KEY` | `""` | GNews API key (optional, football news) |
 | `GROK_API_KEY` | `""` | Grok API key for `/xnews` (X.com live search) |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | `""` | Google Sheets + Calendar service account credentials |
-| `GCAL_CALENDAR_ID_1` | `""` | Gmail calendar ID |
-| `GCAL_CALENDAR_ID_2` | `""` | Workspace calendar ID |
+| `GCAL_CALENDAR_ID_1` | `""` | Slot 1 calendar ID (currently the "Atolls Arbeit" mirror — see Calendar Setup below) |
+| `GCAL_CALENDAR_ID_2` | `""` | Slot 2 calendar ID (currently `bennoschwede@gmail.com`) |
 
 ### Lead Qualifying
 
@@ -416,6 +419,9 @@ Always call `is_injection_async()` (async two-stage); never the sync wrapper ins
 | `REFLECTION_HOUR` | `21` | Evening reflection push hour |
 | `REFLECTION_MINUTE` | `30` | Evening reflection push minute |
 | `REFLECTION_ENABLED` | `true` | Set to `false` to disable the evening push |
+| `SWEEP_HOUR` | `6` | Daily trade-engine R/Kelly sweep hour (runs before the morning briefing) |
+| `SWEEP_MINUTE` | `10` | Daily sweep minute |
+| `SWEEP_ENABLED` | `true` | Set to `false` to disable the daily sweep job |
 
 The morning + evening pushes go to every user in `NEWS_DAILY_PUSH_USER_IDS`.
 
@@ -435,9 +441,19 @@ The morning + evening pushes go to every user in `NEWS_DAILY_PUSH_USER_IDS`.
 | :--- | :--- | :--- |
 | `KRAKEN_API_KEY` / `KRAKEN_API_SECRET` | — | Kraken exchange keys |
 | `ALPACA_API_KEY` / `ALPACA_SECRET_KEY` | — | Alpaca API keys |
-| `ALPACA_PAPER` | `false` | Paper trading mode |
+| `ALPACA_PAPER` | `false` | Alpaca-native paper trading mode (stocks only) |
 | `TRADE_ENGINE_URL` | `http://127.0.0.1:8081` | Trade Engine REST API |
 | `TRADE_ENGINE_SECRET` | — | API auth secret |
+
+Trade-engine-side variables live in `/home/pi/trade_engine/.env`:
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `BUY_CONFIDENCE_CRYPTO` | `0.55` | Crypto entry threshold (lowered 2026-05-27 from 0.70 — LLM caps around 0.56) |
+| `TRAILING_TRAIL_PCT_CRYPTO` | `0.03` | Trailing-stop width (widened from 0.015 — winners-run, R-tuning) |
+| `MIN_PROFIT_PCT` | `0.012` | LLM-exit profit gate (raised from 0.003 — protect early winners) |
+| `ENTRY_DEBATE_ENABLED` | `true` | Bull/Bear+Judge debate for entries (Phase 6 of trade-engine work) |
+| `TRADING_DRY_RUN` | `false` | Global dry-run: simulate fills, place no real orders. Safety gate before scaling position size. |
 
 ---
 
@@ -459,6 +475,13 @@ python scripts/rerun_lead_row.py <row>
 # One-shot upgrades
 python -m scripts.migrate_memory_to_profile   # legacy memory.json → profile.yaml
 python -m scripts.backfill_embeddings         # embed existing todos + people
+python -m scripts.cleanup_granola_todos --yes # wipe + resync Granola todos (use --reset-people to also wipe people)
+
+# Manual trade-engine sweep (normally daily at 06:10 via sweep_job)
+cd /home/pi/trade_engine && source .venv/bin/activate
+python -m scripts.backtest_exits                            # R/Kelly sweep across trail-widths
+python -m scripts.backtest_exits --out data/sweep_history.jsonl  # + persist for briefing
+python -m scripts.backtest_exits --simple                   # ALT-vs-NEU two-set comparison
 
 # Live logs
 sudo journalctl -u serbo_bot -f
@@ -478,6 +501,20 @@ sudo journalctl -u serbo_bot -f
 | `app/data/briefing_state.json` | JSON | Idempotency marker for morning push |
 | `app/data/reflection_state.json` | JSON | Idempotency marker for evening push |
 | `app/data/memory.json.legacy` | JSON | Archived legacy flat memory (post-migration) |
+| `/home/pi/trade_engine/data/sweep_history.jsonl` | JSONL | One line per daily R/Kelly sweep — tailed by the briefing's 📊 Backtest-Pulse |
+
+---
+
+## Calendar Setup
+
+Two calendars feed the bot, both source-tagged in chat / briefing / reflection:
+
+| Slot | What | How |
+| :--- | :--- | :--- |
+| `GCAL_CALENDAR_ID_1` | **Atolls (Arbeit)** — work calendar | Atolls Workspace policy blocks external service-account sharing. Workaround: a Google Apps Script (`scripts/atolls_calendar_mirror.gs`) runs inside the Atolls account on a 5-minute timer, mirroring the work calendar into a personal Gmail calendar called "Atolls Arbeit". The bot reads that personal mirror — no external sharing of the Atolls calendar needed, and the trigger survives SSO since it runs server-side in Google. |
+| `GCAL_CALENDAR_ID_2` | **`Bennoschwede@gmail.com`** | Shared directly with the bot service account. |
+
+To add a new calendar in the future, see the header comment of `scripts/atolls_calendar_mirror.gs` — full setup walkthrough.
 
 ---
 

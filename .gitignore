@@ -1,16 +1,33 @@
+# Secrets / Credentials
 .env
+.env.*
+!.env.example
+credentials.json
+
+# Python
 .venv/
 venv/
 __pycache__/
 *.pyc
 *.pyo
+
+# IDE
 .idea/
+.vscode/
+.DS_Store
+
+# Media (test artefacts)
 *.ogg
 *.wav
 *.mp3
-.DS_Store
+
+# Bot data (profile, todos, semantic vectors, sweep history, embeddings cache, …)
 app/data/
-credentials.json
 logs/
+
+# Strava session tokens
 strava_kudos/session.json
 strava_kudos/tokens.json
+
+# Claude Code project settings + scheduled-task locks (contains permissions config)
+.claude/

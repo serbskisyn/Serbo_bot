@@ -107,6 +107,14 @@ REFLECTION_HOUR: int = int(os.getenv("REFLECTION_HOUR", "21"))
 REFLECTION_MINUTE: int = int(os.getenv("REFLECTION_MINUTE", "30"))
 REFLECTION_ENABLED: bool = os.getenv("REFLECTION_ENABLED", "true").lower() == "true"
 
+# ── Daily Backtest Sweep (Trade Engine) ──────────────────────────────────────
+# Läuft vor dem Briefing (07:30) und schreibt eine JSON-Zeile pro Tag nach
+# /home/pi/trade_engine/data/sweep_history.jsonl. Briefing zieht daraus eine
+# Kompakt-Zeile (Trail/R/Kelly), damit der Edge-Verlauf täglich sichtbar ist.
+SWEEP_HOUR: int = int(os.getenv("SWEEP_HOUR", "6"))
+SWEEP_MINUTE: int = int(os.getenv("SWEEP_MINUTE", "10"))
+SWEEP_ENABLED: bool = os.getenv("SWEEP_ENABLED", "true").lower() == "true"
+
 
 # ── Trading Bot (Freqtrade / Crypto) ─────────────────────────────────────────
 FREQTRADE_API_URL:      str = os.getenv("FREQTRADE_API_URL", "http://localhost:8080")

@@ -33,6 +33,7 @@ from app.bot.alpaca_job import register_alpaca_jobs
 from app.bot.sync_jobs import register_sync_jobs
 from app.bot.briefing_job import register_briefing_job, briefing_handler
 from app.bot.evening_job import register_evening_job, reflect_handler
+from app.bot.sweep_job import register_sweep_job
 
 _BERLIN = ZoneInfo("Europe/Berlin")
 
@@ -70,6 +71,7 @@ async def _post_init(application) -> None:
     register_sync_jobs(application)
     register_briefing_job(application)
     register_evening_job(application)
+    register_sweep_job(application)
 
     if GCAL_CALENDAR_ID_1 or GCAL_CALENDAR_ID_2:
         jq.run_daily(

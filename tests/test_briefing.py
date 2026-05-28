@@ -13,6 +13,8 @@ def isolated_stores(tmp_path, monkeypatch):
     monkeypatch.setattr(profile, "PROFILE_FILE", tmp_path / "profile.yaml")
     monkeypatch.setattr(briefing, "GCAL_CALENDAR_ID_1", "")
     monkeypatch.setattr(briefing, "GCAL_CALENDAR_ID_2", "")
+    # No sweep history during tests (each test patches it explicitly if needed)
+    monkeypatch.setattr(briefing, "SWEEP_HISTORY_FILE", tmp_path / "sweep_history.jsonl")
     profile._store.clear()
     yield
     profile._store.clear()
@@ -137,3 +139,59 @@ async def test_briefing_orders_overdue_first():
     text = await briefing.assemble_briefing(1)
     # overdue should appear before the undated one
     assert text.index("overdue_todo") < text.index("no_due_todo")
+
+
+# ── Backtest-Pulse (sweep history) ───────────────────────────────────────────
+
+
+def test_read_latest_sweep_missing_file():
+    assert briefing._read_latest_sweep() is None
+
+
+def test_read_latest_sweep_returns_last_line(tmp_path, monkeypatch):
+    import json
+    path = tmp_path / "sweep_history.jsonl"
+    path.write_text(
+        json.dumps({"date": "2026-05-27", "best_by_kelly": {"trail_pct": 0.030, "r": 0.92, "kelly": -0.05, "win_rate": 0.48}}) + "\n"
+        + json.dumps({"date": "2026-05-28", "best_by_kelly": {"trail_pct": 0.015, "r": 1.03, "kelly": 0.003, "win_rate": 0.494}}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(briefing, "SWEEP_HISTORY_FILE", path)
+    out = briefing._read_latest_sweep()
+    assert out["date"] == "2026-05-28"
+
+
+def test_format_sweep_block_marginal_edge():
+    s = {"date": "2026-05-28",
+         "best_by_kelly": {"trail_pct": 0.015, "r": 1.03, "win_rate": 0.494, "kelly": 0.003}}
+    block = briefing._format_sweep_block(s)
+    assert "Backtest-Pulse" in block
+    assert "2026-05-28" in block
+    assert "marginaler Edge" in block
+
+
+def test_format_sweep_block_no_edge():
+    s = {"best_by_kelly": {"trail_pct": 0.03, "r": 0.9, "win_rate": 0.48, "kelly": -0.08}}
+    block = briefing._format_sweep_block(s)
+    assert "kein Edge" in block
+
+
+def test_format_sweep_block_clear_edge():
+    s = {"best_by_kelly": {"trail_pct": 0.025, "r": 3.5, "win_rate": 0.42, "kelly": 0.25}}
+    block = briefing._format_sweep_block(s)
+    assert "Edge messbar" in block
+
+
+@pytest.mark.anyio
+async def test_briefing_includes_sweep_block_when_file_present(tmp_path, monkeypatch):
+    import json
+    path = tmp_path / "sweep_history.jsonl"
+    path.write_text(
+        json.dumps({"date": "2026-05-28",
+                    "best_by_kelly": {"trail_pct": 0.015, "r": 1.03, "win_rate": 0.494, "kelly": 0.003}}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(briefing, "SWEEP_HISTORY_FILE", path)
+    text = await briefing.assemble_briefing(1)
+    assert "Backtest-Pulse" in text
+    assert "1.5%" in text  # the trail_pct rendering

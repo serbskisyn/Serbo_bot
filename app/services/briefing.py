@@ -15,8 +15,10 @@ at 06:15, briefing at 07:30).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import date, datetime, time, timedelta, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from app.bot import profile
@@ -25,6 +27,9 @@ from app.config import (
     GCAL_CALENDAR_ID_1, GCAL_CALENDAR_ID_2,
 )
 from app.services import todos as todos_svc
+
+# Tagessummary des Trade-Engine Sweeps — wird vom sweep_job (06:10) geschrieben.
+SWEEP_HISTORY_FILE = Path("/home/pi/trade_engine/data/sweep_history.jsonl")
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +142,49 @@ def _relationship_alerts(user_id: int, threshold_days: int) -> list[tuple[str, i
     return alerts[:5]
 
 
+def _read_latest_sweep() -> dict | None:
+    """Tail-read the last JSON line of the daily sweep history. None on any error."""
+    try:
+        if not SWEEP_HISTORY_FILE.exists():
+            return None
+        with SWEEP_HISTORY_FILE.open("rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            if size == 0:
+                return None
+            f.seek(max(0, size - 4096))
+            tail = f.read().decode("utf-8", errors="ignore")
+        lines = [ln for ln in tail.strip().splitlines() if ln.strip()]
+        if not lines:
+            return None
+        return json.loads(lines[-1])
+    except Exception as exc:
+        logger.debug("briefing: sweep read skipped: %s", exc)
+        return None
+
+
+def _format_sweep_block(sweep: dict) -> str:
+    bk = sweep.get("best_by_kelly") or sweep.get("best_by_expectancy") or {}
+    if not bk:
+        return ""
+    trail = float(bk.get("trail_pct") or 0)
+    r = float(bk.get("r") or 0)
+    wr = float(bk.get("win_rate") or 0)
+    kelly = float(bk.get("kelly") or 0)
+    sweep_date = sweep.get("date", "?")
+    if kelly >= 0.05:
+        verdict = "✅ Edge messbar"
+    elif kelly > 0:
+        verdict = "🟡 marginaler Edge"
+    else:
+        verdict = "➖ kein Edge"
+    return (
+        f"\n📊 *Backtest-Pulse* ({sweep_date})\n"
+        f"• Best Trail {trail*100:.1f}% · R={r:.2f} · "
+        f"WR={wr*100:.1f}% · Kelly {kelly*100:+.1f}% — {verdict}"
+    )
+
+
 async def _yesterday_decisions_with_notes(user_id: int) -> list[tuple[str, str]]:
     """Granola-sourced decisions added in the last ~36h, as (text, notes) tuples."""
     await todos_svc.init_db()
@@ -236,4 +284,12 @@ async def assemble_briefing(user_id: int) -> str:
         parts.append(decisions_block)
     if alerts_block:
         parts.append(alerts_block)
+
+    # Trade-Engine Backtest-Pulse (vom Daily-Sweep um 06:10 geschrieben)
+    sweep = _read_latest_sweep()
+    if sweep:
+        block = _format_sweep_block(sweep)
+        if block:
+            parts.append(block)
+
     return "\n".join(parts)

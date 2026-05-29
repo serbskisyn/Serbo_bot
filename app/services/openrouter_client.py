@@ -52,8 +52,16 @@ async def ask_llm(
         logger.error("OpenRouter Timeout")
         return "Die Anfrage hat zu lange gedauert. Bitte versuche es erneut."
     except httpx.HTTPStatusError as e:
-        logger.error(f"OpenRouter Fehler: {e.response.status_code}")
-        return "Problem mit der KI-Verbindung. Bitte versuche es später erneut."
+        body = (e.response.text or "")[:300]
+        logger.error("OpenRouter Fehler %s: %s", e.response.status_code, body[:200])
+        body_lc = body.lower()
+        if "limit exceeded" in body_lc or "insufficient_quota" in body_lc:
+            return "⚠️ OpenRouter-Konto-Limit erreicht — bitte Credits nachladen unter openrouter.ai/keys"
+        if e.response.status_code == 401:
+            return "⚠️ OpenRouter API-Key abgelehnt (401) — Key in .env prüfen."
+        if e.response.status_code == 429:
+            return "⏳ OpenRouter Rate-Limit aktiv — kurz warten und nochmal."
+        return f"Problem mit der KI-Verbindung (HTTP {e.response.status_code}). Bitte versuche es später erneut."
     except Exception as e:
         logger.error(f"Unbekannter Fehler: {e}", exc_info=True)
         return "Ein unerwarteter Fehler ist aufgetreten."

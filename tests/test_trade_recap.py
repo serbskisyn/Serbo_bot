@@ -66,13 +66,24 @@ def test_read_sweep_by_date(monkeypatch):
 # ── Trade-log reading ────────────────────────────────────────────────────────
 
 
-def _seed_trades(path, rows: list[tuple]):
+def _seed_trades(path, rows: list[tuple], with_mode: bool = True):
+    """rows is (closed_at, market, symbol, side, entry, exit, pl_pct, pl_abs, reason[, mode])."""
     con = sqlite3.connect(str(path))
-    con.execute("""CREATE TABLE trade_log (
-        closed_at TEXT, market TEXT, symbol TEXT, side TEXT,
-        entry_price REAL, exit_price REAL, pl_pct REAL, pl_abs REAL, reason TEXT
-    )""")
-    con.executemany("INSERT INTO trade_log VALUES (?,?,?,?,?,?,?,?,?)", rows)
+    if with_mode:
+        con.execute("""CREATE TABLE trade_log (
+            closed_at TEXT, market TEXT, symbol TEXT, side TEXT,
+            entry_price REAL, exit_price REAL, pl_pct REAL, pl_abs REAL, reason TEXT,
+            mode TEXT DEFAULT 'live'
+        )""")
+        # Pad rows to include mode if not supplied
+        rows_full = [r if len(r) == 10 else (*r, "live") for r in rows]
+        con.executemany("INSERT INTO trade_log VALUES (?,?,?,?,?,?,?,?,?,?)", rows_full)
+    else:
+        con.execute("""CREATE TABLE trade_log (
+            closed_at TEXT, market TEXT, symbol TEXT, side TEXT,
+            entry_price REAL, exit_price REAL, pl_pct REAL, pl_abs REAL, reason TEXT
+        )""")
+        con.executemany("INSERT INTO trade_log VALUES (?,?,?,?,?,?,?,?,?)", rows)
     con.commit()
     con.close()
 
@@ -118,8 +129,49 @@ def test_build_recap_with_data():
     out = trade_recap.build_recap(days=7)
     assert "BT R=1.25" in out
     assert "K=+8.0%" in out
-    assert "Live 2T" in out  # 2 trades yesterday
+    assert "Live 2T" in out  # 2 trades yesterday (default mode=live)
     assert "WR=50%" in out
     # Cumulative row
     assert "Σ Live" in out
     assert "2 Trades" in out
+
+
+def test_build_recap_separates_live_from_dry_run():
+    today = date.today()
+    yesterday = (today - timedelta(days=1)).isoformat()
+    _seed_trades(trade_recap.TRADES_DB, [
+        (yesterday + "T10:00:00", "crypto", "ETH/BTC", "long", 1.0, 1.025, 2.5, 0.025, "trail", "live"),
+        (yesterday + "T11:00:00", "crypto", "DOT/BTC", "long", 1.0, 1.03,  3.0, 0.030, "trail", "dry_run"),
+        (yesterday + "T12:00:00", "crypto", "SOL/BTC", "long", 1.0, 0.98, -2.0, -0.020, "stop",  "dry_run"),
+    ])
+    out = trade_recap.build_recap(days=7)
+    assert "Live 1T" in out         # one live trade
+    assert "🧪 2T" in out             # day-line annotation that there's sim too
+    # Cumulative split
+    assert "Σ Live" in out
+    assert "Σ 🧪 Sim" in out
+    assert "2 Trades" in out          # sim cumulative
+
+
+def test_build_recap_dry_run_only_when_no_live():
+    today = date.today()
+    yesterday = (today - timedelta(days=1)).isoformat()
+    _seed_trades(trade_recap.TRADES_DB, [
+        (yesterday + "T10:00:00", "crypto", "ETH/BTC", "long", 1.0, 1.02, 2.0, 0.020, "trail", "dry_run"),
+    ])
+    out = trade_recap.build_recap(days=7)
+    # Right-side shows Sim, not Live
+    assert "🧪 Sim 1T" in out
+    assert "Σ 🧪 Sim" in out
+    # No misleading "Live —" cumulative line
+
+
+def test_legacy_db_without_mode_column_still_works():
+    today = date.today()
+    yesterday = (today - timedelta(days=1)).isoformat()
+    _seed_trades(trade_recap.TRADES_DB, [
+        (yesterday + "T10:00:00", "crypto", "ETH/BTC", "long", 1.0, 1.02, 2.0, 0.020, "trail"),
+    ], with_mode=False)
+    out = trade_recap.build_recap(days=7)
+    # Falls back to mode='live' for rows without the column
+    assert "Live 1T" in out

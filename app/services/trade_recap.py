@@ -56,7 +56,7 @@ def _read_sweep_by_date(days: int) -> dict[str, dict]:
 
 
 def _read_trades_by_date(days: int) -> dict[str, list[dict]]:
-    """Map "YYYY-MM-DD" → list of trade rows closed that day."""
+    """Map "YYYY-MM-DD" → list of trade rows closed that day, including mode."""
     if not TRADES_DB.exists():
         return {}
     cutoff = (date.today() - timedelta(days=days - 1)).isoformat()
@@ -64,9 +64,12 @@ def _read_trades_by_date(days: int) -> dict[str, list[dict]]:
     try:
         con = sqlite3.connect(str(TRADES_DB))
         con.row_factory = sqlite3.Row
+        # `mode` column may not exist on older DBs — graceful fallback.
+        col_set = {r[1] for r in con.execute("PRAGMA table_info(trade_log)").fetchall()}
+        mode_col = "mode" if "mode" in col_set else "'live' AS mode"
         cur = con.execute(
-            """SELECT closed_at, market, symbol, side, entry_price, exit_price,
-                      pl_pct, pl_abs, reason
+            f"""SELECT closed_at, market, symbol, side, entry_price, exit_price,
+                       pl_pct, pl_abs, reason, {mode_col}
                FROM trade_log
                WHERE closed_at >= ?
                ORDER BY closed_at""",
@@ -77,6 +80,7 @@ def _read_trades_by_date(days: int) -> dict[str, list[dict]]:
             out.setdefault(d, []).append({
                 "market": r["market"], "symbol": r["symbol"], "side": r["side"],
                 "pl_pct": r["pl_pct"] or 0.0, "reason": r["reason"] or "",
+                "mode": r["mode"] if "mode" in r.keys() else "live",
             })
         con.close()
     except Exception as exc:
@@ -109,8 +113,24 @@ def _live_kpis(trades: list[dict]) -> dict | None:
 # ── Output composition ───────────────────────────────────────────────────────
 
 
-def _format_day(d: date, sweep: dict | None, kpis: dict | None) -> str:
-    """One line per day, Telegram-friendly."""
+def _split_by_mode(trades: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Returns (live_trades, dry_run_trades)."""
+    live = [t for t in trades if t.get("mode", "live") == "live"]
+    sim = [t for t in trades if t.get("mode") == "dry_run"]
+    return live, sim
+
+
+def _fmt_kpis(label: str, kpis: dict | None) -> str:
+    if not kpis:
+        return f"{label} —"
+    n, wr, net = kpis["n"], kpis["wr"], kpis["net"]
+    r_str = f" R={kpis['r']:.2f}" if kpis.get("r") is not None else ""
+    return f"{label} {n}T WR={wr*100:.0f}% Net={net*100:+.2f}%{r_str}"
+
+
+def _format_day(d: date, sweep: dict | None, live_kpis: dict | None,
+                sim_kpis: dict | None) -> str:
+    """One line per day, Telegram-friendly. Live + Sim shown separately if present."""
     day_str = d.strftime("%a %d.%m.").replace("Mon", "Mo").replace("Tue", "Di").replace(
         "Wed", "Mi").replace("Thu", "Do").replace("Fri", "Fr").replace("Sat", "Sa").replace("Sun", "So")
 
@@ -123,44 +143,60 @@ def _format_day(d: date, sweep: dict | None, kpis: dict | None) -> str:
     else:
         bt_part = "BT —"
 
-    # Live realised
-    if kpis:
-        n, wr, net = kpis["n"], kpis["wr"], kpis["net"]
-        r_str = f" R={kpis['r']:.2f}" if kpis.get("r") is not None else ""
-        live_part = f"Live {n}T WR={wr*100:.0f}% Net={net*100:+.2f}%{r_str}"
+    # Pick what to show on the right side:
+    # - If we have live trades that day → show Live (Sim mostly irrelevant once live runs)
+    # - Else if dry-run trades → show 🧪 Sim
+    # - Else → "—"
+    if live_kpis:
+        right = _fmt_kpis("Live", live_kpis)
+        if sim_kpis:
+            right += f" · 🧪 {sim_kpis['n']}T"
+    elif sim_kpis:
+        right = _fmt_kpis("🧪 Sim", sim_kpis)
     else:
-        live_part = "Live —"
+        right = "Live —"
 
-    return f"`{day_str}`  {bt_part}  ·  {live_part}"
+    return f"`{day_str}`  {bt_part}  ·  {right}"
 
 
 def build_recap(days: int = 7) -> str:
-    """Markdown block summarising the last `days` days of R/Kelly + live trades."""
+    """Markdown block summarising the last `days` days of R/Kelly + trades (live + dry-run)."""
     sweeps = _read_sweep_by_date(days)
-    live = _read_trades_by_date(days)
+    by_day = _read_trades_by_date(days)
     today = date.today()
 
-    lines = [f"📊 *{days}-Tage Trading-Pulse* (Backtest · Live)"]
+    lines = [f"📊 *{days}-Tage Trading-Pulse* (Backtest · Live / 🧪 Sim)"]
     any_data = False
     for offset in range(days - 1, -1, -1):
         d = today - timedelta(days=offset)
         key = d.isoformat()
         sweep = sweeps.get(key)
-        kpis = _live_kpis(live.get(key) or [])
-        if sweep or kpis:
+        live_trades, sim_trades = _split_by_mode(by_day.get(key) or [])
+        live_kpis = _live_kpis(live_trades)
+        sim_kpis = _live_kpis(sim_trades)
+        if sweep or live_kpis or sim_kpis:
             any_data = True
-        lines.append(_format_day(d, sweep, kpis))
+        lines.append(_format_day(d, sweep, live_kpis, sim_kpis))
 
-    # Cumulative live KPIs across the window
-    all_trades = [t for ts in live.values() for t in ts]
-    cum = _live_kpis(all_trades)
-    if cum:
+    # Cumulative KPIs split by mode
+    all_trades = [t for ts in by_day.values() for t in ts]
+    cum_live, cum_sim = _split_by_mode(all_trades)
+    cum_live_kpis = _live_kpis(cum_live)
+    cum_sim_kpis = _live_kpis(cum_sim)
+    if cum_live_kpis or cum_sim_kpis:
         lines.append("")
-        r_str = f" · R={cum['r']:.2f}" if cum.get("r") is not None else ""
-        lines.append(
-            f"*Σ Live ({days}d):* {cum['n']} Trades · WR={cum['wr']*100:.0f}% · "
-            f"Net={cum['net']*100:+.2f}%{r_str}"
-        )
+        if cum_live_kpis:
+            r_str = f" · R={cum_live_kpis['r']:.2f}" if cum_live_kpis.get("r") is not None else ""
+            lines.append(
+                f"*Σ Live ({days}d):* {cum_live_kpis['n']} Trades · "
+                f"WR={cum_live_kpis['wr']*100:.0f}% · Net={cum_live_kpis['net']*100:+.2f}%{r_str}"
+            )
+        if cum_sim_kpis:
+            r_str = f" · R={cum_sim_kpis['r']:.2f}" if cum_sim_kpis.get("r") is not None else ""
+            lines.append(
+                f"*Σ 🧪 Sim ({days}d):* {cum_sim_kpis['n']} Trades · "
+                f"WR={cum_sim_kpis['wr']*100:.0f}% · Net={cum_sim_kpis['net']*100:+.2f}%{r_str}"
+            )
     if not any_data:
         lines.append("_Keine Daten verfügbar (Sweep + Trade-Log leer)._")
     return "\n".join(lines)

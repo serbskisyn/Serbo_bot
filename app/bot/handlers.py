@@ -8,6 +8,7 @@ from telegram.ext import ContextTypes
 from app.services.profile_learner import learn as profile_learn
 from app.services.todo_extractor import extract_from_chat as todo_extract
 from app.services.completion_extractor import extract_from_chat as completion_extract
+from app.services.todo_drop_extractor import extract_from_chat as todo_drop_extract
 from app.services.speech_to_text import transcribe_voice
 from app.services.tts import synthesize as tts_synthesize
 from app.security.injection_guard import is_injection_async
@@ -101,6 +102,7 @@ async def _process_message(user_id: int, text: str, update: Update, context) -> 
     asyncio.create_task(profile_learn(user_id, text, response))
     asyncio.create_task(todo_extract(user_id, text, response))
     asyncio.create_task(completion_extract(user_id, text, response))
+    asyncio.create_task(todo_drop_extract(user_id, text, response))
     await update.message.reply_text(response)
     return response
 
@@ -146,6 +148,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/kalender2 — Bennoschwede@gmail.com aktiv\n\n"
         f"📈 *Trading Bot (Crypto + Stocks)*\n"
         f"/tradebot — Kombinierter Status (Crypto + Stocks)\n"
+        f"/recap [Tage] — 7-Tage R/Kelly + Live-Trade-Pulse (default 7, max 30)\n"
         f"/tradebot crypto pause — Neue Crypto-Käufe stoppen\n"
         f"/tradebot crypto resume — Crypto-Käufe wieder aktivieren\n"
         f"/tradebot stocks scan — Manuellen Aktien-Scan starten\n"

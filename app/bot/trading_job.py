@@ -6,6 +6,7 @@ from telegram.ext import ContextTypes
 from app.bot.whitelist import is_allowed
 from app.config import ADMIN_CHAT_ID, TRADING_STATS_HOUR, TRADING_STATS_MINUTE
 from app.services.trade_engine_client import fetch_status, fetch_crypto_status, trigger_scan, control_crypto
+from app.services.trade_recap import build_recap
 
 logger = logging.getLogger(__name__)
 
@@ -89,11 +90,38 @@ async def send_daily_trading_stats(context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     try:
         report = await fetch_crypto_status()
+        # Append the 7-day R/Kelly + live-trade pulse so the user can track
+        # the edge evolution daily.
+        try:
+            recap = build_recap(days=7)
+            report = f"{report}\n\n{recap}"
+        except Exception as exc:
+            logger.warning("daily_trading_stats: recap section skipped: %s", exc)
         await context.bot.send_message(
             chat_id=ADMIN_CHAT_ID, text=report, parse_mode="Markdown"
         )
     except Exception as e:
         logger.error("Trading Stats senden fehlgeschlagen: %s", e)
+
+
+async def recap_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Manual /recap — show the 7-day R/Kelly + live-trade pulse on demand."""
+    if not is_allowed(update.effective_user.id):
+        await update.message.reply_text("⛔ Kein Zugriff.")
+        return
+    # Optional arg: /recap 14 → last 14 days
+    days = 7
+    if context.args:
+        try:
+            days = max(1, min(30, int(context.args[0])))
+        except ValueError:
+            pass
+    try:
+        text = build_recap(days=days)
+        await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception as exc:
+        logger.error("recap_handler: %s", exc, exc_info=True)
+        await update.message.reply_text("❌ Recap konnte nicht erstellt werden.")
 
 
 def register_trading_stats_job(application) -> None:

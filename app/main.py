@@ -28,7 +28,7 @@ from app.bot.session_summary import create_daily_summaries, summary_handler
 from app.services.health_check import send_daily_health_check
 from app.bot.gcal_reminder_job import register_gcal_reminder_job, send_daily_calendar_summary
 from app.agents.schedule.lead_qualifying_agent import register_lead_qualifying_job
-from app.bot.trading_job import tradebot_handler, register_trading_stats_job
+from app.bot.trading_job import tradebot_handler, register_trading_stats_job, recap_handler
 from app.bot.alpaca_job import register_alpaca_jobs
 from app.bot.sync_jobs import register_sync_jobs
 from app.bot.briefing_job import register_briefing_job, briefing_handler
@@ -115,6 +115,7 @@ def main():
     app.add_handler(CommandHandler("kalender1", kalender1_handler))
     app.add_handler(CommandHandler("kalender2", kalender2_handler))
     app.add_handler(CommandHandler("tradebot", tradebot_handler))
+    app.add_handler(CommandHandler("recap",    recap_handler))
     app.add_handler(CommandHandler("leads",    leads_handler))
     app.add_handler(CommandHandler("todo",     todo_handler))
     app.add_handler(CommandHandler("todos",    todo_handler))

@@ -312,11 +312,11 @@ async def assemble_daily_digest(user_id: int) -> str:
     except Exception as exc:
         logger.warning("daily_digest: fetch_status failed: %s", exc)
 
-    # 7-Tage Recap (Backtest- + Live-/Sim-Pulse)
+    # 7-Tage Recap — compact (Σ + letzte 3 Tage), Detail über /recap manuell.
     recap_block = ""
     try:
         from app.services.trade_recap import build_recap
-        recap_block = build_recap(days=7)
+        recap_block = build_recap(days=7, compact=True)
     except Exception as exc:
         logger.warning("daily_digest: build_recap failed: %s", exc)
 

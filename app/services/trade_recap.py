@@ -159,14 +159,20 @@ def _format_day(d: date, sweep: dict | None, live_kpis: dict | None,
     return f"`{day_str}`  {bt_part}  ·  {right}"
 
 
-def build_recap(days: int = 7) -> str:
-    """Markdown block summarising the last `days` days of R/Kelly + trades (live + dry-run)."""
+def build_recap(days: int = 7, compact: bool = False) -> str:
+    """Markdown block summarising the last `days` days of R/Kelly + trades (live + dry-run).
+
+    `compact=True` skips empty days (no sweep, no trades) and shows only the
+    last 3 non-empty days — used in the daily digest where the cumulative Σ
+    is the headline and per-day detail is secondary.
+    """
     sweeps = _read_sweep_by_date(days)
     by_day = _read_trades_by_date(days)
     today = date.today()
 
     lines = [f"📊 *{days}-Tage Trading-Pulse* (Backtest · Live / 🧪 Sim)"]
     any_data = False
+    day_lines: list[tuple[bool, str]] = []
     for offset in range(days - 1, -1, -1):
         d = today - timedelta(days=offset)
         key = d.isoformat()
@@ -174,9 +180,20 @@ def build_recap(days: int = 7) -> str:
         live_trades, sim_trades = _split_by_mode(by_day.get(key) or [])
         live_kpis = _live_kpis(live_trades)
         sim_kpis = _live_kpis(sim_trades)
-        if sweep or live_kpis or sim_kpis:
+        has_data = bool(sweep or live_kpis or sim_kpis)
+        if has_data:
             any_data = True
-        lines.append(_format_day(d, sweep, live_kpis, sim_kpis))
+        day_lines.append((has_data, _format_day(d, sweep, live_kpis, sim_kpis)))
+
+    if compact:
+        # Show only the last 3 days that actually have data — the Σ row below
+        # carries the full picture.
+        lines.extend(line for has, line in day_lines if has)
+        # Trim to last 3 (header + last 3 lines)
+        if len(lines) > 4:
+            lines = [lines[0], *lines[-3:]]
+    else:
+        lines.extend(line for _, line in day_lines)
 
     # Cumulative KPIs split by mode
     all_trades = [t for ts in by_day.values() for t in ts]

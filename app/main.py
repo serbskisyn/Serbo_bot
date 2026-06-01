@@ -6,8 +6,6 @@ from app.config import (
     validate_config, TELEGRAM_BOT_TOKEN,
     SESSION_SUMMARY_HOUR, SESSION_SUMMARY_MINUTE,
     HEALTH_CHECK_HOUR, HEALTH_CHECK_MINUTE,
-    GCAL_DAILY_SUMMARY_HOUR, GCAL_DAILY_SUMMARY_MINUTE,
-    GCAL_CALENDAR_ID_1, GCAL_CALENDAR_ID_2,
 )
 from app.utils.logging_setup import setup_logging
 from app.bot.handlers import (
@@ -26,9 +24,9 @@ from app.bot.daily_news_job import register_daily_news_job
 from app.bot.bot_context import set_bot
 from app.bot.session_summary import create_daily_summaries, summary_handler
 from app.services.health_check import send_daily_health_check
-from app.bot.gcal_reminder_job import register_gcal_reminder_job, send_daily_calendar_summary
+from app.bot.gcal_reminder_job import register_gcal_reminder_job
 from app.agents.schedule.lead_qualifying_agent import register_lead_qualifying_job
-from app.bot.trading_job import tradebot_handler, register_trading_stats_job, recap_handler, papertrade_handler
+from app.bot.trading_job import tradebot_handler, recap_handler, papertrade_handler
 from app.bot.alpaca_job import register_alpaca_jobs
 from app.bot.sync_jobs import register_sync_jobs
 from app.bot.briefing_job import register_briefing_job, briefing_handler
@@ -66,20 +64,13 @@ async def _post_init(application) -> None:
 
     register_gcal_reminder_job(application)
     register_lead_qualifying_job(application)
-    register_trading_stats_job(application)
+    # Daily Trading-Stats (08:15) und Daily Calendar Summary (06:30) werden
+    # vom konsolidierten Morgen-Digest (register_briefing_job, 06:30) abgedeckt.
     register_alpaca_jobs(application)
     register_sync_jobs(application)
     register_briefing_job(application)
     register_evening_job(application)
     register_sweep_job(application)
-
-    if GCAL_CALENDAR_ID_1 or GCAL_CALENDAR_ID_2:
-        jq.run_daily(
-            callback=send_daily_calendar_summary,
-            time=time(hour=GCAL_DAILY_SUMMARY_HOUR, minute=GCAL_DAILY_SUMMARY_MINUTE, tzinfo=_BERLIN),
-            name="daily_calendar_summary",
-        )
-        logger.info("Tages-Kalenderübersicht registriert: %02d:%02d Europe/Berlin", GCAL_DAILY_SUMMARY_HOUR, GCAL_DAILY_SUMMARY_MINUTE)
 
 
 def main():

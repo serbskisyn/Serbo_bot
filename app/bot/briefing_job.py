@@ -1,8 +1,12 @@
 """
-briefing_job.py — Schedule + manual trigger for the morning briefing.
+briefing_job.py — Schedule + manual trigger for the consolidated morning digest.
 
 Cron-style: every day at BRIEFING_HOUR:BRIEFING_MINUTE Europe/Berlin,
-push the briefing to every user in NEWS_DAILY_PUSH_USER_IDS.
+push the digest to every user in NEWS_DAILY_PUSH_USER_IDS. The digest
+combines briefing (calendar + todos + decisions + relationship alerts +
+backtest-pulse) with trade-engine status (crypto + stocks) and the
+7-day R/Kelly recap — replacing the earlier 06:30 calendar / 07:30
+briefing / 08:15 trading-stats trio.
 
 A small idempotency-marker (briefing_state.json) records the last send
 date per user so a service restart in the morning doesn't re-trigger
@@ -24,7 +28,7 @@ from app.config import (
     BRIEFING_ENABLED, BRIEFING_HOUR, BRIEFING_MINUTE,
     NEWS_DAILY_PUSH_USER_IDS,
 )
-from app.services.briefing import assemble_briefing
+from app.services.briefing import assemble_daily_digest
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +55,7 @@ def _save_state(state: dict) -> None:
 
 async def _send_briefing(bot, user_id: int) -> bool:
     try:
-        text = await assemble_briefing(user_id)
+        text = await assemble_daily_digest(user_id)
         await bot.send_message(
             chat_id=user_id,
             text=text,
@@ -111,7 +115,7 @@ async def briefing_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user_id = update.effective_user.id
     await update.message.reply_text("⏳ Briefing wird zusammengestellt …")
     try:
-        text = await assemble_briefing(user_id)
+        text = await assemble_daily_digest(user_id)
         await update.message.reply_text(text, parse_mode="Markdown", disable_web_page_preview=True)
     except Exception as exc:
         logger.error("briefing_handler: %s", exc, exc_info=True)

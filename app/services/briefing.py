@@ -293,3 +293,36 @@ async def assemble_briefing(user_id: int) -> str:
             parts.append(block)
 
     return "\n".join(parts)
+
+
+# ── Daily Digest ─────────────────────────────────────────────────────────────
+# Konsolidierter Morgen-Push: Briefing + Trade-Status + 7-Tage-Recap in einem.
+# Ersetzt die früheren 06:30 Calendar + 07:30 Briefing + 08:15 Trading-Stats.
+
+
+async def assemble_daily_digest(user_id: int) -> str:
+    """Morgen-Digest: Briefing + Trade-Status + 7-Tage-Recap."""
+    briefing_md = await assemble_briefing(user_id)
+
+    # Trade-Engine Status (Crypto + Stocks Position-/Equity-Block + Stats)
+    trade_block = ""
+    try:
+        from app.services.trade_engine_client import fetch_status
+        trade_block = await fetch_status()
+    except Exception as exc:
+        logger.warning("daily_digest: fetch_status failed: %s", exc)
+
+    # 7-Tage Recap (Backtest- + Live-/Sim-Pulse)
+    recap_block = ""
+    try:
+        from app.services.trade_recap import build_recap
+        recap_block = build_recap(days=7)
+    except Exception as exc:
+        logger.warning("daily_digest: build_recap failed: %s", exc)
+
+    parts = [briefing_md]
+    if trade_block:
+        parts.append(trade_block)
+    if recap_block:
+        parts.append(recap_block)
+    return "\n\n".join(parts)

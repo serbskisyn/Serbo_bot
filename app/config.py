@@ -95,8 +95,10 @@ GCAL_DAILY_SUMMARY_HOUR: int = int(os.getenv("GCAL_DAILY_SUMMARY_HOUR", "6"))
 GCAL_DAILY_SUMMARY_MINUTE: int = int(os.getenv("GCAL_DAILY_SUMMARY_MINUTE", "30"))
 
 
-# ── Morning Briefing ──────────────────────────────────────────────────────────
-BRIEFING_HOUR: int = int(os.getenv("BRIEFING_HOUR", "7"))
+# ── Morning Digest ────────────────────────────────────────────────────────────
+# Konsolidierter Morgen-Push (Briefing + Trade-Status + Recap) — ersetzt die
+# vorherigen drei Einzel-Pushes (06:30 Calendar, 07:30 Briefing, 08:15 Trading).
+BRIEFING_HOUR: int = int(os.getenv("BRIEFING_HOUR", "6"))
 BRIEFING_MINUTE: int = int(os.getenv("BRIEFING_MINUTE", "30"))
 BRIEFING_ENABLED: bool = os.getenv("BRIEFING_ENABLED", "true").lower() == "true"
 BRIEFING_TOP_TODOS: int = int(os.getenv("BRIEFING_TOP_TODOS", "6"))

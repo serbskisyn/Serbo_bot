@@ -249,6 +249,9 @@ class DienstplanGenerator:
         self.offen: dict[date, list[Dienst]] = {}
         self.states: dict[str, PlanungState] = {}
         self.violations: list[str] = []
+        # Strukturierte Probleme für den Sheet-Export (rechts vom Plan).
+        # Wird parallel zu violations gepflegt — strings für den Chat, dicts fürs Sheet.
+        self.problems: list[dict] = []
 
         self._springer_namen: set[str] = {
             ma.name for ma in self.ma_liste if ma.ist_springer
@@ -258,6 +261,47 @@ class DienstplanGenerator:
         self._nacht_puffer: dict[str, set[date]] = {
             ma.name: set() for ma in self.ma_liste
         }
+
+    # ------------------------------------------------------------------
+    # Problem-Helper (für Sheet-Export rechts vom Plan)
+    # ------------------------------------------------------------------
+
+    def _add_problem(
+        self,
+        *,
+        tag: date | None,
+        person: str,
+        schicht: str,
+        art: str,
+    ) -> None:
+        """Append a structured problem entry alongside the string violation."""
+        self.problems.append({
+            "tag":     tag,
+            "person":  person or "—",
+            "schicht": schicht or "—",
+            "art":     art,
+        })
+
+    def get_structured_problems(self) -> list[dict]:
+        """Combined problem list for the sheet: open shifts + rule violations.
+
+        Keys per entry: tag (date|None), person (str), schicht (str), art (str).
+        Sorted by tag (None last), then person.
+        """
+        problems = list(self.problems)
+        # Offene Dienste aus self.offen ergänzen (keine Person zugewiesen)
+        for tag, dienste in self.offen.items():
+            for d in dienste:
+                problems.append({
+                    "tag":     tag,
+                    "person":  "—",
+                    "schicht": d.value,
+                    "art":     "Offene Schicht (nicht besetzt)",
+                })
+        return sorted(
+            problems,
+            key=lambda p: (p["tag"] or date.max, p["person"]),
+        )
 
     # ------------------------------------------------------------------
     # Hilfsfunktionen
@@ -560,6 +604,8 @@ class DienstplanGenerator:
                     f"Wunsch ignoriert: Unbekannter MA '{w.name}' "
                     f"(Tag {w.tag}, {w.dienst_str})"
                 )
+                self._add_problem(tag=None, person=w.name, schicht=w.dienst_str,
+                                  art="Wunsch ignoriert: MA unbekannt")
                 continue
             wdatum = w.to_date(self.jahr, self.monat)
             if wdatum is None:
@@ -567,12 +613,16 @@ class DienstplanGenerator:
                     f"Wunsch ignoriert: {w.name} – Tag {w.tag} existiert nicht "
                     f"in {self.monat}/{self.jahr}"
                 )
+                self._add_problem(tag=None, person=w.name, schicht=w.dienst_str,
+                                  art=f"Wunsch ignoriert: Tag {w.tag} ungültig")
                 continue
             wdienst = w.to_dienst()
             if wdienst is None:
                 self.violations.append(
                     f"Wunsch ignoriert: {w.name} – unbekannte Schichtart '{w.dienst_str}'"
                 )
+                self._add_problem(tag=None, person=w.name, schicht=w.dienst_str,
+                                  art="Wunsch ignoriert: Schichtart unbekannt")
                 continue
             self._wunsch_index.setdefault(w.name, []).append((wdatum, wdienst))
 
@@ -586,6 +636,8 @@ class DienstplanGenerator:
                         f"⚠️ Wunsch nicht erfüllt: {ma_name} {wdatum.strftime('%d.%m')} "
                         f"{wdienst.value} – Tag ist gesperrt"
                     )
+                    self._add_problem(tag=wdatum, person=ma_name, schicht=wdienst.value,
+                                      art="Wunsch nicht erfüllt: Tag gesperrt")
                     continue
                 existing = self.plan[ma_name].get(wdatum)
                 if existing is not None and existing != Dienst.FREI:
@@ -593,6 +645,8 @@ class DienstplanGenerator:
                         f"⚠️ Wunsch nicht erfüllt: {ma_name} {wdatum.strftime('%d.%m')} "
                         f"{wdienst.value} – bereits als {existing.value} eingeplant"
                     )
+                    self._add_problem(tag=wdatum, person=ma_name, schicht=wdienst.value,
+                                      art=f"Wunsch nicht erfüllt: bereits als {existing.value} eingeplant")
                     continue
                 puffer_war_gesetzt = existing == Dienst.FREI
                 if puffer_war_gesetzt:
@@ -604,6 +658,8 @@ class DienstplanGenerator:
                         f"⚠️ Wunsch nicht erfüllt: {ma_name} {wdatum.strftime('%d.%m')} "
                         f"{wdienst.value} – Regelkonflikt"
                     )
+                    self._add_problem(tag=wdatum, person=ma_name, schicht=wdienst.value,
+                                      art="Wunsch nicht erfüllt: Regelkonflikt")
                     continue
                 self._setze_dienst(ma_name, wdatum, wdienst)
 
@@ -958,6 +1014,8 @@ class DienstplanGenerator:
                 self.violations.append(
                     f"{ma.name}: kein vollständiges freies Wochenende im Monat"
                 )
+                self._add_problem(tag=None, person=ma.name, schicht="",
+                                  art="Kein freies Wochenende im Monat")
 
     def _build_offen_plan(self):
         if not self.offen:
@@ -1008,6 +1066,8 @@ class DienstplanGenerator:
                     self.violations.append(
                         f"{ma.name} {tag.strftime('%d.%m')}: Spät→Früh verboten"
                     )
+                    self._add_problem(tag=tag, person=ma.name, schicht=Dienst.FRUEH.value,
+                                      art="Spät→Früh verboten")
 
         for ma in self.ma_liste:
             if ma.ist_springer:
@@ -1026,6 +1086,8 @@ class DienstplanGenerator:
                             f"{ma.name} ab {tag.strftime('%d.%m')}: "
                             f"Nachtblock zu kurz ({block_len}/{NACHT_BLOCK_MIN})"
                         )
+                        self._add_problem(tag=tag, person=ma.name, schicht=Dienst.NACHT.value,
+                                          art=f"Nachtblock zu kurz ({block_len}/{NACHT_BLOCK_MIN})")
                     puffer_start = self.tage[j] if j < len(self.tage) else None
                     if puffer_start and block_len >= NACHT_BLOCK_MIN:
                         for offset in range(NACHT_PUFFER_TAGE):
@@ -1038,6 +1100,8 @@ class DienstplanGenerator:
                                     f"{ma.name} {p_tag.strftime('%d.%m')}: "
                                     f"Arbeit während Nacht-Puffer ({d_p.value})"
                                 )
+                                self._add_problem(tag=p_tag, person=ma.name, schicht=d_p.value,
+                                                  art="Arbeit während Nacht-Puffer")
                     i = j
                 else:
                     i += 1

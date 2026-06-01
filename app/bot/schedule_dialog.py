@@ -231,6 +231,7 @@ async def handle_bestaetigung(update: Update, context: ContextTypes.DEFAULT_TYPE
             ma_soll=ma_soll,
             springer=springer_namen,
             offen_details=offen_details,
+            problems=gen.get_structured_problems(),
         )
         await update.message.reply_text(
             f"✅ Dienstplan in Tab *{tab}* geschrieben!\n"

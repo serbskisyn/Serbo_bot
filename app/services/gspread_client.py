@@ -646,6 +646,7 @@ def write_dienstplan(
     wunsch_notizen: dict[str, list[tuple[date, str, bool]]] | None = None,
     ma_soll:        dict[str, float] | None = None,
     springer:       list[str] | None = None,
+    problems:       list[dict] | None = None,
     **kwargs,  # ignoriert unbekannte Parameter (z.B. offen_details) ohne Fehler
 ) -> str:
     """
@@ -676,12 +677,19 @@ def write_dienstplan(
     n_alle       = len(ma_alle)
 
     col_offen    = n_alle + 2
-    total_cols   = n_alle + 2
+    # Problem-Block: 1 Leerspalte + 4 Datenspalten (Tag/Person/Schicht/Problem)
+    # rechts vom "offen"-Feld. Wird nur befüllt wenn problems übergeben werden.
+    problems     = problems or []
+    col_prob_gap = col_offen + 1
+    col_prob_tag = col_offen + 2  # Tag
+    col_prob_end = col_offen + 5  # Problem (4. Datenspalte)
+    total_cols   = col_prob_end if problems else col_offen
 
     # Korrekte Zeilenzahl:
     # Zeile 1: Header, Zeilen 2-3: Leer/Zusatz, Zeilen 4..4+n_tage-1: Daten
     # Dann: Leerzeile + count_labels(7) + Leerzeile + ist + soll + diff = 12 Zeilen
-    rows_needed  = 4 + len(tage) + 15
+    # Plus Puffer für ggf. längeren Problem-Block.
+    rows_needed  = max(4 + len(tage) + 15, 4 + len(problems) + 4)
 
     if is_new:
         ws = sh.add_worksheet(title=final_name, rows=rows_needed, cols=total_cols + 1)
@@ -892,14 +900,47 @@ def write_dienstplan(
         rgb = _SUMMARY_POS_BG if (isinstance(diff_val, (int, float)) and diff_val >= 0) else _SUMMARY_NEG_BG
         requests.append(_bg_request(ws.id, diff_row_0, i + 1, *rgb))
 
-    if requests:
-        sh.batch_update({"requests": requests})
+    # --- Problem-Block (rechts vom Plan) ---
+    if problems:
+        prob_start_a1 = f"{_col_letter(col_prob_tag)}1"
+        prob_header_row = ["Tag", "Person", "Schicht", "Problem"]
+        prob_data: list[list] = []
+        for p in problems:
+            tag = p.get("tag")
+            if tag is not None:
+                wt = wochentage_de[tag.weekday()]
+                tag_str = f"{wt}, {tag.strftime('%d.%m.')}"
+            else:
+                tag_str = "—"
+            prob_data.append([
+                tag_str,
+                p.get("person", "—") or "—",
+                p.get("schicht", "—") or "—",
+                p.get("art", ""),
+            ])
+        ws.update(prob_start_a1, [prob_header_row] + prob_data)
+
+        # Header-Zeile fett + grau hinterlegen
+        header_requests = []
+        for col_offset in range(4):
+            col_0 = col_prob_tag - 1 + col_offset
+            header_requests.append(_bg_request(ws.id, 0, col_0, *_SUMMARY_LABEL_BG))
+        sh.batch_update({"requests": header_requests})
 
     logger.info(
-        "Dienstplan '%s' geschrieben (%d Tage, %d reguläre MA, %d Springer)",
-        final_name, len(tage), n_reg, n_sp,
+        "Dienstplan '%s' geschrieben (%d Tage, %d reguläre MA, %d Springer, %d Probleme)",
+        final_name, len(tage), n_reg, n_sp, len(problems),
     )
     return final_name
+
+
+def _col_letter(n: int) -> str:
+    """Convert 1-based column index to A1 letter (1→A, 27→AA, etc.)."""
+    s = ""
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        s = chr(65 + r) + s
+    return s
 
 
 def _null_dienst():

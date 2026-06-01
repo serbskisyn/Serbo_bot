@@ -148,6 +148,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/kalender2 — Bennoschwede@gmail.com aktiv\n\n"
         f"📈 *Trading Bot (Crypto + Stocks)*\n"
         f"/tradebot — Kombinierter Status (Crypto + Stocks)\n"
+        f"/papertrade — 🧪 Dry-Run Status (Phantom-Positionen + Sim-Statistik)\n"
         f"/recap [Tage] — 7-Tage R/Kelly + Live-Trade-Pulse (default 7, max 30)\n"
         f"/tradebot crypto pause — Neue Crypto-Käufe stoppen\n"
         f"/tradebot crypto resume — Crypto-Käufe wieder aktivieren\n"

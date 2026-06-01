@@ -7,6 +7,7 @@ from app.bot.whitelist import is_allowed
 from app.config import ADMIN_CHAT_ID, TRADING_STATS_HOUR, TRADING_STATS_MINUTE
 from app.services.trade_engine_client import fetch_status, fetch_crypto_status, trigger_scan, control_crypto
 from app.services.trade_recap import build_recap
+from app.services.papertrade_status import build_papertrade_status
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,20 @@ async def recap_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except Exception as exc:
         logger.error("recap_handler: %s", exc, exc_info=True)
         await update.message.reply_text("❌ Recap konnte nicht erstellt werden.")
+
+
+async def papertrade_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Manual /papertrade — show dry-run phantom positions + simulation stats."""
+    if not is_allowed(update.effective_user.id):
+        await update.message.reply_text("⛔ Kein Zugriff.")
+        return
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    try:
+        text = await build_papertrade_status()
+        await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception as exc:
+        logger.error("papertrade_handler: %s", exc, exc_info=True)
+        await update.message.reply_text("❌ Paper-Trading-Status konnte nicht geladen werden.")
 
 
 def register_trading_stats_job(application) -> None:

@@ -109,6 +109,26 @@ REFLECTION_HOUR: int = int(os.getenv("REFLECTION_HOUR", "21"))
 REFLECTION_MINUTE: int = int(os.getenv("REFLECTION_MINUTE", "30"))
 REFLECTION_ENABLED: bool = os.getenv("REFLECTION_ENABLED", "true").lower() == "true"
 
+# ── Recall-Loop (semantic recall of past summaries/reflections) ───────────────
+RECALL_ENABLED: bool = os.getenv("RECALL_ENABLED", "true").lower() == "true"
+RECALL_TOP_K: int = int(os.getenv("RECALL_TOP_K", "3"))
+
+# ── Soft context layer (entities / intents / relationship graph) ──────────────
+SOFT_LAYER_ENABLED: bool = os.getenv("SOFT_LAYER_ENABLED", "true").lower() == "true"
+# How many times an entity/intent must recur before it surfaces proactively
+SOFT_PROMOTION_MENTIONS: int = int(os.getenv("SOFT_PROMOTION_MENTIONS", "2"))
+
+# ── Proactive context injection ───────────────────────────────────────────────
+PROACTIVE_CONTEXT_ENABLED: bool = os.getenv("PROACTIVE_CONTEXT_ENABLED", "true").lower() == "true"
+PROACTIVE_MAX_ITEMS: int = int(os.getenv("PROACTIVE_MAX_ITEMS", "6"))
+
+# ── Curator (weekly profile consolidation) ───────────────────────────────────
+CURATOR_ENABLED: bool = os.getenv("CURATOR_ENABLED", "true").lower() == "true"
+CURATOR_HOUR: int = int(os.getenv("CURATOR_HOUR", "4"))
+CURATOR_MINUTE: int = int(os.getenv("CURATOR_MINUTE", "30"))
+CURATOR_COOLDOWN_DAYS: int = int(os.getenv("CURATOR_COOLDOWN_DAYS", "7"))
+CURATOR_PROPOSAL_TTL_HOURS: int = int(os.getenv("CURATOR_PROPOSAL_TTL_HOURS", "24"))
+
 # ── Daily Backtest Sweep (Trade Engine) ──────────────────────────────────────
 # Läuft vor dem Briefing (07:30) und schreibt eine JSON-Zeile pro Tag nach
 # /home/pi/trade_engine/data/sweep_history.jsonl. Briefing zieht daraus eine

@@ -32,6 +32,7 @@ from app.bot.sync_jobs import register_sync_jobs
 from app.bot.briefing_job import register_briefing_job, briefing_handler
 from app.bot.evening_job import register_evening_job, reflect_handler
 from app.bot.sweep_job import register_sweep_job
+from app.bot.curator_job import register_curator_job, curator_handler
 
 _BERLIN = ZoneInfo("Europe/Berlin")
 
@@ -42,6 +43,14 @@ async def _post_init(application) -> None:
     logger.info("News-Cache Background-Scheduler wird gestartet...")
     start_background_scheduler()
     register_daily_news_job(application)
+
+    # Backfill the notes recall index from existing summaries/reflections.
+    try:
+        from app.services.notes_index import reindex
+        n = await reindex()
+        logger.info("Notes-Recall-Index: %d Chunks indexiert", n)
+    except Exception as exc:
+        logger.warning("Notes-Recall-Index Backfill fehlgeschlagen: %s", exc)
 
     jq = application.job_queue
     if jq is None:
@@ -71,6 +80,7 @@ async def _post_init(application) -> None:
     register_briefing_job(application)
     register_evening_job(application)
     register_sweep_job(application)
+    register_curator_job(application)
 
 
 def main():
@@ -114,6 +124,7 @@ def main():
     app.add_handler(CommandHandler("briefing", briefing_handler))
     app.add_handler(CommandHandler("reflect",  reflect_handler))
     app.add_handler(CommandHandler("summary",  summary_handler))
+    app.add_handler(CommandHandler("curator",  curator_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_handler(MessageHandler(filters.VOICE, voice_handler))
     app.add_error_handler(error_handler)

@@ -201,4 +201,11 @@ async def write_day_summary(user_id: int, body: str) -> Path:
         )
     except Exception as exc:
         logger.warning("evening_reflection: summary write failed: %s", exc)
+        return path
+    # Make the reflection recallable (fire-and-forget; never block the write)
+    try:
+        from app.services.notes_index import index_file
+        await index_file(path)
+    except Exception as exc:
+        logger.debug("evening_reflection: index_file skipped: %s", exc)
     return path

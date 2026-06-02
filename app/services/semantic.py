@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 SEMANTIC_DB = Path(__file__).parent.parent / "data" / "semantic.db"
 
-COLLECTIONS = ("todos", "people", "decisions")
+COLLECTIONS = ("todos", "people", "decisions", "notes", "entities", "intents")
 
 # Distance thresholds — calibrated against actual OpenAI text-embedding-3-small
 # vectors using real production data (Granola people + todo paraphrases).

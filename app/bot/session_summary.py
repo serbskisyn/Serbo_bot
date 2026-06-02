@@ -65,6 +65,11 @@ async def create_daily_summaries(context=None) -> None:
                 encoding="utf-8",
             )
             logger.info("Session Summary gespeichert: %s", out_file.name)
+            try:
+                from app.services.notes_index import index_file
+                await index_file(out_file)
+            except Exception as exc:
+                logger.debug("session_summary: index_file skipped: %s", exc)
             if bot and ADMIN_CHAT_ID:
                 await bot.send_message(
                     chat_id=ADMIN_CHAT_ID,
@@ -107,6 +112,11 @@ async def summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             f"# Gesprächszusammenfassung {today}\n\n{summary}\n",
             encoding="utf-8",
         )
+        try:
+            from app.services.notes_index import index_file
+            await index_file(out_file)
+        except Exception as exc:
+            logger.debug("summary_handler: index_file skipped: %s", exc)
     except Exception as exc:
         logger.warning("summary_handler: write failed: %s", exc)
 

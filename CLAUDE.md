@@ -33,10 +33,15 @@ User (Telegram)
 - Conversation history is checkpointed in `app/data/conversation.db` via `AsyncSqliteSaver`, keyed by `user_id` as `thread_id`
 - Chart responses are signalled by returning `"__CHART__"` as the response string; the runner converts PNG bytes to a Telegram photo
 
-**Memory** (`bot/memory.py`):
-- Two layers per user: `confirmed` (direct key/value facts) and `pending` (indirect observations promoted after 5 mentions via `INDIRECT_THRESHOLD`)
-- Persisted to `app/data/memory.json`; extracted asynchronously after every message via `extract_facts()` in `openrouter_client.py`
-- Keys are German lowercase strings (e.g. `lieblingsverein`, `name`, `wohnort`)
+**Memory** (`bot/profile.py`, `bot/memory.py` shim):
+- Structured per-user YAML profile at `app/data/profile.yaml` (identity/work/interests/preferences/people/projects/goals/facts/pending/archived). `bot/memory.py` is a backwards-compat shim over it.
+- Facts are extracted asynchronously after every message via the 3-stage learner (`services/profile_learner.py`: detect → write → review), applied through `profile.apply_ops()`.
+
+**Jarvis memory layer** (FabBot-inspired personal-context augmentation):
+- **Curator** (`services/curator.py`, `bot/curator_job.py`): periodic profile consolidation. LLM proposes merges/archival as a dry-run → user confirms `/curator apply`. Archive-not-delete (into `profile.archived`), `_pinned` dict-items are never touched, proposals carry the profile hash they were based on and are refused if the profile changed since. Scheduled daily (cooldown-gated to ~weekly).
+- **Recall-loop** (`services/notes_index.py`): embeds `app/data/summaries/*.md` into the semantic.db `notes` collection (mtime-gated, idempotent ref_ids) and the `general` node recalls the top-K relevant past chunks. Closes the old write-only gap where reflections were never read back.
+- **Soft context layer** (`services/context_store.py` + `context_extractor.py`): fire-and-forget extraction of entities (person/place/event/task) and soft intents into `app/data/context.db`, with a co-occurrence `context_links` table forming a relationship graph. Deliberately does NOT auto-create todos (the todo_extractor owns that). Dedup is exact + whole-token-prefix on the name.
+- **Proactive context** (`services/proactive_context.py`): merges open today/overdue todos + mention-weighted soft items into a keyword-deduped block injected into the `general` node prompt, so the bot can surface relevant items mid-conversation.
 
 **News pipeline** (`/news` command):
 1. `football_news_agent.py` reads favourite clubs from user memory
@@ -88,6 +93,16 @@ User (Telegram)
 | `SCHEDULE_OUTPUT_SHEET_ID` | (hardcoded) | Google Sheet ID for schedule output |
 | `BOT_NAME` | `MeinAgent` | Bot display name |
 | `LOG_LEVEL` | `INFO` | Logging verbosity |
+| `CURATOR_ENABLED` | `true` | Enable weekly profile consolidation |
+| `CURATOR_HOUR` / `CURATOR_MINUTE` | `4` / `30` | Scheduled curator dry-run time (CEST) |
+| `CURATOR_COOLDOWN_DAYS` | `7` | Min days between scheduled curator runs |
+| `CURATOR_PROPOSAL_TTL_HOURS` | `24` | How long a pending proposal stays valid |
+| `RECALL_ENABLED` | `true` | Enable semantic recall of past summaries |
+| `RECALL_TOP_K` | `3` | Recalled note chunks injected per query |
+| `SOFT_LAYER_ENABLED` | `true` | Enable entity/intent/graph extraction |
+| `SOFT_PROMOTION_MENTIONS` | `2` | Mentions before a soft item surfaces |
+| `PROACTIVE_CONTEXT_ENABLED` | `true` | Inject open-items block into chat prompt |
+| `PROACTIVE_MAX_ITEMS` | `6` | Max items in the proactive context block |
 
 ## Adding club news feeds
 

@@ -20,6 +20,7 @@ add_direct/add_indirect/get_confirmed/... API onto this module.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,6 +58,7 @@ def _empty_profile() -> dict:
         "goals": [],
         "facts": {},
         "pending": [],
+        "archived": [],
         "meta": {},
     }
 
@@ -116,6 +118,31 @@ def get_profile(user_id: int) -> dict:
 def get_section(user_id: int, section: str) -> Any:
     user = _get_user(user_id)
     return user.get(section)
+
+
+def profile_hash(user_id: int) -> str:
+    """Stable short hash of a user's profile — used by the curator to detect
+    concurrent edits between a dry-run proposal and its later apply."""
+    user = _get_user(user_id)
+    # Exclude meta (timestamps churn on every write and would always mismatch)
+    snapshot = {k: v for k, v in user.items() if k != "meta"}
+    blob = yaml.safe_dump(snapshot, allow_unicode=True, sort_keys=True)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+async def write_profile(user_id: int, new_user: dict, expected_hash: str | None = None) -> bool:
+    """Overwrite a user's full profile. If expected_hash is given and the
+    current profile no longer matches it, the write is refused (returns False)
+    so a stale curator proposal can't clobber fresh data."""
+    async with _lock:
+        if expected_hash is not None and profile_hash(user_id) != expected_hash:
+            return False
+        for section, default in _empty_profile().items():
+            new_user.setdefault(section, default)
+        new_user.setdefault("meta", {})["updated_at"] = _now()
+        _store[str(user_id)] = new_user
+        _save(_store)
+        return True
 
 
 # ── Structured write ─────────────────────────────────────────────────────────

@@ -33,6 +33,7 @@ from app.bot.briefing_job import register_briefing_job, briefing_handler
 from app.bot.evening_job import register_evening_job, reflect_handler
 from app.bot.sweep_job import register_sweep_job
 from app.bot.curator_job import register_curator_job, curator_handler
+from app.bot.kicktipp_job import register_kicktipp_job, kicktipp_handler
 
 _BERLIN = ZoneInfo("Europe/Berlin")
 
@@ -81,6 +82,7 @@ async def _post_init(application) -> None:
     register_evening_job(application)
     register_sweep_job(application)
     register_curator_job(application)
+    register_kicktipp_job(application)
 
 
 def main():
@@ -125,6 +127,7 @@ def main():
     app.add_handler(CommandHandler("reflect",  reflect_handler))
     app.add_handler(CommandHandler("summary",  summary_handler))
     app.add_handler(CommandHandler("curator",  curator_handler))
+    app.add_handler(CommandHandler("kicktipp", kicktipp_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_handler(MessageHandler(filters.VOICE, voice_handler))
     app.add_error_handler(error_handler)

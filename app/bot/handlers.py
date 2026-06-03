@@ -135,6 +135,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/papertrade — 🧪 Dry-Run Status\n"
         f"/recap `[Tage]` — Backtest + Live-Pulse (default 7)\n"
         f"/tradebot `crypto pause|resume` · `stocks scan` · `help`\n\n"
+        f"⚽ *Kicktipp*\n"
+        f"/kicktipp `[dry|run]` — KI-Tipps (auto)\n\n"
         f"🌐 *Recherche*\n"
         f"/news `[fresh]` — Football News\n"
         f"/xnews `<thema>` — X.com Live via Grok\n"

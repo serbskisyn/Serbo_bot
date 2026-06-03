@@ -122,6 +122,19 @@ SOFT_PROMOTION_MENTIONS: int = int(os.getenv("SOFT_PROMOTION_MENTIONS", "2"))
 PROACTIVE_CONTEXT_ENABLED: bool = os.getenv("PROACTIVE_CONTEXT_ENABLED", "true").lower() == "true"
 PROACTIVE_MAX_ITEMS: int = int(os.getenv("PROACTIVE_MAX_ITEMS", "6"))
 
+# ── Kicktipp AI player ────────────────────────────────────────────────────────
+KICKTIPP_ENABLED: bool = os.getenv("KICKTIPP_ENABLED", "false").lower() == "true"
+KICKTIPP_EMAIL: str = os.getenv("KICKTIPP_EMAIL", "")
+KICKTIPP_PASSWORD: str = os.getenv("KICKTIPP_PASSWORD", "")
+KICKTIPP_COMMUNITY: str = os.getenv("KICKTIPP_COMMUNITY", "")   # group slug in the URL
+KICKTIPP_NEWS_ENABLED: bool = os.getenv("KICKTIPP_NEWS_ENABLED", "true").lower() == "true"
+# Only bet on matches kicking off within this many hours (skip far-future ones)
+KICKTIPP_LOOKAHEAD_HOURS: int = int(os.getenv("KICKTIPP_LOOKAHEAD_HOURS", "72"))
+# How often the auto-tip job runs
+KICKTIPP_CHECK_INTERVAL_MINUTES: int = int(os.getenv("KICKTIPP_CHECK_INTERVAL_MINUTES", "240"))
+# Overwrite tips that were already placed
+KICKTIPP_OVERRIDE: bool = os.getenv("KICKTIPP_OVERRIDE", "false").lower() == "true"
+
 # ── Curator (weekly profile consolidation) ───────────────────────────────────
 CURATOR_ENABLED: bool = os.getenv("CURATOR_ENABLED", "true").lower() == "true"
 CURATOR_HOUR: int = int(os.getenv("CURATOR_HOUR", "4"))

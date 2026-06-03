@@ -51,6 +51,11 @@ User (Telegram)
 5. `news_enricher.py` asks the LLM to write a German headline + 50-word snippet per article
 6. LLM deduplication selects top-5 diverse articles per club
 
+**Kicktipp AI player** (`services/kicktipp_client.py`, `kicktipp_predictor.py`, `bot/kicktipp_job.py`):
+- Kicktipp has no public API — `kicktipp_client.py` drives the website with httpx + BeautifulSoup (stdlib `html.parser`, no browser): login (`kennung`/`passwort` → `login` cookie, cached to `kicktipp_token.json`), list communities, parse open matches from `/<community>/tippabgabe` (teams, odds, kickoff, `_heimTipp`/`_gastTipp` fields), submit the tip form
+- `kicktipp_predictor.py` makes ONE LLM call per matchday: scoreline predictions grounded on bookmaker odds + best-effort Google-News headlines per team (fail-soft → odds-only)
+- `kicktipp_job.py` runs a repeating job (fully automatic): predict + submit tips for matches within `KICKTIPP_LOOKAHEAD_HOURS`. `/kicktipp [dry|run]` for manual preview/submit. Disabled unless `KICKTIPP_ENABLED=true` and email/password/community are set
+
 **Schedule builder** (`services/schedule_builder.py`, `bot/schedule_dialog.py`):
 - `DienstplanGenerator` is a constraint solver for 3-shift nursing schedules (Früh/Spät/Nacht)
 - Staff data and vacation/sick data come from Google Sheets via `gspread_client.py`
@@ -103,6 +108,13 @@ User (Telegram)
 | `SOFT_PROMOTION_MENTIONS` | `2` | Mentions before a soft item surfaces |
 | `PROACTIVE_CONTEXT_ENABLED` | `true` | Inject open-items block into chat prompt |
 | `PROACTIVE_MAX_ITEMS` | `6` | Max items in the proactive context block |
+| `KICKTIPP_ENABLED` | `false` | Enable the Kicktipp AI player |
+| `KICKTIPP_EMAIL` / `KICKTIPP_PASSWORD` | `""` | Kicktipp login credentials |
+| `KICKTIPP_COMMUNITY` | `""` | Community slug from the Kicktipp group URL |
+| `KICKTIPP_NEWS_ENABLED` | `true` | Ground predictions on team news headlines |
+| `KICKTIPP_LOOKAHEAD_HOURS` | `72` | Only tip matches kicking off within this window |
+| `KICKTIPP_CHECK_INTERVAL_MINUTES` | `240` | Auto-tip job interval |
+| `KICKTIPP_OVERRIDE` | `false` | Overwrite already-placed tips |
 
 ## Adding club news feeds
 

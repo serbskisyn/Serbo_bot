@@ -121,8 +121,72 @@ def _normalize_brand(firma: str) -> str:
     return " ".join(tokens[:2])
 
 
+def _repair_truncated_json(s: str) -> dict | None:
+    """Recover a JSON object that was cut off mid-generation (the common Pepper
+    failure: a large multi-country reply truncated before its closing braces).
+
+    Walks the string tracking string-literal state + an opener stack, trims to
+    the last completed container boundary, drops any trailing partial token,
+    then appends the missing closers. Recovers the complete prefix (e.g. all
+    fully-received countries) instead of losing the whole signal.
+    """
+    start = s.find("{")
+    if start < 0:
+        return None
+    s = s[start:]
+
+    in_str = esc = False
+    last_close = -1            # index just after the last completed '}' or ']'
+    for i, ch in enumerate(s):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "}]":
+            last_close = i + 1
+    if last_close < 0:
+        return None
+
+    frag = s[:last_close]
+    # Re-scan the kept fragment to compute which openers are still unclosed.
+    stack: list[str] = []
+    in_str = esc = False
+    for ch in frag:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append(ch)
+        elif ch == "}":
+            if stack and stack[-1] == "{":
+                stack.pop()
+        elif ch == "]":
+            if stack and stack[-1] == "[":
+                stack.pop()
+    closers = "".join("}" if c == "{" else "]" for c in reversed(stack))
+    candidate = frag.rstrip().rstrip(",") + closers
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+
+
 def _extract_json(raw: str) -> dict | None:
-    """Extract first JSON object from Claude output (handles markdown fences + extra text)."""
+    """Extract a JSON object from Claude output — tolerant of markdown fences,
+    surrounding prose, AND mid-generation truncation."""
     raw = raw.strip()
     try:
         return json.loads(raw)
@@ -139,8 +203,10 @@ def _extract_json(raw: str) -> dict | None:
         try:
             return json.loads(raw[start: end + 1])
         except json.JSONDecodeError:
-            return None
-    return None
+            pass
+    # Last resort: the reply was cut off before its closing braces — salvage the
+    # complete prefix so a truncated tail doesn't zero out the whole signal.
+    return _repair_truncated_json(raw)
 
 
 _EMPTY_RESULT: dict = {
@@ -378,22 +444,38 @@ async def get_multi_brand_sentiment(firma: str, brand_names: list[str]) -> dict:
 
     parsed = _extract_json(raw)
     if parsed is None:
-        logger.warning("pepper_multi: JSON-Parse-Fehler; raw=%r", raw[:300])
+        logger.warning("pepper_multi: JSON-Parse-Fehler; len=%d head=%r tail=%r",
+                       len(raw), raw[:200], raw[-200:])
         return {"by_brand": {}, "brands_found": 0, "total_mentions_all": 0,
                 "total_deals_all": 0, "error": "JSON parse failed"}
 
     by_brand = parsed.get("by_brand") or {}
+
+    # Derive totals from by_brand rather than trusting Claude's root-level sums:
+    # those sit AFTER by_brand in the JSON and are the first thing lost when the
+    # reply is truncated. Recomputing here keeps the score correct even if the
+    # tail was salvaged/missing.
+    derived_mentions = derived_deals = 0
+    for stats in by_brand.values():
+        for c in (stats.get("by_country") or {}).values():
+            derived_mentions += int(c.get("total") or 0)
+            derived_deals += int(c.get("deals") or 0)
+
+    total_all   = int(parsed.get("total_mentions_all") or 0) or derived_mentions
+    total_deals = int(parsed.get("total_deals_all") or 0) or derived_deals
+    brands_found = int(parsed.get("brands_found") or 0) or len(by_brand)
+
+    if parsed.get("total_mentions_all") in (None, 0) and derived_mentions > 0:
+        logger.info("pepper_multi: recovered %d mentions from truncated/partial JSON", derived_mentions)
     logger.info(
         "pepper_multi: '%s' → %d Brands, %d Total-Mentions, %d Deals",
-        firma, len(by_brand),
-        int(parsed.get("total_mentions_all") or 0),
-        int(parsed.get("total_deals_all") or 0),
+        firma, len(by_brand), total_all, total_deals,
     )
     return {
         "by_brand":           by_brand,
-        "brands_found":       int(parsed.get("brands_found") or 0),
-        "total_mentions_all": int(parsed.get("total_mentions_all") or 0),
-        "total_deals_all":    int(parsed.get("total_deals_all") or 0),
+        "brands_found":       brands_found,
+        "total_mentions_all": total_all,
+        "total_deals_all":    total_deals,
     }
 
 

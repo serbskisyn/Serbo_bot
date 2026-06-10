@@ -90,46 +90,54 @@ async def qualify_business_fit_node(state: LeadState) -> LeadState:
     classification = score_result["classification"]
     score_total    = score_result["score_total"]
 
-    # ── 2. Kompakter LLM-Call für recommended_action + contact_seniority ──
-    validated = state.get("validated_brands") or []
-    brands_text = ", ".join(
-        b.get("name", "") for b in validated if isinstance(b, dict) and b.get("name")
-    ) or "(keine identifiziert)"
-
-    prompt = _SALES_ACTION_USER.format(
-        name=name,
-        firma=firma,
-        business_model=state.get("business_model", "") or "(unknown)",
-        markets=", ".join(state.get("primary_markets") or []) or "(unknown)",
-        brands_text=brands_text,
-        revenue=state.get("company_revenue", "") or "(unknown)",
-        pepper_target=state.get("pepper_target_summary", "") or "(no data)",
-        pepper_cross=state.get("pepper_cross_summary", "") or "(no data)",
-        sales_signals=state.get("sales_signals", "") or "(none)",
-        perf_mktg_signals=state.get("perf_mktg_signals", "") or "(none)",
-        affiliate_likelihood=state.get("affiliate_likelihood", "") or "(none)",
-        promo_intensity=state.get("promo_intensity", "") or "(none)",
-        commercial_intel=state.get("commercial_intel_summary", "") or "(none)",
-        classification=classification,
-        score=score_total,
-    )
-
     contact_seniority  = "mid"
     recommended_action = ""
     priority_tier      = ""
-    try:
-        raw = await ask_llm(user_text=prompt, system_prompt=_SALES_ACTION_SYSTEM)
-        match = _JSON_RE.search(raw)
-        if match:
-            data = json.loads(match.group())
-            contact_seniority  = str(data.get("contact_seniority", "mid")).lower().strip()
-            recommended_action = str(data.get("recommended_action", "")).strip()
-            priority_tier      = str(data.get("priority_tier", "")).upper().strip()
-            priority_reason    = str(data.get("priority_reason", "")).strip()
-            if priority_reason and priority_tier:
-                priority_tier = f"{priority_tier} — {priority_reason}"
-    except Exception as exc:
-        logger.warning("qualify_business_fit: LLM-Action-Fehler für '%s': %s", name, exc)
+
+    # LOW pre-qualify = weak lead → don't spend tokens on the sales-action LLM
+    # (priority_tier + recommended_action). Keep the deterministic score only.
+    pre_label = (state.get("pre_qualify_label") or "").strip().upper()
+    if pre_label == "LOW":
+        priority_tier      = "LOW"
+        recommended_action = "LOW vorqualifiziert — keine Sales-Action generiert."
+        logger.info("qualify_business_fit: '%s' LOW → Sales-Action übersprungen (Token-Sparen)", name)
+    else:
+        # ── 2. Kompakter LLM-Call für recommended_action + contact_seniority ──
+        validated = state.get("validated_brands") or []
+        brands_text = ", ".join(
+            b.get("name", "") for b in validated if isinstance(b, dict) and b.get("name")
+        ) or "(keine identifiziert)"
+
+        prompt = _SALES_ACTION_USER.format(
+            name=name,
+            firma=firma,
+            business_model=state.get("business_model", "") or "(unknown)",
+            markets=", ".join(state.get("primary_markets") or []) or "(unknown)",
+            brands_text=brands_text,
+            revenue=state.get("company_revenue", "") or "(unknown)",
+            pepper_target=state.get("pepper_target_summary", "") or "(no data)",
+            pepper_cross=state.get("pepper_cross_summary", "") or "(no data)",
+            sales_signals=state.get("sales_signals", "") or "(none)",
+            perf_mktg_signals=state.get("perf_mktg_signals", "") or "(none)",
+            affiliate_likelihood=state.get("affiliate_likelihood", "") or "(none)",
+            promo_intensity=state.get("promo_intensity", "") or "(none)",
+            commercial_intel=state.get("commercial_intel_summary", "") or "(none)",
+            classification=classification,
+            score=score_total,
+        )
+        try:
+            raw = await ask_llm(user_text=prompt, system_prompt=_SALES_ACTION_SYSTEM)
+            match = _JSON_RE.search(raw)
+            if match:
+                data = json.loads(match.group())
+                contact_seniority  = str(data.get("contact_seniority", "mid")).lower().strip()
+                recommended_action = str(data.get("recommended_action", "")).strip()
+                priority_tier      = str(data.get("priority_tier", "")).upper().strip()
+                priority_reason    = str(data.get("priority_reason", "")).strip()
+                if priority_reason and priority_tier:
+                    priority_tier = f"{priority_tier} — {priority_reason}"
+        except Exception as exc:
+            logger.warning("qualify_business_fit: LLM-Action-Fehler für '%s': %s", name, exc)
 
     # Score nochmal NEU berechnen mit der ermittelten Seniority (kann +5 Punkte geben)
     # und Klassifikation re-evaluieren — wichtig wenn Senior die Schwelle bricht.

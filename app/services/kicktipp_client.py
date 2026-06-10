@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 URL_BASE = "https://www.kicktipp.de"
 URL_LOGIN = URL_BASE + "/info/profil/login"
+URL_LOGIN_ACTION = URL_BASE + "/info/profil/loginaction"   # form submits here, not /login
 URL_COMMUNITIES = URL_BASE + "/info/profil/meinetipprunden"
 
 _TOKEN_FILE = Path(__file__).parent.parent / "data" / "kicktipp_token.json"
@@ -146,6 +147,27 @@ def parse_matches(html: str) -> list[Match]:
     return matches
 
 
+def _parse_login_form(html: str) -> tuple[str, dict[str, str]]:
+    """Return (action_url, {prefilled fields}) for the login form, so we POST
+    to the form's real action with any CSRF/hidden fields it carries."""
+    soup = BeautifulSoup(html, "html.parser")
+    form = None
+    for f in soup.find_all("form"):
+        names = {inp.get("name") for inp in f.find_all("input")}
+        if "kennung" in names and "passwort" in names:
+            form = f
+            break
+    if form is None:
+        return "/info/profil/loginaction", {}
+    fields: dict[str, str] = {}
+    for inp in form.find_all("input"):
+        name = inp.get("name")
+        if name and name not in ("kennung", "passwort"):
+            fields[name] = inp.get("value") or ""
+    action = form.get("action") or "/info/profil/loginaction"
+    return action, fields
+
+
 def _hidden_form_fields(html: str) -> dict[str, str]:
     """Collect all input fields (hidden + tip) on the tippabgabe form so a
     POST round-trips every value the server expects."""
@@ -198,11 +220,14 @@ class KicktippClient:
                     return
                 logger.info("kicktipp: cached token stale, re-logging in")
 
-        await self._client.get(URL_LOGIN)  # prime cookies
-        r = await self._client.post(
-            URL_LOGIN,
-            data={"kennung": self._email, "passwort": self._password},
-        )
+        # Parse the login form to honour its real action URL + any hidden fields
+        # (Kicktipp posts to /info/profil/loginaction, not /login).
+        page = await self._client.get(URL_LOGIN)
+        action, fields = _parse_login_form(page.text)
+        fields["kennung"] = self._email
+        fields["passwort"] = self._password
+        post_url = action if action.startswith("http") else URL_BASE + action
+        await self._client.post(post_url, data=fields)
         token = self._client.cookies.get("login")
         if not token or not await self._logged_in():
             raise KicktippError("Login fehlgeschlagen — Zugangsdaten prüfen.")
@@ -214,11 +239,18 @@ class KicktippClient:
         soup = BeautifulSoup(r.text, "html.parser")
         content = soup.find(id="kicktipp-content") or soup
         out: list[str] = []
+        # A community link is a single-segment path like "/human-vs-ai/" — not an
+        # /info/... or /service/... path. (The link text carries a notification
+        # badge, so we can't match text==slug.)
+        _RESERVED = {"info", "service", "404", ""}
         for a in content.find_all("a"):
-            href = (a.get("href") or "").strip("/")
-            if href and href == a.get_text(strip=True):
-                out.append(href)
-        # de-dupe, keep order
+            href = (a.get("href") or "").strip()
+            if not href.startswith("/") or href.startswith(("http", "#")):
+                continue
+            slug = href.strip("/")
+            if "/" in slug or slug in _RESERVED:
+                continue
+            out.append(slug)
         seen: set[str] = set()
         return [c for c in out if not (c in seen or seen.add(c))]
 

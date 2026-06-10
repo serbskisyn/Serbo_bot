@@ -4,8 +4,12 @@ and eligibility/deadline filtering. No live network or LLM calls.
 """
 from datetime import datetime, timedelta
 
-from app.services.kicktipp_client import parse_matches, _hidden_form_fields, Match
-from app.services.kicktipp_predictor import build_prompt, parse_predictions
+from app.services.kicktipp_client import (
+    parse_matches, _hidden_form_fields, Match, parse_bonus_questions,
+)
+from app.services.kicktipp_predictor import (
+    build_prompt, parse_predictions, parse_bonus_answers,
+)
 from app.bot import kicktipp_job
 
 
@@ -71,6 +75,53 @@ def test_predictor_parse_clamps_and_filters():
     assert parse_predictions(raw, 2) == {0: (3, 1)}        # i=9 out of range, bad dropped
     assert parse_predictions('[{"i":0,"heim":99,"gast":-3}]', 1) == {0: (9, 0)}
     assert parse_predictions("kein json", 3) == {}
+
+
+_BONUS_HTML = """
+<table id="tippabgabeFragen"><tbody>
+<tr><td class="nw kicktipp-time">11.06.26 21:00</td>
+    <td class="nw">Wer wird Weltmeister?</td>
+    <td class="nw kicktipp-tippabgabe">
+      <select name="fragetippForms[100].antwortIds[1]">
+        <option value="">-- Nicht getippt --</option>
+        <option value="10">Brasilien</option><option value="11">Argentinien</option>
+      </select></td></tr>
+<tr><td class="nw kicktipp-time">11.06.26 21:00</td>
+    <td class="nw">Wer erreicht das Halbfinale?</td>
+    <td class="nw kicktipp-tippabgabe">
+      <select name="fragetippForms[200].antwortIds[1]"><option value="">-- Nicht getippt --</option><option value="10">Brasilien</option><option value="11">Argentinien</option><option value="12">Frankreich</option></select>
+      <select name="fragetippForms[200].antwortIds[2]"><option value="">-- Nicht getippt --</option><option value="10">Brasilien</option><option value="11">Argentinien</option><option value="12">Frankreich</option></select>
+    </td></tr>
+</tbody></table>
+"""
+
+
+def test_parse_bonus_questions():
+    qs = parse_bonus_questions(_BONUS_HTML)
+    assert len(qs) == 2
+    champ = qs[0]
+    assert champ.text == "Wer wird Weltmeister?" and not champ.multi
+    assert ("Brasilien", "10") in champ.options
+    semi = qs[1]
+    assert semi.multi and len(semi.fields) == 2
+
+
+def test_parse_bonus_answers_maps_labels_to_values():
+    qs = parse_bonus_questions(_BONUS_HTML)
+    raw = '[{"qid":"100","antworten":["Argentinien"]},{"qid":"200","antworten":["Brasilien","Frankreich"]}]'
+    answers = parse_bonus_answers(raw, qs)
+    assert answers["fragetippForms[100].antwortIds[1]"] == "11"     # Argentinien
+    assert answers["fragetippForms[200].antwortIds[1]"] == "10"     # Brasilien
+    assert answers["fragetippForms[200].antwortIds[2]"] == "12"     # Frankreich
+
+
+def test_parse_bonus_answers_dedupes_within_multi():
+    qs = parse_bonus_questions(_BONUS_HTML)
+    raw = '[{"qid":"200","antworten":["Brasilien","Brasilien","Frankreich"]}]'
+    answers = parse_bonus_answers(raw, qs)
+    # duplicate Brasilien must not fill both slots — second slot takes Frankreich
+    assert answers["fragetippForms[200].antwortIds[1]"] == "10"
+    assert answers["fragetippForms[200].antwortIds[2]"] == "12"
 
 
 def test_eligibility_lookahead_and_override(monkeypatch):

@@ -45,6 +45,18 @@ class KicktippError(Exception):
 
 
 @dataclass
+class BonusQuestion:
+    qid: str
+    text: str                          # the question, e.g. "Wer wird Weltmeister?"
+    fields: list[str]                  # select field name(s) — >1 = name-N-teams
+    options: list[tuple[str, str]]     # (label, option_value) pairs to choose from
+
+    @property
+    def multi(self) -> bool:
+        return len(self.fields) > 1
+
+
+@dataclass
 class Match:
     home: str
     away: str
@@ -145,6 +157,83 @@ def parse_matches(html: str) -> list[Match]:
             existing_away=(away_inp.get("value") or "").strip(),
         ))
     return matches
+
+
+def parse_bonus_questions(html: str) -> list[BonusQuestion]:
+    """Parse the bonus-question table (#tippabgabeFragen) into BonusQuestion
+    objects. Each row: deadline | question text | one or more <select>s.
+    Multi-select rows (e.g. "name 4 teams") share one question id."""
+    soup = BeautifulSoup(html, "html.parser")
+    table = soup.find(id="tippabgabeFragen")
+    if not table:
+        return []
+    out: list[BonusQuestion] = []
+    for tr in table.find_all("tr"):
+        selects = tr.find_all("select")
+        if not selects:
+            continue
+        # question text = the row cell that is neither time nor the tip cell
+        qtext = ""
+        for td in tr.find_all("td"):
+            cls = " ".join(td.get("class") or [])
+            if "time" in cls or "tippabgabe" in cls:
+                continue
+            t = td.get_text(" ", strip=True)
+            if t:
+                qtext = t
+                break
+        fields = [s.get("name") for s in selects if s.get("name")]
+        if not fields:
+            continue
+        qid_match = re.match(r"fragetippForms\[(\d+)\]", fields[0])
+        qid = qid_match.group(1) if qid_match else fields[0]
+        options: list[tuple[str, str]] = []
+        for opt in selects[0].find_all("option"):
+            label = opt.get_text(strip=True)
+            value = opt.get("value") or ""
+            if label and value and "nicht getippt" not in label.lower():
+                options.append((label, value))
+        out.append(BonusQuestion(qid=qid, text=qtext, fields=fields, options=options))
+    return out
+
+
+def _collect_full_form(html: str, anchor_id: str | None = None) -> tuple[str, dict[str, str]]:
+    """Collect a form's full current state (inputs + selected option of each
+    select) so a POST round-trips every value and doesn't blank other tips.
+    Returns (action_url, fields). If anchor_id is given, picks the form
+    containing that element."""
+    soup = BeautifulSoup(html, "html.parser")
+    form = None
+    if anchor_id:
+        node = soup.find(id=anchor_id)
+        while node is not None and node.name != "form":
+            node = node.parent
+        form = node
+    if form is None:
+        form = soup.find("form")
+    fields: dict[str, str] = {}
+    if not form:
+        return "", fields
+    for inp in form.find_all("input"):
+        name = inp.get("name")
+        if not name:
+            continue
+        itype = (inp.get("type") or "").lower()
+        if itype in ("checkbox", "radio") and not inp.has_attr("checked"):
+            continue
+        fields[name] = inp.get("value") or ""
+    for sel in form.find_all("select"):
+        name = sel.get("name")
+        if not name:
+            continue
+        chosen = ""
+        for opt in sel.find_all("option"):
+            if opt.has_attr("selected"):
+                chosen = opt.get("value") or ""
+                break
+        fields[name] = chosen
+    action = form.get("action") or ""
+    return action, fields
 
 
 def _parse_login_form(html: str) -> tuple[str, dict[str, str]]:
@@ -294,4 +383,35 @@ class KicktippClient:
         resp = await self._client.post(url, data=form_fields)
         if resp.status_code >= 400:
             raise KicktippError(f"Tippabgabe fehlgeschlagen (HTTP {resp.status_code}).")
+        return written
+
+    async def get_bonus_questions(self, community: str, matchday: int | None = None) -> list[BonusQuestion]:
+        r = await self._client.get(self._tippabgabe_url(community, matchday))
+        return parse_bonus_questions(r.text)
+
+    async def submit_bonus(
+        self, community: str, answers: dict[str, str], matchday: int | None = None,
+    ) -> int:
+        """Submit bonus-question answers ({select_field_name: option_value}).
+        Re-fetches the full form so existing match tips + other answers are
+        preserved. Returns the number of answer slots written."""
+        if not answers:
+            return 0
+        url = self._tippabgabe_url(community, matchday)
+        r = await self._client.get(url)
+        action, fields = _collect_full_form(r.text, anchor_id="tippabgabeFragen")
+        written = 0
+        for name, value in answers.items():
+            if value:
+                fields[name] = value
+                written += 1
+        if not written:
+            return 0
+        fields.setdefault("submitbutton", "submitbutton")
+        post_url = url
+        if action:
+            post_url = action if action.startswith("http") else URL_BASE + action
+        resp = await self._client.post(post_url, data=fields)
+        if resp.status_code >= 400:
+            raise KicktippError(f"Bonus-Tippabgabe fehlgeschlagen (HTTP {resp.status_code}).")
         return written

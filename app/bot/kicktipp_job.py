@@ -26,7 +26,7 @@ from app.config import (
     ADMIN_CHAT_ID,
 )
 from app.services.kicktipp_client import KicktippClient, KicktippError, Match
-from app.services.kicktipp_predictor import predict_matchday
+from app.services.kicktipp_predictor import predict_matchday, predict_bonus
 
 logger = logging.getLogger(__name__)
 
@@ -94,9 +94,38 @@ async def _tip_community(client: KicktippClient, community: str, override: bool,
     return lines, written
 
 
-async def run_tips(*, dry_run: bool, override: bool | None = None) -> str:
+async def _fill_bonus(client: KicktippClient, community: str,
+                      dry_run: bool) -> tuple[list[str], int]:
+    """Answer the round's bonus questions (champion, group winners, …) once
+    they're visible. Returns (report_lines, written_slots)."""
+    questions = []
+    page_md = None
+    for md in (None, 1):
+        questions = await client.get_bonus_questions(community, matchday=md)
+        if questions:
+            page_md = md
+            break
+    if not questions:
+        return [], 0
+    answers = await predict_bonus(questions)
+    if not answers:
+        return [], 0
+    written = 0 if dry_run else await client.submit_bonus(community, answers, matchday=page_md)
+    lines = []
+    for q in questions:
+        label_by_val = {v: l for l, v in q.options}
+        chosen = [label_by_val.get(answers[f]) for f in q.fields if answers.get(f)]
+        chosen = [c for c in chosen if c]
+        if chosen:
+            lines.append(f"• [{community} Bonus] {q.text[:50]}: {', '.join(chosen)}")
+    return lines, written
+
+
+async def run_tips(*, dry_run: bool, override: bool | None = None,
+                   include_bonus: bool = True) -> str:
     """Tip every eligible match across all matchdays in lookahead, for every
-    round the user is in (or just KICKTIPP_COMMUNITY if that's set)."""
+    round the user is in (or just KICKTIPP_COMMUNITY if that's set), plus the
+    bonus questions."""
     if not _configured():
         return "⚠️ Kicktipp nicht konfiguriert — KICKTIPP_EMAIL/PASSWORD in .env setzen."
     override = KICKTIPP_OVERRIDE if override is None else override
@@ -112,6 +141,10 @@ async def run_tips(*, dry_run: bool, override: bool | None = None) -> str:
                 lines, written = await _tip_community(client, community, override, dry_run)
                 all_lines += lines
                 grand_written += written
+                if include_bonus:
+                    b_lines, b_written = await _fill_bonus(client, community, dry_run)
+                    all_lines += b_lines
+                    grand_written += b_written
             if not all_lines:
                 return f"⚽ Kicktipp: keine offenen Spiele in den nächsten {KICKTIPP_LOOKAHEAD_HOURS}h."
             if dry_run:

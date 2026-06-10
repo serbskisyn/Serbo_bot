@@ -44,11 +44,18 @@ PUNKTEREGEL dieser Runde (DARAUF optimieren — erwarteten Punktwert maximieren)
 - Bei Unentschieden gibt es keine Tordifferenz-Stufe: exaktes Remis 5, sonst richtige Tendenz 2.
 Es wird das Ergebnis NACH VERLÄNGERUNG getippt: in K.-o.-Spielen ist also KEIN Unentschieden möglich — tippe den Sieger nach Verlängerung. Gruppenspiele sind 90 Min (Remis möglich).
 
+BEWERTUNGSFAKTOREN (gewichtet nutzen):
+- Buchmacher-Quoten (stärkstes Signal — bündeln alle Infos).
+- FIFA-Weltrangliste / Kaderqualität / Marktwert der Teams.
+- Aktuelle Form (letzte Spiele), Verletzungen/Sperren von Schlüsselspielern.
+- Direkter Vergleich (Head-to-Head), Heimvorteil, Reise/Erholung.
+- Turnierkontext: Gruppenphase vs. K.o.; Tabellenlage (muss ein Team gewinnen?); Motivation.
+
 STRATEGIE (genau so vorgehen):
-1. Zuerst die Tendenz sicher treffen (das sind die sicheren 2 Punkte) — orientiere dich primär an den Quoten (niedrigste Quote = Favorit; Reihenfolge Heim/Unentschieden/Auswärts).
+1. Zuerst die Tendenz sicher treffen (das sind die sicheren 2 Punkte) — primär an Quoten, gestützt durch FIFA-Ranking/Form (niedrigste Quote = Favorit; Reihenfolge Heim/Unentschieden/Auswärts).
 2. Dann das EINE wahrscheinlichste exakte Ergebnis für diese Tendenz wählen — bevorzuge häufige, niedrige Resultate (1:0, 2:1, 2:0, 1:1, 2:2, 0:0). Jage NICHT exotischen hohen Ergebnissen hinterher.
 3. Eine 1-Tor-Differenz (1:0, 2:1) maximiert die Chance, zusätzlich die Tordifferenz (3 P.) zu treffen.
-4. News (Form/Verletzungen) nur zur Feinjustierung, Quoten schlagen News.
+4. News/Form nur zur Feinjustierung, Quoten schlagen Form, Form schlägt reines Ranking.
 
 Antworte NUR mit einem validen JSON-Array, ein Objekt pro Spiel-Index:
 [{"i": 0, "heim": 2, "gast": 1}, {"i": 1, "heim": 1, "gast": 1}]
@@ -189,3 +196,80 @@ async def predict_matchday(matches: list[Match]) -> dict[str, tuple[int, int]]:
         return {}
     by_index = parse_predictions(raw, len(matches))
     return {matches[i].field_home: score for i, score in by_index.items()}
+
+
+# ── Bonus questions (tournament-outcome predictions) ─────────────────────────
+
+_BONUS_SYSTEM = """Du bist ein Weltklasse-Fußball-Experte und beantwortest die Bonusfragen eines Kicktipp-Tippspiels (z.B. WM 2026).
+Jede richtige Antwort gibt Punkte. Wähle die Antwort(en) mit der höchsten Eintreffwahrscheinlichkeit.
+
+Stütze dich auf: FIFA-Weltrangliste, Kaderqualität/Marktwert, aktuelle Form, Turnier-Auslosung/Gruppenstärke, historische Turnierleistung.
+- Bei Fragen mit mehreren Antwort-Slots: nenne GENAU so viele verschiedene Teams wie Slots, stärkste zuerst.
+- Wähle NUR aus den vorgegebenen Optionen, exakt in der Schreibweise der Option.
+
+Antworte NUR mit validem JSON-Array:
+[{"qid": "<id>", "antworten": ["<Option>", ...]}]
+Pro Frage so viele Antworten wie Slots. Keine Erklärungen."""
+
+
+def build_bonus_prompt(questions: list) -> str:
+    lines = ["Beantworte diese Bonusfragen (wähle nur aus den Optionen):\n"]
+    for q in questions:
+        n = len(q.fields)
+        labels = [lbl for lbl, _val in q.options]
+        # For long option lists (all teams) keep it compact
+        opts = ", ".join(labels) if len(labels) <= 12 else f"{', '.join(labels[:12])} … (alle Turnier-Teams)"
+        slots = f" — nenne {n} Teams" if n > 1 else ""
+        lines.append(f'[qid {q.qid}] {q.text}{slots}\n   Optionen: {opts}')
+    return "\n".join(lines)
+
+
+def parse_bonus_answers(raw: str, questions: list) -> dict[str, str]:
+    """Map the LLM's chosen labels back to {select_field_name: option_value}."""
+    if not raw:
+        return {}
+    raw = re.sub(r"```(?:json)?\s*", "", raw).strip().rstrip("`").strip()
+    m = re.search(r"\[.*\]", raw, re.DOTALL)
+    if not m:
+        return {}
+    try:
+        data = json.loads(m.group())
+    except json.JSONDecodeError:
+        return {}
+    by_qid = {str(q.qid): q for q in questions}
+    out: dict[str, str] = {}
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        q = by_qid.get(str(item.get("qid")))
+        if not q:
+            continue
+        answers = item.get("antworten") or []
+        if isinstance(answers, str):
+            answers = [answers]
+        # label → value lookup (case-insensitive)
+        val_by_label = {lbl.strip().lower(): val for lbl, val in q.options}
+        used: set[str] = set()
+        slot = 0
+        for ans in answers:
+            if slot >= len(q.fields):
+                break
+            val = val_by_label.get(str(ans).strip().lower())
+            if val and val not in used:
+                out[q.fields[slot]] = val
+                used.add(val)
+                slot += 1
+    return out
+
+
+async def predict_bonus(questions: list) -> dict[str, str]:
+    """Answer all bonus questions in one LLM call.
+    Returns {select_field_name: option_value}."""
+    if not questions:
+        return {}
+    try:
+        raw = await _call_llm(_BONUS_SYSTEM, build_bonus_prompt(questions))
+    except Exception as exc:
+        logger.warning("kicktipp: bonus LLM failed: %s", exc)
+        return {}
+    return parse_bonus_answers(raw, questions)

@@ -14,7 +14,8 @@ Manual:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from telegram import Update
 from telegram.ext import Application, ContextTypes
@@ -22,13 +23,15 @@ from telegram.ext import Application, ContextTypes
 from app.bot.whitelist import require_whitelist
 from app.config import (
     KICKTIPP_ENABLED, KICKTIPP_EMAIL, KICKTIPP_PASSWORD, KICKTIPP_COMMUNITY,
-    KICKTIPP_LOOKAHEAD_HOURS, KICKTIPP_CHECK_INTERVAL_MINUTES, KICKTIPP_OVERRIDE,
+    KICKTIPP_LOOKAHEAD_HOURS, KICKTIPP_HOUR, KICKTIPP_MINUTE, KICKTIPP_OVERRIDE,
     ADMIN_CHAT_ID,
 )
 from app.services.kicktipp_client import KicktippClient, KicktippError, Match
 from app.services.kicktipp_predictor import predict_matchday, predict_bonus
 
 logger = logging.getLogger(__name__)
+
+_BERLIN = ZoneInfo("Europe/Berlin")
 
 
 def _configured() -> bool:
@@ -186,11 +189,17 @@ def register_kicktipp_job(application: Application) -> None:
     if jq is None:
         logger.warning("register_kicktipp_job: no JobQueue available")
         return
-    interval = max(30, KICKTIPP_CHECK_INTERVAL_MINUTES) * 60
-    jq.run_repeating(_scheduled_callback, interval=interval, first=120, name="kicktipp_autotip")
+    # Once a day in the morning — tips new matches in the lookahead window and
+    # (override on) re-reviews already-placed but still-open tips. Stays quiet
+    # otherwise. run_daily does NOT fire on restart (unlike run_repeating).
+    jq.run_daily(
+        _scheduled_callback,
+        time=time(hour=KICKTIPP_HOUR, minute=KICKTIPP_MINUTE, tzinfo=_BERLIN),
+        name="kicktipp_autotip",
+    )
     logger.info(
-        "Kicktipp AI-Spieler registriert: alle %d Min (Community: %s, Lookahead: %dh)",
-        KICKTIPP_CHECK_INTERVAL_MINUTES, KICKTIPP_COMMUNITY, KICKTIPP_LOOKAHEAD_HOURS,
+        "Kicktipp AI-Spieler registriert: täglich %02d:%02d Europe/Berlin (Community: %s, Lookahead: %dh)",
+        KICKTIPP_HOUR, KICKTIPP_MINUTE, KICKTIPP_COMMUNITY or "alle", KICKTIPP_LOOKAHEAD_HOURS,
     )
 
 
@@ -250,7 +259,7 @@ async def kicktipp_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             f"⚽ *Kicktipp — Opus Maximus*\n"
             f"{rounds_txt}\n"
             f"Override: {'an' if KICKTIPP_OVERRIDE else 'aus'} · "
-            f"Auto-Tipp alle {KICKTIPP_CHECK_INTERVAL_MINUTES} Min\n\n"
+            f"Auto-Tipp täglich {KICKTIPP_HOUR:02d}:{KICKTIPP_MINUTE:02d}\n\n"
             f"`/kicktipp dry` — Vorschau · `/kicktipp run` — jetzt tippen",
             parse_mode="Markdown",
         )

@@ -138,8 +138,9 @@ ODDS_API_SPORT: str = os.getenv("ODDS_API_SPORT", "soccer_fifa_world_cup")
 ODDS_API_WINNER_SPORT: str = os.getenv("ODDS_API_WINNER_SPORT", "")
 # Only bet on matches kicking off within this many hours (skip far-future ones)
 KICKTIPP_LOOKAHEAD_HOURS: int = int(os.getenv("KICKTIPP_LOOKAHEAD_HOURS", "72"))
-# How often the auto-tip job runs
-KICKTIPP_CHECK_INTERVAL_MINUTES: int = int(os.getenv("KICKTIPP_CHECK_INTERVAL_MINUTES", "240"))
+# Daily auto-tip time (Europe/Berlin) — runs once each morning, then stays quiet
+KICKTIPP_HOUR: int = int(os.getenv("KICKTIPP_HOUR", "7"))
+KICKTIPP_MINUTE: int = int(os.getenv("KICKTIPP_MINUTE", "0"))
 # Overwrite tips that were already placed
 KICKTIPP_OVERRIDE: bool = os.getenv("KICKTIPP_OVERRIDE", "false").lower() == "true"
 

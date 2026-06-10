@@ -23,6 +23,20 @@ from app.agents.lead_qualifying.state import LeadState
 logger = logging.getLogger(__name__)
 
 
+def _strongest_market(by_brand: dict) -> str:
+    """ISO of the country with the most mentions across all brands. '' if none.
+
+    Used as a Target-Proxy for 'Global'/unmapped leads. The volume thresholds in
+    the scorer still gate the points — a weak strongest market (<5 mentions)
+    scores 0, so this never inflates a global lead that has no real market.
+    """
+    totals: dict[str, int] = {}
+    for stats in by_brand.values():
+        for iso, c in (stats.get("by_country") or {}).items():
+            totals[iso] = totals.get(iso, 0) + int(c.get("total") or 0)
+    return max(totals, key=totals.get) if totals else ""
+
+
 def _format_legacy_summary(by_brand: dict, total: int) -> str:
     """Aggregate summary across all brands + countries (legacy column)."""
     if total <= 0 or not by_brand:
@@ -94,6 +108,18 @@ async def pepper_multi_country_node(state: LeadState) -> LeadState:
     # subprocess timeout, unparseable reply). That must NOT be treated as a
     # genuine "0 mentions" — the scorer would otherwise hard-cap to COLD.
     pepper_unavailable = bool(lookup_error)
+
+    # "Global/Multiple Countries" (or any unmapped country) → use the brand's
+    # strongest Pepper market as the target proxy, so a global multi-market brand
+    # isn't forced to 0 target-volume. Scorer thresholds still gate the points.
+    if not target_iso and by_brand:
+        proxy = _strongest_market(by_brand)
+        if proxy:
+            target_iso = proxy
+            logger.info(
+                "pepper_multi_country: '%s' kein Zielland → stärkster Markt '%s' als Target-Proxy",
+                firma, proxy.upper(),
+            )
 
     target_summary = format_country_sentiment(by_brand, target_iso) if target_iso else "—"
     # All-country matrix (no exclusion, no cap) — one line per country sorted by total

@@ -184,6 +184,8 @@ KRAKEN_FEE_MAKER:    float = float(os.getenv("KRAKEN_FEE_MAKER", "0.0008"))
 
 # ── Lead Qualifying Agent ─────────────────────────────────────────────────────
 SERP_API_KEY: str = os.getenv("SERP_API_KEY", "")
+# Model for the sales-action / recommendation text (Opus for sharper output)
+LEAD_ACTION_MODEL: str = os.getenv("LEAD_ACTION_MODEL", "anthropic/claude-opus-4.8")
 NORTHDATA_API_KEY: str = os.getenv("NORTHDATA_API_KEY", "")
 LEAD_QUALIFYING_HOUR: int = int(os.getenv("LEAD_QUALIFYING_HOUR", "8"))
 LEAD_QUALIFYING_MINUTE: int = int(os.getenv("LEAD_QUALIFYING_MINUTE", "0"))

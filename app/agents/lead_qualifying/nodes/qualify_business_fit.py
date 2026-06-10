@@ -21,6 +21,7 @@ from app.agents.lead_qualifying.services.scorer_v2 import (
     format_breakdown,
 )
 from app.agents.lead_qualifying.state import LeadState
+from app.config import LEAD_ACTION_MODEL
 from app.services.openrouter_client import ask_llm
 
 logger = logging.getLogger(__name__)
@@ -65,7 +66,7 @@ Reply with this JSON in English:
   "contact_seniority": "junior|mid|senior",
   "priority_tier": "LOW|MEDIUM|HIGH|STRATEGIC",
   "priority_reason": "1 sentence — why this tier, anchored to Pepper Community fit",
-  "recommended_action": "2-3 concise sentences: primary Pepper Brand pitch angle, then deal/promo approach, and optionally Shoop/iGraal if strong secondary fit"
+  "recommended_action": "2-3 CONCRETE, actionable sentences (no filler, no 'if/maybe' hedging): (1) name the strongest Pepper market + its sentiment as the hook, (2) a specific first step — which product (mydealz/Pepper community, Shoop, iGraal) and which deal/campaign angle, (3) address the contact's role/seniority if known."
 }}
 
 Priority tier guidance:
@@ -119,7 +120,8 @@ async def qualify_business_fit_node(state: LeadState) -> LeadState:
     recommended_action = ""
     priority_tier      = ""
     try:
-        raw = await ask_llm(user_text=prompt, system_prompt=_SALES_ACTION_SYSTEM)
+        raw = await ask_llm(user_text=prompt, system_prompt=_SALES_ACTION_SYSTEM,
+                            model=LEAD_ACTION_MODEL)
         match = _JSON_RE.search(raw)
         if match:
             data = json.loads(match.group())

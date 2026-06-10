@@ -35,8 +35,15 @@ async def enrich_contact_v2_node(state: LeadState) -> LeadState:
             "contact_role_match": False,
         }
 
+    email = str(lead.get("E-Mail", "")).strip()
+    # Self-description from the inbound form — often reveals the person's role.
+    context = " ".join(p for p in (
+        str(lead.get("Partnership_Goals", "")).strip(),
+        str(lead.get("Message", "")).strip(),
+    ) if p)
+
     logger.info("enrich_contact_v2: '%s' @ '%s'", name, firma)
-    data = await perplexity_enrich_contact(vorname, nachname, firma)
+    data = await perplexity_enrich_contact(vorname, nachname, firma, email=email, context=context)
 
     title       = (data.get("contact_title") or "").strip()
     linkedin    = (data.get("linkedin_url") or "").strip()

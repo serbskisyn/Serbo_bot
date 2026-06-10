@@ -25,6 +25,7 @@ async def ask_llm(
     user_text: str,
     history: list[dict] = None,
     system_prompt: str = "Du bist ein hilfreicher Assistent. Antworte auf Deutsch.",
+    model: str | None = None,
 ) -> str:
     messages = [{"role": "system", "content": system_prompt}]
     if history:
@@ -32,7 +33,7 @@ async def ask_llm(
     messages.append({"role": "user", "content": user_text})
 
     payload = {
-        "model": OPENROUTER_MODEL,
+        "model": model or OPENROUTER_MODEL,
         "messages": messages,
         "temperature": 0.7,
         "max_tokens": 1024,

@@ -67,16 +67,34 @@ async def _call_perplexity(
     return content or ""
 
 
-async def enrich_contact(vorname: str, nachname: str, firma: str) -> dict:
-    """B2B contact research with role-match + decision authority. Output in English."""
+async def enrich_contact(vorname: str, nachname: str, firma: str,
+                         email: str = "", context: str = "") -> dict:
+    """B2B contact research with role-match + decision authority. Output in English.
+
+    Uses the lead's email (domain confirms the company) and their inbound message
+    (people often describe their own role/seniority there) so the role can be
+    inferred even when web search can't pin the person down.
+    """
     name = f"{vorname} {nachname}".strip()
-    prompt = f"""Research the person "{name}" who works at "{firma}".
+    email_line = (f'\nTheir email: "{email}" — the domain confirms the company, '
+                  f'the local part may hint at the person.') if email else ""
+    context_line = (
+        f'\nThey wrote this in their inbound partnership request — use it to infer '
+        f'title/seniority/authority when web search is inconclusive (people often '
+        f'state their own role here):\n"""{context[:600]}"""'
+    ) if context.strip() else ""
+    prompt = f"""Research the person "{name}" who works at "{firma}".{email_line}{context_line}
+
+Search LinkedIn and the company website for this person.
 
 Find:
 1. Current job title / position (e.g. "Head of Marketing", "CEO", "E-Commerce Manager")
 2. Public LinkedIn profile URL if available
 3. Whether this person is likely a decision-maker for affiliate/cashback/coupon partnerships
 4. Whether the role is relevant for Atolls' platforms (Shoop cashback, iGraal cashback/coupons, mydealz deal-community)
+
+If you cannot verify the person online, INFER title/authority/role_match from the
+inbound message above instead of leaving everything empty (set confidence=low when inferred).
 
 Reply ONLY with valid JSON, no surrounding text, no markdown fences:
 {{

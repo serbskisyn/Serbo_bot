@@ -111,6 +111,9 @@ async def skip_pepper_node(state: LeadState) -> LeadState:
         "pepper_by_brand": {},
         "pepper_brands_found": 0,
         "pepper_total_mentions_all": 0,
+        # Deliberate skip (B2B / no eCommerce) is a real "no Pepper expected" —
+        # the no-signal cap SHOULD apply here, so this is NOT "unavailable".
+        "pepper_unavailable": False,
         "pepper_target_summary": "—",
         "pepper_cross_summary": "—",
         "pepper_summary": f"Skipped ({reason})",

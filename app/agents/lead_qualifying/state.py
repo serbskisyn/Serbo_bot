@@ -48,6 +48,7 @@ class LeadState(TypedDict, total=False):
     pepper_by_brand:           dict
     pepper_brands_found:       int
     pepper_total_mentions_all: int
+    pepper_unavailable:        bool   # True wenn Lookup ausfiel (Auth/Outage/Parse) — KEIN echtes "0 Mentions"
 
     # Kompakte Strings für Sheet-Spalten (zur Performance, einmal berechnet)
     pepper_target_summary:     str             # 1 Zeile für Zielland

@@ -369,7 +369,17 @@ _MCP_UNAVAILABLE_MARKERS = (
     "is not available in my current toolset",
     "not listed among my deferred tools",
     "is not available",
+    "isn't available",
     "tool not available",
+    "tool isn't available",
+    # Auth-failure phrasings — the connector dropped its session
+    "isn't authenticated",
+    "is not authenticated",
+    "not authenticated",
+    "authenticate",
+    "oauth/authenticate",
+    "run `/mcp`",
+    "run /mcp",
 )
 
 

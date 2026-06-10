@@ -75,6 +75,7 @@ async def pepper_multi_country_node(state: LeadState) -> LeadState:
             "pepper_by_brand": {},
             "pepper_brands_found": 0,
             "pepper_total_mentions_all": 0,
+            "pepper_unavailable": False,   # genuinely no brands to look up — a real zero
             "pepper_target_summary": "—",
             "pepper_cross_summary": "—",
             "target_country_iso": target_iso,
@@ -89,6 +90,10 @@ async def pepper_multi_country_node(state: LeadState) -> LeadState:
     brands_found = int(result.get("brands_found") or 0)
     total_all    = int(result.get("total_mentions_all") or 0)
     lookup_error = result.get("error") or ""
+    # Any error means we did NOT get reliable Pepper data (auth drop, outage,
+    # subprocess timeout, unparseable reply). That must NOT be treated as a
+    # genuine "0 mentions" — the scorer would otherwise hard-cap to COLD.
+    pepper_unavailable = bool(lookup_error)
 
     target_summary = format_country_sentiment(by_brand, target_iso) if target_iso else "—"
     # All-country matrix (no exclusion, no cap) — one line per country sorted by total
@@ -114,6 +119,7 @@ async def pepper_multi_country_node(state: LeadState) -> LeadState:
         "pepper_by_brand":            by_brand,
         "pepper_brands_found":        brands_found,
         "pepper_total_mentions_all":  total_all,
+        "pepper_unavailable":         pepper_unavailable,
         "pepper_target_summary":      target_summary,
         "pepper_cross_summary":       cross_summary,
         "target_country_iso":         target_iso,

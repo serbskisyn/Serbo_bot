@@ -187,6 +187,24 @@ def _sales_signal_score(sales_signals: str) -> int:
 Classification = Literal["HOT", "WARM", "COLD"]
 
 
+def _breakdown_dict(b_model, b_size, b_brand_count, p_volume, p_sentiment, p_cross,
+                    c_seniority, c_authority, c_linkedin, c_role, s_overlap, s_signals) -> dict:
+    return {
+        "business_model":       b_model,
+        "size":                 b_size,
+        "brand_count":          b_brand_count,
+        "pepper_target_volume": p_volume,
+        "pepper_sentiment":     p_sentiment,
+        "pepper_cross":         p_cross,
+        "contact_seniority":    c_seniority,
+        "contact_authority":    c_authority,
+        "contact_linkedin":     c_linkedin,
+        "contact_role_match":   c_role,
+        "market_overlap":       s_overlap,
+        "sales_signals":        s_signals,
+    }
+
+
 def compute_score(state: dict) -> dict:
     by_brand   = state.get("pepper_by_brand") or {}
     target_iso = (state.get("target_country_iso") or "").lower()
@@ -234,6 +252,25 @@ def compute_score(state: dict) -> dict:
     override = ""
     classification: Classification = "COLD"
 
+    # ── Pepper unavailable (auth drop / outage / unparseable) ─────────────────
+    # We have NO Pepper data — that's an absence of evidence, not evidence of
+    # absence. Skip the Pepper-based COLD veto and score on the other signals,
+    # flagging the lead for retry once Pepper is reachable again.
+    if state.get("pepper_unavailable"):
+        if score >= 70:   classification = "HOT"
+        elif score >= 40: classification = "WARM"
+        else:             classification = "COLD"
+        override = "⚠ Pepper unavailable — scored without community signal (retry once reconnected)"
+        return {
+            "score_total":     score,
+            "classification":  classification,
+            "breakdown":       _breakdown_dict(
+                b_model, b_size, b_brand_count, p_volume, p_sentiment, p_cross,
+                c_seniority, c_authority, c_linkedin, c_role, s_overlap, s_signals,
+            ),
+            "override_reason": override,
+        }
+
     # ── Override rules (in priority order) ────────────────────────────────────
     # HARD RULE: no Pepper signal at all → max COLD (user requirement)
     if total_pepper == 0:
@@ -276,20 +313,10 @@ def compute_score(state: dict) -> dict:
             elif score >= 40: classification = "WARM"
             else:             classification = "COLD"
 
-    breakdown = {
-        "business_model":      b_model,
-        "size":                b_size,
-        "brand_count":         b_brand_count,
-        "pepper_target_volume": p_volume,
-        "pepper_sentiment":    p_sentiment,
-        "pepper_cross":        p_cross,
-        "contact_seniority":   c_seniority,
-        "contact_authority":   c_authority,
-        "contact_linkedin":    c_linkedin,
-        "contact_role_match":  c_role,
-        "market_overlap":      s_overlap,
-        "sales_signals":       s_signals,
-    }
+    breakdown = _breakdown_dict(
+        b_model, b_size, b_brand_count, p_volume, p_sentiment, p_cross,
+        c_seniority, c_authority, c_linkedin, c_role, s_overlap, s_signals,
+    )
 
     return {
         "score_total":     score,

@@ -259,11 +259,15 @@ def route_after_pre_qualify(state: LeadState) -> str:
     """
     LangGraph conditional edge: decide which node to run after pre_qualify.
 
-    SKIP  → collect_filtered_result (write to sheet as FILTERED, no enrichment)
-    HIGH / LOW → enrich_contact (full pipeline)
+    SKIP / AGENCY / LOW → collect_filtered_result (write to sheet, no enrichment)
+    HIGH → enrich_contact (full pipeline)
+
+    LOW is routed out here too: a weak lead isn't worth the enrichment chain
+    (4 Perplexity calls + Pepper subprocess). It's recorded with its
+    pre_qualify_label/reason, classified FILTERED, and kept out of the push.
     """
     label = state.get("pre_qualify_label", "LOW")
-    if label in ("SKIP", "AGENCY"):
+    if label in ("SKIP", "AGENCY", "LOW"):
         logger.info("pre_qualify router: %s → collect_filtered_result", label)
         return "collect_filtered_result"
     logger.info("pre_qualify router: %s → enrich_contact", label)

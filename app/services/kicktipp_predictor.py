@@ -21,7 +21,7 @@ from xml.etree import ElementTree as ET
 
 import httpx
 
-from app.config import OPENROUTER_API_KEY, OPENROUTER_MODEL, KICKTIPP_NEWS_ENABLED
+from app.config import OPENROUTER_API_KEY, KICKTIPP_PREDICT_MODEL, KICKTIPP_NEWS_ENABLED
 from app.services.kicktipp_client import Match
 
 logger = logging.getLogger(__name__)
@@ -31,17 +31,26 @@ _NEWS_TIMEOUT = 8.0
 _HEADLINES_PER_TEAM = 3
 _MAX_GOAL = 9
 
-_SYSTEM_PROMPT = """Du bist ein erfahrener Fußball-Tippexperte für ein Kicktipp-Tippspiel.
-Für jedes Spiel gibst du ein REALISTISCHES Endergebnis (Tore Heim : Gast).
+# Encodes the round's scoring rule so the model maximises EXPECTED points,
+# not just the single most likely scoreline.
+_SYSTEM_PROMPT = """Du bist ein Weltklasse-Fußball-Tippexperte für ein Kicktipp-Tippspiel.
+Für jedes Spiel gibst du EIN Endergebnis (Tore Heim:Gast) ab.
 
-Berücksichtige:
-- Buchmacher-Quoten: niedrigere Quote = Favorit. Quoten-Reihenfolge ist (Heimsieg / Unentschieden / Auswärtssieg).
-- Aktuelle News/Schlagzeilen zu den Teams (Form, Verletzungen, Wichtigkeit).
-- Typische Fußball-Ergebnisse: knappe Spiele 1:0/2:1, klare Favoriten 2:0/3:1, selten >4 Tore.
+PUNKTEREGEL dieser Runde (DARAUF optimieren — erwarteten Punktwert maximieren):
+- Exaktes Ergebnis richtig: 5 Punkte
+- Richtige Tordifferenz (richtiger Sieger + richtige Tordifferenz, aber Ergebnis nicht exakt): 3 Punkte
+- Nur richtige Tendenz (richtiger Sieger ODER Unentschieden erkannt, aber falsche Differenz/Ergebnis): 2 Punkte
+- Falsche Tendenz: 0 Punkte
+- Bei Unentschieden gibt es keine Tordifferenz-Stufe: exaktes Remis 5, sonst richtige Tendenz 2.
+Es wird das Ergebnis NACH VERLÄNGERUNG getippt: in K.-o.-Spielen ist also KEIN Unentschieden möglich — tippe den Sieger nach Verlängerung. Gruppenspiele sind 90 Min (Remis möglich).
 
-Gib das Ergebnis aus Sicht der wahrscheinlichsten Tendenz an — nicht zu defensiv.
+STRATEGIE (genau so vorgehen):
+1. Zuerst die Tendenz sicher treffen (das sind die sicheren 2 Punkte) — orientiere dich primär an den Quoten (niedrigste Quote = Favorit; Reihenfolge Heim/Unentschieden/Auswärts).
+2. Dann das EINE wahrscheinlichste exakte Ergebnis für diese Tendenz wählen — bevorzuge häufige, niedrige Resultate (1:0, 2:1, 2:0, 1:1, 2:2, 0:0). Jage NICHT exotischen hohen Ergebnissen hinterher.
+3. Eine 1-Tor-Differenz (1:0, 2:1) maximiert die Chance, zusätzlich die Tordifferenz (3 P.) zu treffen.
+4. News (Form/Verletzungen) nur zur Feinjustierung, Quoten schlagen News.
 
-Antworte NUR mit einem validen JSON-Array, ein Objekt pro Spiel in derselben Reihenfolge:
+Antworte NUR mit einem validen JSON-Array, ein Objekt pro Spiel-Index:
 [{"i": 0, "heim": 2, "gast": 1}, {"i": 1, "heim": 1, "gast": 1}]
 Keine Erklärungen, kein Text drumherum."""
 
@@ -85,7 +94,8 @@ async def gather_news(teams: list[str]) -> dict[str, list[str]]:
 # ── Prompt building + parsing (pure) ─────────────────────────────────────────
 
 
-def build_prompt(matches: list[Match], news: dict[str, list[str]] | None = None) -> str:
+def build_prompt(matches: list[Match], news: dict[str, list[str]] | None = None,
+                 odds_block: str = "") -> str:
     news = news or {}
     lines = ["Spiele dieses Spieltags:\n"]
     for i, m in enumerate(matches):
@@ -96,6 +106,8 @@ def build_prompt(matches: list[Match], news: dict[str, list[str]] | None = None)
             heads = news.get(team) or []
             if heads:
                 lines.append(f"    News {team}: " + " | ".join(h[:90] for h in heads[:2]))
+    if odds_block:
+        lines.append(odds_block)
     lines.append("\nGib für jeden Index [0..%d] ein Ergebnis als JSON-Array zurück." % (len(matches) - 1))
     return "\n".join(lines)
 
@@ -132,13 +144,13 @@ def parse_predictions(raw: str, n: int) -> dict[int, tuple[int, int]]:
 
 async def _call_llm(system: str, user: str, timeout: float = 40.0) -> str:
     payload = {
-        "model": OPENROUTER_MODEL,
+        "model": KICKTIPP_PREDICT_MODEL,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
         "temperature": 0.3,
-        "max_tokens": 700,
+        "max_tokens": 1200,
     }
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -158,8 +170,20 @@ async def predict_matchday(matches: list[Match]) -> dict[str, tuple[int, int]]:
         return {}
     teams = [t for m in matches for t in (m.home, m.away)]
     news = await gather_news(teams)
+
+    # External bookmaker odds (best-effort) — especially valuable when Kicktipp
+    # itself shows no quotes. The LLM maps English team names to our matches.
+    odds_block = ""
+    have_kicktipp_odds = any(m.odds for m in matches)
+    if not have_kicktipp_odds:
+        try:
+            from app.services.kicktipp_odds import fetch_odds, format_odds_block
+            odds_block = format_odds_block(await fetch_odds())
+        except Exception as exc:
+            logger.debug("kicktipp: external odds skipped: %s", exc)
+
     try:
-        raw = await _call_llm(_SYSTEM_PROMPT, build_prompt(matches, news))
+        raw = await _call_llm(_SYSTEM_PROMPT, build_prompt(matches, news, odds_block))
     except Exception as exc:
         logger.warning("kicktipp: prediction LLM failed: %s", exc)
         return {}

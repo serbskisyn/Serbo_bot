@@ -128,6 +128,11 @@ KICKTIPP_EMAIL: str = os.getenv("KICKTIPP_EMAIL", "")
 KICKTIPP_PASSWORD: str = os.getenv("KICKTIPP_PASSWORD", "")
 KICKTIPP_COMMUNITY: str = os.getenv("KICKTIPP_COMMUNITY", "")   # group slug in the URL
 KICKTIPP_NEWS_ENABLED: bool = os.getenv("KICKTIPP_NEWS_ENABLED", "true").lower() == "true"
+# Prediction model — Claude Opus via OpenRouter for the strongest football reasoning
+KICKTIPP_PREDICT_MODEL: str = os.getenv("KICKTIPP_PREDICT_MODEL", "anthropic/claude-opus-4.8")
+# The Odds API (the-odds-api.com) — free tier, 500 req/month. Empty = disabled.
+ODDS_API_KEY: str = os.getenv("ODDS_API_KEY", "")
+ODDS_API_SPORT: str = os.getenv("ODDS_API_SPORT", "soccer_fifa_world_cup")
 # Only bet on matches kicking off within this many hours (skip far-future ones)
 KICKTIPP_LOOKAHEAD_HOURS: int = int(os.getenv("KICKTIPP_LOOKAHEAD_HOURS", "72"))
 # How often the auto-tip job runs

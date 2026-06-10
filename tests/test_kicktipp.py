@@ -124,6 +124,17 @@ def test_parse_bonus_answers_dedupes_within_multi():
     assert answers["fragetippForms[200].antwortIds[2]"] == "12"
 
 
+def test_outrights_block_and_bonus_prompt():
+    from app.services.kicktipp_odds import format_outrights_block
+    from app.services.kicktipp_predictor import build_bonus_prompt
+    block = format_outrights_block([("Spain", 5.7), ("France", 5.8), ("England", 8.1)])
+    assert "Spain: 5.7" in block
+    assert format_outrights_block([]) == ""          # empty when no odds
+    qs = parse_bonus_questions(_BONUS_HTML)
+    prompt = build_bonus_prompt(qs, block)
+    assert "Spain: 5.7" in prompt and "Weltmeister" in prompt
+
+
 def test_eligibility_lookahead_and_override(monkeypatch):
     monkeypatch.setattr(kicktipp_job, "KICKTIPP_LOOKAHEAD_HOURS", 48)
     soon = datetime.now() + timedelta(hours=10)

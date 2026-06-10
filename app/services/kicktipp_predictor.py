@@ -203,7 +203,8 @@ async def predict_matchday(matches: list[Match]) -> dict[str, tuple[int, int]]:
 _BONUS_SYSTEM = """Du bist ein Weltklasse-Fußball-Experte und beantwortest die Bonusfragen eines Kicktipp-Tippspiels (z.B. WM 2026).
 Jede richtige Antwort gibt Punkte. Wähle die Antwort(en) mit der höchsten Eintreffwahrscheinlichkeit.
 
-Stütze dich auf: FIFA-Weltrangliste, Kaderqualität/Marktwert, aktuelle Form, Turnier-Auslosung/Gruppenstärke, historische Turnierleistung.
+Stütze dich auf: Buchmacher-Outright-Quoten (falls angegeben — STÄRKSTES Signal, niedrigere Quote = wahrscheinlicher), FIFA-Weltrangliste, Kaderqualität/Marktwert, aktuelle Form, Turnier-Auslosung/Gruppenstärke, historische Turnierleistung.
+- Wenn Outright-Quoten vorliegen, richte dich beim Weltmeister maßgeblich danach und nutze sie als Stärke-Prior für Gruppensieger/Halbfinale (Eigenwissen nur zur Feinjustierung).
 - Bei Fragen mit mehreren Antwort-Slots: nenne GENAU so viele verschiedene Teams wie Slots, stärkste zuerst.
 - Wähle NUR aus den vorgegebenen Optionen, exakt in der Schreibweise der Option.
 
@@ -212,7 +213,7 @@ Antworte NUR mit validem JSON-Array:
 Pro Frage so viele Antworten wie Slots. Keine Erklärungen."""
 
 
-def build_bonus_prompt(questions: list) -> str:
+def build_bonus_prompt(questions: list, outrights_block: str = "") -> str:
     lines = ["Beantworte diese Bonusfragen (wähle nur aus den Optionen):\n"]
     for q in questions:
         n = len(q.fields)
@@ -221,6 +222,8 @@ def build_bonus_prompt(questions: list) -> str:
         opts = ", ".join(labels) if len(labels) <= 12 else f"{', '.join(labels[:12])} … (alle Turnier-Teams)"
         slots = f" — nenne {n} Teams" if n > 1 else ""
         lines.append(f'[qid {q.qid}] {q.text}{slots}\n   Optionen: {opts}')
+    if outrights_block:
+        lines.append(outrights_block)
     return "\n".join(lines)
 
 
@@ -267,8 +270,14 @@ async def predict_bonus(questions: list) -> dict[str, str]:
     Returns {select_field_name: option_value}."""
     if not questions:
         return {}
+    outrights_block = ""
     try:
-        raw = await _call_llm(_BONUS_SYSTEM, build_bonus_prompt(questions))
+        from app.services.kicktipp_odds import fetch_outrights, format_outrights_block
+        outrights_block = format_outrights_block(await fetch_outrights())
+    except Exception as exc:
+        logger.debug("kicktipp: outright odds skipped: %s", exc)
+    try:
+        raw = await _call_llm(_BONUS_SYSTEM, build_bonus_prompt(questions, outrights_block))
     except Exception as exc:
         logger.warning("kicktipp: bonus LLM failed: %s", exc)
         return {}

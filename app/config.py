@@ -133,6 +133,9 @@ KICKTIPP_PREDICT_MODEL: str = os.getenv("KICKTIPP_PREDICT_MODEL", "anthropic/cla
 # The Odds API (the-odds-api.com) — free tier, 500 req/month. Empty = disabled.
 ODDS_API_KEY: str = os.getenv("ODDS_API_KEY", "")
 ODDS_API_SPORT: str = os.getenv("ODDS_API_SPORT", "soccer_fifa_world_cup")
+# Outright tournament-winner market for grounding the bonus questions.
+# Empty → derived as ODDS_API_SPORT + "_winner".
+ODDS_API_WINNER_SPORT: str = os.getenv("ODDS_API_WINNER_SPORT", "")
 # Only bet on matches kicking off within this many hours (skip far-future ones)
 KICKTIPP_LOOKAHEAD_HOURS: int = int(os.getenv("KICKTIPP_LOOKAHEAD_HOURS", "72"))
 # How often the auto-tip job runs

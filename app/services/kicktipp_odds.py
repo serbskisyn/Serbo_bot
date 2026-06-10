@@ -16,7 +16,7 @@ import logging
 
 import httpx
 
-from app.config import ODDS_API_KEY, ODDS_API_SPORT
+from app.config import ODDS_API_KEY, ODDS_API_SPORT, ODDS_API_WINNER_SPORT
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +81,56 @@ async def fetch_odds() -> list[dict]:
             out.append({"home": ev["home_team"], "away": ev["away_team"], "odds": odds})
     logger.info("odds_api: %d Spiele mit Quoten geladen (sport=%s)", len(out), ODDS_API_SPORT)
     return out
+
+
+async def fetch_outrights() -> list[tuple[str, float]]:
+    """Return tournament-winner outright odds as [(team, decimal_odds), …],
+    favourites first, averaged across bookmakers. [] when disabled/on error."""
+    if not ODDS_API_KEY:
+        return []
+    sport = ODDS_API_WINNER_SPORT or f"{ODDS_API_SPORT}_winner"
+    params = {
+        "apiKey": ODDS_API_KEY,
+        "regions": "eu",
+        "markets": "outrights",
+        "oddsFormat": "decimal",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            r = await client.get(_URL.format(sport=sport), params=params)
+            r.raise_for_status()
+            events = r.json()
+    except Exception as exc:
+        logger.warning("odds_api: outrights fetch failed: %s", exc)
+        return []
+
+    sums: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    for ev in events:
+        for bm in ev.get("bookmakers", []):
+            for market in bm.get("markets", []):
+                if market.get("key") != "outrights":
+                    continue
+                for o in market.get("outcomes", []):
+                    name, price = o.get("name"), o.get("price")
+                    if name and price:
+                        sums[name] = sums.get(name, 0.0) + price
+                        counts[name] = counts.get(name, 0) + 1
+    out = [(name, round(sums[name] / counts[name], 1)) for name in sums]
+    out.sort(key=lambda t: t[1])
+    logger.info("odds_api: %d Outright-Quoten geladen (sport=%s)", len(out), sport)
+    return out
+
+
+def format_outrights_block(outrights: list[tuple[str, float]], top_n: int = 24) -> str:
+    """Render outright winner odds as a strength-prior block for the bonus LLM."""
+    if not outrights:
+        return ""
+    lines = ["\nOutright-Quoten Turniersieger (Markt, NIEDRIGER = wahrscheinlicher) — "
+             "maßgeblich für die Weltmeister-Frage und als Staerke-Prior fuer Gruppensieger/Halbfinale:"]
+    for name, odd in outrights[:top_n]:
+        lines.append(f"- {name}: {odd}")
+    return "\n".join(lines)
 
 
 def format_odds_block(odds_list: list[dict]) -> str:

@@ -233,8 +233,6 @@ async def run_pipeline(max_leads: int | None = None) -> LeadState:
             "contact_title": "",
             "linkedin_url": "",
             "company_website": "",
-            "northdata_summary": "",
-            "news_summary": "",
             # Neue Pipeline-Felder
             "discovered_brands": [],
             "is_holding": False,
@@ -263,12 +261,7 @@ async def run_pipeline(max_leads: int | None = None) -> LeadState:
             "linkedin_url": "",
             "contact_authority": "other",
             "contact_role_match": False,
-            # Legacy
             "pepper_summary": "",
-            "business_fit_shoop": "",
-            "business_fit_igraal": "",
-            "business_fit_mydealz": "",
-            "business_fit_gutscheine": "",
             "score_total": 0,
             "classification": "",
             "recommended_action": "",

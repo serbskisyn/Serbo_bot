@@ -20,11 +20,9 @@ class LeadState(TypedDict, total=False):
     contact_authority: str         # decision_maker | influencer | other
     contact_role_match: bool       # True if role is marketing/sales/eCom-relevant
     company_website: str
-    northdata_summary: str
-    news_summary: str
 
-    # Intermediate-Felder aus enrich_company, verwendet von qualify_business_fit_node
-    # UND write_results (Größe-Spalte). LangGraph strippt sonst undeklarierte Keys.
+    # Zwischenfelder, verwendet von qualify_business_fit_node UND write_results
+    # (Größe-Spalte). LangGraph strippt sonst undeklarierte Keys.
     _company_description: str
     _industry: str
     _employee_count_estimate: str
@@ -74,10 +72,6 @@ class LeadState(TypedDict, total=False):
     priority_tier: str             # LOW / MEDIUM / HIGH / STRATEGIC
 
     # ── Qualification ─────────────────────────────────────────────────────────
-    business_fit_shoop: str        # Legacy (jetzt leer)
-    business_fit_igraal: str
-    business_fit_mydealz: str
-    business_fit_gutscheine: str
     score_total: int               # 0-100 (neuer deterministischer Score)
     classification: str            # HOT / WARM / COLD
     recommended_action: str

@@ -96,11 +96,16 @@ def _ensure_qualified_tab(sh: gspread.Spreadsheet) -> gspread.Worksheet:
         logger.info("Header-Zeile geschrieben in '%s'", QUALIFIED_TAB_NAME)
     else:
         ws = sh.worksheet(QUALIFIED_TAB_NAME)
-        # Ensure header is present; if the sheet is empty, write it
+        # Keep the header in sync with the canonical columns. If the schema
+        # changed (e.g. dead columns removed), rewrite row 1 and clear any stale
+        # trailing header cells so new rows align under the right headers.
         existing = ws.row_values(1)
-        if not existing or existing[0] != "lead_key":
-            ws.update("A1", [QUALIFIED_COLUMNS])
-            logger.info("Header-Zeile nachgetragen in '%s'", QUALIFIED_TAB_NAME)
+        if existing != QUALIFIED_COLUMNS:
+            header = list(QUALIFIED_COLUMNS)
+            if len(existing) > len(header):
+                header += [""] * (len(existing) - len(header))
+            ws.update("A1", [header])
+            logger.info("Header-Zeile in '%s' an Spalten-Schema angepasst", QUALIFIED_TAB_NAME)
     return ws
 
 

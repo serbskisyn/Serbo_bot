@@ -9,7 +9,6 @@ und debuggbar. Der LLM-Call macht nur noch zwei kompakte Aufgaben:
 Reads:  state[*] (alle Pipeline-Felder)
 Writes: state["score_total"], state["classification"], state["recommended_action"],
         state["contact_seniority"], state["score_breakdown"], state["score_override"]
-        sowie Legacy business_fit_* (leer).
 """
 from __future__ import annotations
 
@@ -157,9 +156,4 @@ async def qualify_business_fit_node(state: LeadState) -> LeadState:
         # Score-Audit für Sheet/Logs
         "score_breakdown":     breakdown_str,
         "score_override":      score_result.get("override_reason", ""),
-        # Legacy-Felder leer halten (QualifiedLeadRow erwartet sie)
-        "business_fit_shoop":      "",
-        "business_fit_igraal":     "",
-        "business_fit_mydealz":    "",
-        "business_fit_gutscheine": "",
     }

@@ -52,18 +52,12 @@ class QualifiedLeadRow(BaseModel):
     contact_title: str = ""
     linkedin_url: str = ""
     company_website: str = ""
-    northdata_summary: str = ""
-    news_summary: str = ""
 
     # Pre-qualification (raw-data signal, set before enrichment)
     pre_qualify_label: str = ""    # HIGH / LOW / SKIP
     pre_qualify_reason: str = ""   # 1-sentence explanation
 
     # Qualification
-    business_fit_shoop: str = ""
-    business_fit_igraal: str = ""
-    business_fit_mydealz: str = ""
-    business_fit_gutscheine: str = ""
     score_total: int = 0
     classification: Literal["HOT", "WARM", "COLD", "FILTERED", "AGENCY", ""] = ""
     recommended_action: str = ""
@@ -76,9 +70,6 @@ class QualifiedLeadRow(BaseModel):
         "lead_key", "processed_at", "vorname", "nachname", "firma", "email",
         "quelle", "pre_qualify_label", "pre_qualify_reason",
         "contact_title", "linkedin_url", "company_website",
-        "northdata_summary", "news_summary",
-        "business_fit_shoop", "business_fit_igraal",
-        "business_fit_mydealz", "business_fit_gutscheine",
         "score_total", "classification", "recommended_action", "telegram_notified",
     ]
 

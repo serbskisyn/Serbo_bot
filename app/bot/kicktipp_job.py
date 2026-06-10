@@ -32,19 +32,23 @@ logger = logging.getLogger(__name__)
 
 
 def _configured() -> bool:
-    return bool(KICKTIPP_EMAIL and KICKTIPP_PASSWORD and KICKTIPP_COMMUNITY)
+    # Community is optional — if unset we tip every round the user is in.
+    return bool(KICKTIPP_EMAIL and KICKTIPP_PASSWORD)
 
 
-def _within_lookahead(m: Match) -> bool:
-    if m.kickoff is None:
-        return True  # no date parsed → don't exclude
-    return m.kickoff <= datetime.now() + timedelta(hours=KICKTIPP_LOOKAHEAD_HOURS)
+_MAX_MATCHDAYS = 25   # safety cap when scanning matchdays forward
 
 
 def _eligible(matches: list[Match], override: bool) -> list[Match]:
+    """Tippable now: known teams, kickoff in [now, now+lookahead], and
+    (untipped or override)."""
+    now = datetime.now()
+    horizon = now + timedelta(hours=KICKTIPP_LOOKAHEAD_HOURS)
     out = []
     for m in matches:
-        if not _within_lookahead(m):
+        if "unbekannt" in f"{m.home}{m.away}".lower():
+            continue  # knockout pairing not decided yet
+        if m.kickoff is not None and not (now <= m.kickoff <= horizon):
             continue
         if m.has_bet and not override:
             continue
@@ -52,40 +56,67 @@ def _eligible(matches: list[Match], override: bool) -> list[Match]:
     return out
 
 
-async def run_tips(*, dry_run: bool, override: bool | None = None) -> str:
-    """Core flow shared by the scheduled job and manual triggers.
-    Returns a human-readable report."""
-    if not _configured():
-        return "⚠️ Kicktipp nicht konfiguriert — KICKTIPP_EMAIL/PASSWORD/COMMUNITY in .env setzen."
-    override = KICKTIPP_OVERRIDE if override is None else override
+async def _tip_community(client: KicktippClient, community: str, override: bool,
+                         dry_run: bool) -> tuple[list[str], int]:
+    """Tip eligible matches across ALL upcoming matchdays of one community
+    (not just the default view). Returns (report_lines, written_count)."""
+    now = datetime.now()
+    horizon = now + timedelta(hours=KICKTIPP_LOOKAHEAD_HOURS)
+    lines: list[str] = []
+    written = 0
+    for idx in range(1, _MAX_MATCHDAYS + 1):
+        try:
+            matches = await client.get_open_matches(community, matchday=idx)
+        except Exception as exc:
+            logger.debug("kicktipp: %s ST%d fetch failed: %s", community, idx, exc)
+            continue
+        if not matches:
+            continue
+        known = [m for m in matches if "unbekannt" not in f"{m.home}{m.away}".lower()]
+        # Matchdays are chronological — once a whole matchday starts beyond the
+        # lookahead horizon, every later one does too, so stop scanning.
+        kickoffs = [m.kickoff for m in known if m.kickoff]
+        if kickoffs and min(kickoffs) > horizon:
+            break
+        eligible = _eligible(matches, override)
+        if not eligible:
+            continue
+        preds = await predict_matchday(eligible)
+        if not preds:
+            continue
+        if not dry_run:
+            written += await client.submit_tips(community, preds, matchday=idx)
+        by = {m.field_home: m for m in eligible}
+        for fh, (h, a) in preds.items():
+            m = by.get(fh)
+            if m:
+                lines.append(f"• [{community} ST{idx}] {m.home} {h}:{a} {m.away}")
+    return lines, written
 
+
+async def run_tips(*, dry_run: bool, override: bool | None = None) -> str:
+    """Tip every eligible match across all matchdays in lookahead, for every
+    round the user is in (or just KICKTIPP_COMMUNITY if that's set)."""
+    if not _configured():
+        return "⚠️ Kicktipp nicht konfiguriert — KICKTIPP_EMAIL/PASSWORD in .env setzen."
+    override = KICKTIPP_OVERRIDE if override is None else override
     try:
         async with KicktippClient(KICKTIPP_EMAIL, KICKTIPP_PASSWORD) as client:
             await client.login()
-            matches = await client.get_open_matches(KICKTIPP_COMMUNITY)
-            eligible = _eligible(matches, override)
-            if not eligible:
-                return (f"⚽ Kicktipp ({KICKTIPP_COMMUNITY}): keine offenen Spiele "
-                        f"in den nächsten {KICKTIPP_LOOKAHEAD_HOURS}h zu tippen.")
-
-            preds = await predict_matchday(eligible)
-            if not preds:
-                return "⚽ Keine Vorhersage erhalten (LLM-Problem) — nichts getippt."
-
-            by_field = {m.field_home: m for m in eligible}
-            lines = []
-            for field_home, (h, a) in preds.items():
-                m = by_field.get(field_home)
-                if m:
-                    lines.append(f"• {m.home} {h}:{a} {m.away}")
-
+            communities = [KICKTIPP_COMMUNITY] if KICKTIPP_COMMUNITY else await client.get_communities()
+            if not communities:
+                return "⚽ Keine Tipprunde gefunden."
+            all_lines: list[str] = []
+            grand_written = 0
+            for community in communities:
+                lines, written = await _tip_community(client, community, override, dry_run)
+                all_lines += lines
+                grand_written += written
+            if not all_lines:
+                return f"⚽ Kicktipp: keine offenen Spiele in den nächsten {KICKTIPP_LOOKAHEAD_HOURS}h."
             if dry_run:
-                header = f"🧪 *Kicktipp Dry-Run ({KICKTIPP_COMMUNITY})* — {len(preds)} Tipps (nicht abgesendet):"
-                return header + "\n" + "\n".join(lines)
-
-            written = await client.submit_tips(KICKTIPP_COMMUNITY, preds)
-            header = f"✅ *Kicktipp ({KICKTIPP_COMMUNITY})* — {written} Tipps abgegeben:"
-            return header + "\n" + "\n".join(lines)
+                return f"🧪 *Kicktipp Dry-Run* — {len(all_lines)} Tipps (nicht abgesendet):\n" + "\n".join(all_lines)
+            return f"✅ *Kicktipp* — {grand_written} Tipps abgegeben:\n" + "\n".join(all_lines)
     except KicktippError as exc:
         return f"❌ Kicktipp: {exc}"
     except Exception as exc:
@@ -143,25 +174,43 @@ async def kicktipp_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text(report, parse_mode="Markdown")
         return
 
-    # default: status
+    # default: status — light scan (no predictions), counts eligible per round
     if not _configured():
         await update.message.reply_text(
             "⚽ *Kicktipp* — nicht konfiguriert.\n"
             "In `.env` setzen: `KICKTIPP_EMAIL`, `KICKTIPP_PASSWORD`, "
-            "`KICKTIPP_COMMUNITY` (Gruppen-Slug aus der URL), `KICKTIPP_ENABLED=true`.",
+            "`KICKTIPP_ENABLED=true` (optional `KICKTIPP_COMMUNITY`).",
             parse_mode="Markdown",
         )
         return
     try:
         async with KicktippClient(KICKTIPP_EMAIL, KICKTIPP_PASSWORD) as client:
             await client.login()
-            matches = await client.get_open_matches(KICKTIPP_COMMUNITY)
-            eligible = _eligible(matches, KICKTIPP_OVERRIDE)
+            communities = [KICKTIPP_COMMUNITY] if KICKTIPP_COMMUNITY else await client.get_communities()
+            now = datetime.now()
+            horizon = now + timedelta(hours=KICKTIPP_LOOKAHEAD_HOURS)
+            per_round = []
+            for community in communities:
+                eligible_total = 0
+                for idx in range(1, _MAX_MATCHDAYS + 1):
+                    try:
+                        ms = await client.get_open_matches(community, matchday=idx)
+                    except Exception:
+                        continue
+                    if not ms:
+                        continue
+                    known = [m for m in ms if "unbekannt" not in f"{m.home}{m.away}".lower()]
+                    kos = [m.kickoff for m in known if m.kickoff]
+                    if kos and min(kos) > horizon:
+                        break
+                    eligible_total += len(_eligible(ms, KICKTIPP_OVERRIDE))
+                per_round.append(f"• {community}: {eligible_total} tippbar (≤{KICKTIPP_LOOKAHEAD_HOURS}h)")
+        rounds_txt = "\n".join(per_round) or "keine Runde gefunden"
         await update.message.reply_text(
-            f"⚽ *Kicktipp ({KICKTIPP_COMMUNITY})*\n"
-            f"Offene Spiele gesamt: {len(matches)}\n"
-            f"Tippbar (≤{KICKTIPP_LOOKAHEAD_HOURS}h, offen): {len(eligible)}\n"
-            f"Auto-Tipp: alle {KICKTIPP_CHECK_INTERVAL_MINUTES} Min\n\n"
+            f"⚽ *Kicktipp — Opus Maximus*\n"
+            f"{rounds_txt}\n"
+            f"Override: {'an' if KICKTIPP_OVERRIDE else 'aus'} · "
+            f"Auto-Tipp alle {KICKTIPP_CHECK_INTERVAL_MINUTES} Min\n\n"
             f"`/kicktipp dry` — Vorschau · `/kicktipp run` — jetzt tippen",
             parse_mode="Markdown",
         )

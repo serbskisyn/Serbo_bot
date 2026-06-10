@@ -107,6 +107,13 @@ async def _fill_bonus(client: KicktippClient, community: str,
             break
     if not questions:
         return [], 0
+    # Bonus questions lock once their Tipptermin (first matchday) passes — they
+    # stay frozen until the final. Skip entirely once closed: no point spending
+    # an Opus call or attempting a submit the site will reject.
+    now = datetime.now()
+    questions = [q for q in questions if q.deadline is None or q.deadline > now]
+    if not questions:
+        return [], 0
     answers = await predict_bonus(questions)
     if not answers:
         return [], 0

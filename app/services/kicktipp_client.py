@@ -50,6 +50,7 @@ class BonusQuestion:
     text: str                          # the question, e.g. "Wer wird Weltmeister?"
     fields: list[str]                  # select field name(s) — >1 = name-N-teams
     options: list[tuple[str, str]]     # (label, option_value) pairs to choose from
+    deadline: datetime | None = None   # Tipptermin — locked once passed (until final)
 
     @property
     def multi(self) -> bool:
@@ -172,16 +173,20 @@ def parse_bonus_questions(html: str) -> list[BonusQuestion]:
         selects = tr.find_all("select")
         if not selects:
             continue
-        # question text = the row cell that is neither time nor the tip cell
+        # question text = the row cell that is neither time nor the tip cell;
+        # deadline = the time cell (Tipptermin) — the bonus locks once it passes.
         qtext = ""
+        deadline = None
         for td in tr.find_all("td"):
             cls = " ".join(td.get("class") or [])
-            if "time" in cls or "tippabgabe" in cls:
+            if "time" in cls:
+                deadline = _parse_kickoff(td.get_text(strip=True))
+                continue
+            if "tippabgabe" in cls:
                 continue
             t = td.get_text(" ", strip=True)
-            if t:
+            if t and not qtext:
                 qtext = t
-                break
         fields = [s.get("name") for s in selects if s.get("name")]
         if not fields:
             continue
@@ -193,7 +198,8 @@ def parse_bonus_questions(html: str) -> list[BonusQuestion]:
             value = opt.get("value") or ""
             if label and value and "nicht getippt" not in label.lower():
                 options.append((label, value))
-        out.append(BonusQuestion(qid=qid, text=qtext, fields=fields, options=options))
+        out.append(BonusQuestion(qid=qid, text=qtext, fields=fields,
+                                 options=options, deadline=deadline))
     return out
 
 

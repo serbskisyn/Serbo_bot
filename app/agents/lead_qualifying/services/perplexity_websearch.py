@@ -26,6 +26,52 @@ PERPLEXITY_MODEL = os.getenv("PERPLEXITY_MODEL", "perplexity/sonar-pro")
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
+def _loads_json(raw: str) -> dict | None:
+    """Tolerant JSON extraction from a model reply — handles markdown fences,
+    surrounding prose/citations (Gemini grounding), and trailing commas."""
+    if not raw:
+        return None
+    text = raw.strip()
+    # strip ```json ... ``` fences
+    fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
+    if fence:
+        text = fence.group(1).strip()
+    # outermost balanced { } (string-aware)
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_str = esc = False
+    end = -1
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    candidate = text[start:end] if end > start else text[start:]
+    for attempt in (candidate, re.sub(r",(\s*[}\]])", r"\1", candidate)):
+        try:
+            obj = json.loads(attempt)
+            return obj if isinstance(obj, dict) else None
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
 async def _call_perplexity(
     prompt: str,
     system_prompt: str = "",
@@ -106,9 +152,8 @@ role_match = false for IT/Tech/Operations/HR/Finance/Legal/Customer Service unle
 
     try:
         raw = await _call_perplexity(prompt, system_prompt=system)
-        match = _JSON_RE.search(raw)
-        if match:
-            data = json.loads(match.group())
+        data = _loads_json(raw)
+        if data is not None:
             logger.info(
                 "perplexity_websearch.enrich_contact: '%s' → title='%s' auth=%s role_match=%s",
                 name, data.get("contact_title"), data.get("authority"), data.get("role_match"),
@@ -156,9 +201,8 @@ Antworte AUSSCHLIESSLICH mit validem JSON, kein Text davor/danach, keine Markdow
 
     try:
         raw = await _call_perplexity(prompt, system_prompt=system)
-        match = _JSON_RE.search(raw)
-        if match:
-            data = json.loads(match.group())
+        data = _loads_json(raw)
+        if data is not None:
             logger.info(
                 "perplexity_websearch.enrich_company: '%s' → size='%s' confidence=%s",
                 firma, data.get("employee_count_estimate"), data.get("confidence"),
@@ -231,9 +275,8 @@ Reply ONLY with valid JSON, no surrounding text, no markdown fences:
 
     try:
         raw = await _call_perplexity(prompt, system_prompt=system, timeout=60.0, max_tokens=2048)
-        match = _JSON_RE.search(raw)
-        if match:
-            data = json.loads(match.group())
+        data = _loads_json(raw)
+        if data is not None:
             brands = data.get("brands") or []
             # Filtern: keine leeren Namen
             brands = [b for b in brands if isinstance(b, dict) and b.get("name", "").strip()]
@@ -322,9 +365,8 @@ Reply ONLY with valid JSON, no surrounding text:
 
     try:
         raw = await _call_perplexity(prompt, system_prompt=system, timeout=60.0, max_tokens=2048)
-        match = _JSON_RE.search(raw)
-        if match:
-            data = json.loads(match.group())
+        data = _loads_json(raw)
+        if data is not None:
             logger.info(
                 "perplexity.validate_company_sales: '%s' → revenue=%s employees=%s confidence=%s",
                 firma, data.get("revenue_estimate"), data.get("employee_count"), data.get("confidence"),
@@ -421,9 +463,8 @@ Reply ONLY with valid JSON, no surrounding text:
 
     try:
         raw = await _call_perplexity(prompt, system_prompt=system, timeout=60.0, max_tokens=1024)
-        match = _JSON_RE.search(raw)
-        if match:
-            data = json.loads(match.group())
+        data = _loads_json(raw)
+        if data is not None:
             logger.info(
                 "perplexity.enrich_commercial_intelligence: '%s' → perf_mktg=%s affiliate=%s confidence=%s",
                 firma, data.get("perf_mktg_sophistication"), data.get("affiliate_likelihood"),

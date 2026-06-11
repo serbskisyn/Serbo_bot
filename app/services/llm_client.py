@@ -50,6 +50,11 @@ async def chat(
     }
     async with httpx.AsyncClient(timeout=timeout) as client:
         r = await client.post(_url(), json=payload, headers=headers)
+        # Some models (e.g. Claude Opus 4.8 on Vertex) reject the temperature
+        # param ("temperature is deprecated for this model"). Retry without it.
+        if r.status_code == 400 and "temperature" in r.text.lower():
+            payload.pop("temperature", None)
+            r = await client.post(_url(), json=payload, headers=headers)
         r.raise_for_status()
         data = r.json()
     return (data["choices"][0]["message"].get("content") or "")

@@ -34,6 +34,7 @@ from app.bot.evening_job import register_evening_job, reflect_handler
 from app.bot.sweep_job import register_sweep_job
 from app.bot.curator_job import register_curator_job, curator_handler
 from app.bot.kicktipp_job import register_kicktipp_job, kicktipp_handler
+from app.bot.litellm_key_job import register_litellm_key_job
 
 _BERLIN = ZoneInfo("Europe/Berlin")
 
@@ -83,6 +84,7 @@ async def _post_init(application) -> None:
     register_sweep_job(application)
     register_curator_job(application)
     register_kicktipp_job(application)
+    register_litellm_key_job(application)
 
 
 def main():

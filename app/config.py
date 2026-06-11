@@ -7,6 +7,14 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
 
+# ── LiteLLM (OpenAI-kompatibler Proxy, löst OpenRouter ab) ────────────────────
+LITELLM_API_KEY  = os.getenv("LITELLM_API_KEY", "")
+LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "")
+# Der LiteLLM-Key muss alle N Tage erneuert werden → Reminder-Job
+LITELLM_KEY_RENEW_DAYS: int = int(os.getenv("LITELLM_KEY_RENEW_DAYS", "7"))
+LITELLM_KEY_REMINDER_HOUR: int = int(os.getenv("LITELLM_KEY_REMINDER_HOUR", "9"))
+LITELLM_KEY_REMINDER_MINUTE: int = int(os.getenv("LITELLM_KEY_REMINDER_MINUTE", "0"))
+
 # ── Grok (xAI) für X.com Live-Search ──────────────────────────────────────────
 # Default: über OpenRouter (nutzt OPENROUTER_API_KEY). Wenn GROK_API_KEY gesetzt
 # ist, geht's direkt an api.x.ai — sicherer Fallback falls OpenRouter die

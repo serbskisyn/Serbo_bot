@@ -52,23 +52,13 @@ Maximal 3 pro Konversation."""
 
 
 async def _call_llm(user_text: str, assistant_response: str) -> str:
-    payload = {
-        "model": EXTRACTOR_MODEL,
-        "messages": [
-            {"role": "system", "content": _PROMPT},
-            {"role": "user", "content": f"USER: {user_text}\nASSISTANT: {assistant_response}"},
-        ],
-        "temperature": 0.0,
-        "max_tokens": 200,
-    }
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        r = await client.post(OPENROUTER_URL, json=payload, headers=headers)
-        r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"]
+    from app.services.llm_client import chat
+    from app.config import LLM_CHEAP_MODEL
+    return await chat(
+        [{"role": "system", "content": _PROMPT},
+         {"role": "user", "content": f"USER: {user_text}\nASSISTANT: {assistant_response}"}],
+        model=LLM_CHEAP_MODEL, temperature=0.0, max_tokens=200, timeout=10.0,
+    )
 
 
 def _extract_json(text: str) -> dict | None:

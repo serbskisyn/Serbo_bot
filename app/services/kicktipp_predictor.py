@@ -150,23 +150,11 @@ def parse_predictions(raw: str, n: int) -> dict[int, tuple[int, int]]:
 
 
 async def _call_llm(system: str, user: str, timeout: float = 40.0) -> str:
-    payload = {
-        "model": KICKTIPP_PREDICT_MODEL,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "temperature": 0.3,
-        "max_tokens": 1200,
-    }
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        r = await client.post(OPENROUTER_URL, json=payload, headers=headers)
-        r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"]
+    from app.services.llm_client import chat
+    return await chat(
+        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        model=KICKTIPP_PREDICT_MODEL, temperature=0.3, max_tokens=1200, timeout=timeout,
+    )
 
 
 async def predict_matchday(matches: list[Match]) -> dict[str, tuple[int, int]]:

@@ -134,25 +134,15 @@ def _build_prompt(symbol: str, df: pd.DataFrame, sentiment_block: str,
 
 async def _call_llm(prompt: str) -> dict:
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            r = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                         "Content-Type": "application/json"},
-                json={
-                    "model": OPENROUTER_MODEL,
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user",   "content": prompt},
-                    ],
-                    "max_tokens": 150,
-                    "temperature": 0.1,
-                },
-            )
-            r.raise_for_status()
-            import json
-            raw = r.json()["choices"][0]["message"]["content"].strip()
-            return json.loads(raw)
+        from app.services.llm_client import chat
+        from app.config import LLM_CHEAP_MODEL
+        raw = (await chat(
+            [{"role": "system", "content": SYSTEM_PROMPT},
+             {"role": "user", "content": prompt}],
+            model=LLM_CHEAP_MODEL, temperature=0.1, max_tokens=150, timeout=20.0,
+        )).strip()
+        import json
+        return json.loads(raw)
     except Exception as e:
         logger.warning("LLM call failed: %s", e)
         return {"signal": "hold", "confidence": 0.0, "reason": "LLM error"}

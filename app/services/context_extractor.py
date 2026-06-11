@@ -67,23 +67,12 @@ def _today() -> str:
 
 
 async def _call_llm(system: str, user: str, timeout: float = 12.0) -> str:
-    payload = {
-        "model": MODEL,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "temperature": 0.0,
-        "max_tokens": 500,
-    }
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        r = await client.post(OPENROUTER_URL, json=payload, headers=headers)
-        r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"]
+    from app.services.llm_client import chat
+    from app.config import LLM_CHEAP_MODEL
+    return await chat(
+        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        model=LLM_CHEAP_MODEL, temperature=0.0, max_tokens=500, timeout=timeout,
+    )
 
 
 def _parse_array(raw: str) -> list[dict]:

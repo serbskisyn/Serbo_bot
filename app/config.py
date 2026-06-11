@@ -10,6 +10,10 @@ OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
 # ── LiteLLM (OpenAI-kompatibler Proxy, löst OpenRouter ab) ────────────────────
 LITELLM_API_KEY  = os.getenv("LITELLM_API_KEY", "")
 LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "")
+# Model aliases on the LiteLLM proxy
+LLM_CHEAP_MODEL    = os.getenv("LLM_CHEAP_MODEL", "gemini-2.5-flash")
+LLM_STRONG_MODEL   = os.getenv("LLM_STRONG_MODEL", "vertex_ai/claude-opus-4-8")
+LLM_GROUNDED_MODEL = os.getenv("LLM_GROUNDED_MODEL", "gemini-2.5-flash")
 # Der LiteLLM-Key muss alle N Tage erneuert werden → Reminder-Job
 LITELLM_KEY_RENEW_DAYS: int = int(os.getenv("LITELLM_KEY_RENEW_DAYS", "7"))
 LITELLM_KEY_REMINDER_HOUR: int = int(os.getenv("LITELLM_KEY_REMINDER_HOUR", "9"))
@@ -137,7 +141,7 @@ KICKTIPP_PASSWORD: str = os.getenv("KICKTIPP_PASSWORD", "")
 KICKTIPP_COMMUNITY: str = os.getenv("KICKTIPP_COMMUNITY", "")   # group slug in the URL
 KICKTIPP_NEWS_ENABLED: bool = os.getenv("KICKTIPP_NEWS_ENABLED", "true").lower() == "true"
 # Prediction model — Claude Opus via OpenRouter for the strongest football reasoning
-KICKTIPP_PREDICT_MODEL: str = os.getenv("KICKTIPP_PREDICT_MODEL", "anthropic/claude-opus-4.8")
+KICKTIPP_PREDICT_MODEL: str = os.getenv("KICKTIPP_PREDICT_MODEL", "vertex_ai/claude-opus-4-8")
 # The Odds API (the-odds-api.com) — free tier, 500 req/month. Empty = disabled.
 ODDS_API_KEY: str = os.getenv("ODDS_API_KEY", "")
 ODDS_API_SPORT: str = os.getenv("ODDS_API_SPORT", "soccer_fifa_world_cup")
@@ -193,7 +197,7 @@ KRAKEN_FEE_MAKER:    float = float(os.getenv("KRAKEN_FEE_MAKER", "0.0008"))
 # ── Lead Qualifying Agent ─────────────────────────────────────────────────────
 SERP_API_KEY: str = os.getenv("SERP_API_KEY", "")
 # Model for the sales-action / recommendation text (Opus for sharper output)
-LEAD_ACTION_MODEL: str = os.getenv("LEAD_ACTION_MODEL", "anthropic/claude-opus-4.8")
+LEAD_ACTION_MODEL: str = os.getenv("LEAD_ACTION_MODEL", "vertex_ai/claude-opus-4-8")
 NORTHDATA_API_KEY: str = os.getenv("NORTHDATA_API_KEY", "")
 LEAD_QUALIFYING_HOUR: int = int(os.getenv("LEAD_QUALIFYING_HOUR", "8"))
 LEAD_QUALIFYING_MINUTE: int = int(os.getenv("LEAD_QUALIFYING_MINUTE", "0"))

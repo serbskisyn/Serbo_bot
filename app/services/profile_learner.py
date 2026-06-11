@@ -122,24 +122,13 @@ Antworte NUR mit validem JSON:
 
 
 async def _call_llm(system: str, user: str, timeout: float = 12.0) -> str:
-    """Single OpenRouter call returning the raw assistant content."""
-    payload = {
-        "model": LEARNER_MODEL,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "temperature": 0.0,
-        "max_tokens": 400,
-    }
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        r = await client.post(OPENROUTER_URL, json=payload, headers=headers)
-        r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"]
+    """Single LiteLLM call returning the raw assistant content."""
+    from app.services.llm_client import chat
+    from app.config import LLM_CHEAP_MODEL
+    return await chat(
+        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        model=LLM_CHEAP_MODEL, temperature=0.0, max_tokens=400, timeout=timeout,
+    )
 
 
 def _extract_json(text: str) -> dict | None:

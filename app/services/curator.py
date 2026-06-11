@@ -109,23 +109,12 @@ def _save_state(data: dict) -> None:
 
 
 async def _call_llm(system: str, user: str, timeout: float = 30.0) -> str:
-    payload = {
-        "model": CURATOR_MODEL,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "temperature": 0.0,
-        "max_tokens": 900,
-    }
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        r = await client.post(OPENROUTER_URL, json=payload, headers=headers)
-        r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"]
+    from app.services.llm_client import chat
+    from app.config import LLM_CHEAP_MODEL
+    return await chat(
+        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        model=LLM_CHEAP_MODEL, temperature=0.0, max_tokens=900, timeout=timeout,
+    )
 
 
 def _extract_json(text: str) -> dict | None:

@@ -27,27 +27,19 @@ async def ask_llm(
     system_prompt: str = "Du bist ein hilfreicher Assistent. Antworte auf Deutsch.",
     model: str | None = None,
 ) -> str:
+    from app.services.llm_client import chat as _llm_chat
+    from app.config import LLM_CHEAP_MODEL
+
     messages = [{"role": "system", "content": system_prompt}]
     if history:
         messages.extend(history)
     messages.append({"role": "user", "content": user_text})
 
-    payload = {
-        "model": model or OPENROUTER_MODEL,
-        "messages": messages,
-        "temperature": 0.7,
-        "max_tokens": 1024,
-    }
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-    }
-
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(OPENROUTER_URL, json=payload, headers=headers)
-            response.raise_for_status()
-            return response.json()["choices"][0]["message"]["content"]
+        return await _llm_chat(
+            messages, model=model or LLM_CHEAP_MODEL,
+            temperature=0.7, max_tokens=1024, timeout=60.0,
+        )
 
     except httpx.TimeoutException:
         logger.error("OpenRouter Timeout")

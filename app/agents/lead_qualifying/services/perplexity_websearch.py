@@ -29,37 +29,23 @@ _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 async def _call_perplexity(
     prompt: str,
     system_prompt: str = "",
-    timeout: float = 45.0,
+    timeout: float = 60.0,
     max_tokens: int = 1024,
 ) -> str:
-    """Ein OpenRouter-Call gegen Perplexity Sonar. Suche ist eingebaut, keine extra Tools.
+    """Web-research call via LiteLLM + Gemini Google-Search grounding.
 
-    Wirft auf HTTP/Netzwerk-Fehlern, damit die Caller sauber abfangen können.
+    (Name kept for the callers; provider is now LiteLLM/Gemini grounding instead
+    of Perplexity-via-OpenRouter — Anthropic web_search via Vertex is blocked.)
+    Raises on HTTP/network errors so callers keep their try/except.
     """
+    from app.services.llm_client import chat_grounded
+
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
 
-    payload = {
-        "model": PERPLEXITY_MODEL,
-        "messages": messages,
-        "temperature": 0.2,
-        "max_tokens": max_tokens,
-    }
-
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/serbskisyn/Serbo_bot",
-    }
-
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(OPENROUTER_URL, json=payload, headers=headers)
-        resp.raise_for_status()
-
-    data = resp.json()
-    content = data["choices"][0]["message"]["content"]
+    content = await chat_grounded(messages, max_tokens=max_tokens, timeout=timeout)
     if isinstance(content, list):
         content = " ".join(
             part.get("text", "") for part in content if isinstance(part, dict)

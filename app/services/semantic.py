@@ -36,18 +36,20 @@ SEMANTIC_DB = Path(__file__).parent.parent / "data" / "semantic.db"
 
 COLLECTIONS = ("todos", "people", "decisions", "notes", "entities", "intents")
 
-# Distance thresholds — calibrated against actual OpenAI text-embedding-3-small
-# vectors using real production data (Granola people + todo paraphrases).
-# Reference distances observed:
-#   "Ollie"  ↔ "Oliver"                  = 0.74  (synonym → merge)
-#   "Kim"    ↔ "Kevin"                   = 1.04  (distinct → keep)
-#   "Send tracking-link URLs" ↔
-#     "Send tracking links for testing"  = 0.71  (paraphrase → merge)
-#   "Brot kaufen" ↔ closest todo         = 1.25  (unrelated → keep)
-DIST_STRICT_DEDUP = 0.85   # todos / general dedup
-DIST_PEOPLE_DEDUP = 0.95   # names tolerate slightly more variance
-DIST_FUZZY_MATCH  = 1.10   # related but not duplicate
-DIST_LOOSE_RECALL = 1.30   # free-text recall search
+# Distance thresholds — calibrated against gemini-embedding-2 (3072-dim) via the
+# LiteLLM proxy. Gemini's L2 distances are compressed into a narrower band than
+# OpenAI's, so these are tighter than the old OpenAI values. Reference distances:
+#   "Brot kaufen" ↔ "Brot kaufen gehen"          = 0.56  (paraphrase → merge)
+#   "Send tracking links" ↔ "...URLs for testing"= 0.49  (paraphrase → merge)
+#   "Oliver" ↔ "Ollie"                           = 0.76  (synonym → merge)
+#   "Kimberly" ↔ "Kim"                           = 0.66  (synonym → merge)
+#   "Brot kaufen" ↔ "Milch kaufen"               = 0.73  (distinct task → keep)
+#   "Kim" ↔ "Kevin"                              = 0.83  (distinct → keep)
+#   "Oliver" ↔ "Martin"                          = 0.96  (distinct → keep)
+DIST_STRICT_DEDUP = 0.65   # todos / general dedup (merge ≤0.56, keep ≥0.73)
+DIST_PEOPLE_DEDUP = 0.80   # names (merge ≤0.76, keep ≥0.83)
+DIST_FUZZY_MATCH  = 0.70   # completion/drop match — related same task, not distinct
+DIST_LOOSE_RECALL = 0.95   # free-text recall search (ranked top-k)
 
 
 def _conn() -> sqlite3.Connection:

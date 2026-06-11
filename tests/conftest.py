@@ -2,6 +2,14 @@ import pytest
 from app.security import rate_limiter
 from app.bot import memory as mem_module
 from app.bot import profile as profile_module
+from app.services import semantic as semantic_module
+
+
+@pytest.fixture(autouse=True)
+def isolated_semantic_db(tmp_path, monkeypatch):
+    """Each test gets a fresh semantic.db so dedup tests are deterministic and
+    don't pollute the production vector store."""
+    monkeypatch.setattr(semantic_module, "SEMANTIC_DB", tmp_path / "test_semantic.db")
 
 
 @pytest.fixture(autouse=True)

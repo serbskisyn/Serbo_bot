@@ -1,9 +1,9 @@
 """
-embeddings.py — Async wrapper around OpenAI text-embedding-3-small + cache.
+embeddings.py — Async wrapper around the LiteLLM embedding model + cache.
 
-OpenAI's text-embedding-3-small returns 1536-dim L2-normalized vectors.
-Cost: ~$0.02 per 1M tokens — negligible for our scale (a few hundred
-embed calls per day per user).
+Uses gemini-embedding-2 (3072-dim) via the LiteLLM proxy. NOTE: switching the
+embedding model invalidates any previously-stored vectors (different model =
+different vector space), so semantic.db + the cache must be rebuilt on switch.
 
 A tiny on-disk cache (SHA-256-of-text → vector) prevents re-embedding
 the same exact string. Cache lives next to semantic.db.
@@ -21,13 +21,12 @@ from pathlib import Path
 
 import httpx
 
-from app.config import OPENROUTER_API_KEY
+from app.config import LITELLM_API_KEY, LITELLM_BASE_URL, LLM_EMBED_MODEL
 
 logger = logging.getLogger(__name__)
 
-EMBEDDING_MODEL = "openai/text-embedding-3-small"
-EMBEDDING_DIM = 1536
-OPENROUTER_URL = "https://openrouter.ai/api/v1/embeddings"
+EMBEDDING_MODEL = LLM_EMBED_MODEL
+EMBEDDING_DIM = 3072
 
 CACHE_FILE = Path(__file__).parent.parent / "data" / "embedding_cache.bin"
 
@@ -98,10 +97,10 @@ async def embed(text: str) -> list[float] | None:
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
             r = await client.post(
-                OPENROUTER_URL,
+                f"{LITELLM_BASE_URL.rstrip('/')}/embeddings",
                 json={"model": EMBEDDING_MODEL, "input": text},
                 headers={
-                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Authorization": f"Bearer {LITELLM_API_KEY}",
                     "Content-Type": "application/json",
                 },
             )

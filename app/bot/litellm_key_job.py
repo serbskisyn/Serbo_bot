@@ -72,28 +72,46 @@ def _key_age_days(state: dict, today: date) -> int | None:
     return (today - set_date).days
 
 
+async def _key_works() -> bool:
+    """Live check: does the current key still reach the LiteLLM proxy?"""
+    from app.config import LITELLM_BASE_URL
+    if not LITELLM_BASE_URL:
+        return False
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(
+                f"{LITELLM_BASE_URL.rstrip('/')}/models",
+                headers={"Authorization": f"Bearer {LITELLM_API_KEY}"},
+            )
+            return r.status_code == 200
+    except Exception:
+        return False
+
+
 async def _reminder_callback(context: ContextTypes.DEFAULT_TYPE) -> None:
     if not LITELLM_API_KEY or not ADMIN_CHAT_ID:
         return
     today = datetime.now(tz=_BERLIN).date()
     state = _sync_key_date(today)
     age = _key_age_days(state, today)
-    if age is None:
+    if age is None or age < LITELLM_KEY_RENEW_DAYS - 1:
+        return  # still well within the window — nothing to check yet
+
+    # Past (or near) the renewal window: only alarm if the key is ACTUALLY dead.
+    # A permanent key keeps working → no false "expired" spam, and once it has
+    # clearly survived the window we note it's permanent.
+    if await _key_works():
+        if age >= LITELLM_KEY_RENEW_DAYS + 1:
+            logger.info("litellm_key: Key über Renewal-Fenster hinaus gültig (age=%dd) → wohl permanent", age)
         return
 
-    renew = LITELLM_KEY_RENEW_DAYS
-    msg = None
-    if age >= renew:
-        msg = (f"🔑 *LiteLLM-Key abgelaufen* (gesetzt vor {age} Tagen, Limit {renew}d).\n"
-               f"Bitte erneuern und in `.env` `LITELLM_API_KEY` setzen + Bot neu starten.")
-    elif age >= renew - 1:
-        msg = (f"🔑 *LiteLLM-Key läuft morgen ab* (gesetzt vor {age} Tagen, Limit {renew}d).\n"
-               f"Bitte demnächst erneuern und in `.env` setzen.")
-    if not msg:
-        return
+    msg = (f"🔑 *LiteLLM-Key funktioniert nicht mehr* (gesetzt vor {age} Tagen).\n"
+           f"Live-Check gegen den Proxy schlug fehl — bitte Key erneuern und in "
+           f"`.env` `LITELLM_API_KEY` setzen + Bot neu starten.")
     try:
         await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=msg, parse_mode="Markdown")
-        logger.info("litellm_key: Renewal-Reminder gesendet (age=%dd)", age)
+        logger.info("litellm_key: Key-defekt-Alarm gesendet (age=%dd)", age)
     except Exception as exc:
         logger.warning("litellm_key: reminder send failed: %s", exc)
 

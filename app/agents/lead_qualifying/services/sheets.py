@@ -96,16 +96,17 @@ def _ensure_qualified_tab(sh: gspread.Spreadsheet) -> gspread.Worksheet:
         logger.info("Header-Zeile geschrieben in '%s'", QUALIFIED_TAB_NAME)
     else:
         ws = sh.worksheet(QUALIFIED_TAB_NAME)
-        # Keep the header in sync with the canonical columns. If the schema
-        # changed (e.g. dead columns removed), rewrite row 1 and clear any stale
-        # trailing header cells so new rows align under the right headers.
+        # Keep the tab in sync with the canonical columns. If the schema changed
+        # (dead columns removed), trim the worksheet width back to N columns and
+        # rewrite the header — a bloated width (stale trailing columns) confuses
+        # append_rows' table-range detection and breaks the audit-log write.
+        n = len(QUALIFIED_COLUMNS)
         existing = ws.row_values(1)
-        if existing != QUALIFIED_COLUMNS:
-            header = list(QUALIFIED_COLUMNS)
-            if len(existing) > len(header):
-                header += [""] * (len(existing) - len(header))
-            ws.update("A1", [header])
-            logger.info("Header-Zeile in '%s' an Spalten-Schema angepasst", QUALIFIED_TAB_NAME)
+        if ws.col_count > n:
+            ws.resize(cols=n)
+        if existing[:n] != QUALIFIED_COLUMNS or len(existing) != n:
+            ws.update(range_name="A1", values=[QUALIFIED_COLUMNS])
+            logger.info("Qualified-Tab '%s' auf %d Spalten normalisiert", QUALIFIED_TAB_NAME, n)
     return ws
 
 

@@ -77,6 +77,7 @@ async def _call_perplexity(
     system_prompt: str = "",
     timeout: float = 60.0,
     max_tokens: int = 1024,
+    model: str | None = None,
 ) -> str:
     """Web-research call via LiteLLM + Gemini Google-Search grounding.
 
@@ -91,7 +92,7 @@ async def _call_perplexity(
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": prompt})
 
-    content = await chat_grounded(messages, max_tokens=max_tokens, timeout=timeout)
+    content = await chat_grounded(messages, model=model, max_tokens=max_tokens, timeout=timeout)
     if isinstance(content, list):
         content = " ".join(
             part.get("text", "") for part in content if isinstance(part, dict)
@@ -364,7 +365,9 @@ Reply ONLY with valid JSON, no surrounding text:
     )
 
     try:
-        raw = await _call_perplexity(prompt, system_prompt=system, timeout=60.0, max_tokens=2048)
+        from app.config import LLM_GROUNDED_STRONG_MODEL
+        raw = await _call_perplexity(prompt, system_prompt=system, timeout=90.0,
+                                     max_tokens=2048, model=LLM_GROUNDED_STRONG_MODEL)
         data = _loads_json(raw)
         if data is not None:
             logger.info(

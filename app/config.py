@@ -14,6 +14,8 @@ LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "")
 LLM_CHEAP_MODEL    = os.getenv("LLM_CHEAP_MODEL", "gemini-2.5-flash")
 LLM_STRONG_MODEL   = os.getenv("LLM_STRONG_MODEL", "vertex_ai/claude-opus-4-8")
 LLM_GROUNDED_MODEL = os.getenv("LLM_GROUNDED_MODEL", "gemini-2.5-flash")
+# Stronger grounding model for structured company-fact extraction (validate_company)
+LLM_GROUNDED_STRONG_MODEL = os.getenv("LLM_GROUNDED_STRONG_MODEL", "gemini-3-1-pro-preview")
 LLM_EMBED_MODEL    = os.getenv("LLM_EMBED_MODEL", "gemini-embedding-2")  # 3072-dim
 # Der LiteLLM-Key muss alle N Tage erneuert werden → Reminder-Job
 LITELLM_KEY_RENEW_DAYS: int = int(os.getenv("LITELLM_KEY_RENEW_DAYS", "7"))

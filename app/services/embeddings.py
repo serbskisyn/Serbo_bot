@@ -85,6 +85,9 @@ async def embed(text: str) -> list[float] | None:
     text = (text or "").strip()
     if not text:
         return None
+    # No proxy configured (e.g. CI) → skip the network call, degrade gracefully.
+    if not LITELLM_BASE_URL or not LITELLM_API_KEY:
+        return None
 
     _load_cache()
     key = _digest(text)

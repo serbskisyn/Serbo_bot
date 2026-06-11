@@ -14,6 +14,10 @@ aiosqlite==0.21.0
 # Phase 5 — sqlite-vec semantic layer
 sqlite-vec>=0.1.9
 
+# Kicktipp client parses HTML with BeautifulSoup (imported at module top, so
+# test collection fails without it even though tests mock the network)
+beautifulsoup4>=4.12
+
 # Google Calendar client (gcal_client.py imports at module top, even though
 # tests monkeypatch the network functions)
 google-api-python-client==2.196.0

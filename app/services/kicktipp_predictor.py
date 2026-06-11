@@ -44,18 +44,19 @@ PUNKTEREGEL dieser Runde (DARAUF optimieren — erwarteten Punktwert maximieren)
 - Bei Unentschieden gibt es keine Tordifferenz-Stufe: exaktes Remis 5, sonst richtige Tendenz 2.
 Es wird das Ergebnis NACH VERLÄNGERUNG getippt: in K.-o.-Spielen ist also KEIN Unentschieden möglich — tippe den Sieger nach Verlängerung. Gruppenspiele sind 90 Min (Remis möglich).
 
-BEWERTUNGSFAKTOREN (gewichtet nutzen):
-- Buchmacher-Quoten (stärkstes Signal — bündeln alle Infos).
+BEWERTUNGSFAKTOREN (gewichtet nutzen, NICHT nur Quoten):
+- Buchmacher-Quoten (gute Basis — aber nicht das letzte Wort).
+- Aktuelle Form / Momentum (letzte Spiele) — ein ECHTES Signal, das die Quoten oft schlägt.
 - FIFA-Weltrangliste / Kaderqualität / Marktwert der Teams.
-- Aktuelle Form (letzte Spiele), Verletzungen/Sperren von Schlüsselspielern.
-- Direkter Vergleich (Head-to-Head), Heimvorteil, Reise/Erholung.
-- Turnierkontext: Gruppenphase vs. K.o.; Tabellenlage (muss ein Team gewinnen?); Motivation.
+- Verletzungen/Sperren von Schlüsselspielern, Head-to-Head, Heimvorteil, Reise/Erholung.
+- Turnierkontext: Gruppenphase vs. K.o.; Tabellenlage; Motivation.
 
-STRATEGIE (genau so vorgehen):
-1. Zuerst die Tendenz sicher treffen (das sind die sicheren 2 Punkte) — primär an Quoten, gestützt durch FIFA-Ranking/Form (niedrigste Quote = Favorit; Reihenfolge Heim/Unentschieden/Auswärts).
-2. Dann das EINE wahrscheinlichste exakte Ergebnis für diese Tendenz wählen — bevorzuge häufige, niedrige Resultate (1:0, 2:1, 2:0, 1:1, 2:2, 0:0). Jage NICHT exotischen hohen Ergebnissen hinterher.
-3. Eine 1-Tor-Differenz (1:0, 2:1) maximiert die Chance, zusätzlich die Tordifferenz (3 P.) zu treffen.
-4. News/Form nur zur Feinjustierung, Quoten schlagen Form, Form schlägt reines Ranking.
+STRATEGIE — MUTIG, nicht stur Favoriten-Tippen:
+1. Triff die Tendenz überlegt (sichere 2 Punkte als Basis). Aber: Wenn jüngste Form, Momentum oder klare News dem Quoten-Favoriten WIDERSPRECHEN, vertraue der Form — auch gegen die Quote.
+2. Pro Spieltag sind 1–2 begründete ÜBERRASCHUNGSTIPPS ausdrücklich erwünscht (Außenseiter mit gutem Lauf, müder Favorit, Verletzungen). Nicht zufällig — es muss einen echten Grund geben.
+3. Trau dich zu klaren/exakten Ergebnissen, wenn die Argumente da sind (z. B. 3:1, 2:2, 3:2) — nicht reflexartig das defensive 1:0. Häufige Resultate (1:0, 2:1, 2:0, 1:1, 2:2) bleiben Standard, aber sei kein Feigling.
+4. Eine 1-Tor-Differenz (1:0, 2:1) trifft oft zusätzlich die Tordifferenz (3 P.) — gut für sichere Spiele; bei Mut-Tipps darf's auch deutlicher sein.
+Kurz: Quoten als Kompass, Form als Mut-Geber, gelegentlich ein kalkuliertes Risiko für die 5 Punkte.
 
 Antworte NUR mit einem validen JSON-Array, ein Objekt pro Spiel-Index:
 [{"i": 0, "heim": 2, "gast": 1}, {"i": 1, "heim": 1, "gast": 1}]
